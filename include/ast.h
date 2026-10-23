@@ -28,6 +28,7 @@
 #define ZOV_AST_H
 
 #include "common.h"
+#include "token.h"
 
 void *zalloc(size_t size); /* bump allocation from the global AST arena */
 

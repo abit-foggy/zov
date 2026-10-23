@@ -55,8 +55,14 @@ const char *str_intern(const char *start, const char *end);
 const char *str_intern_c(const char *s);
 int zstr_eq(const char *a, const char *b);
 
-void fatal(const char *fmt, ...);
-void fatal_at(Span span, const char *fmt, ...);
+#if defined(__GNUC__)
+#define ZOV_NORETURN __attribute__((noreturn))
+#else
+#define ZOV_NORETURN
+#endif
+
+void ZOV_NORETURN fatal(const char *fmt, ...);
+void ZOV_NORETURN fatal_at(Span span, const char *fmt, ...);
 
 /* Typed dynamic array; POD storage, geometric growth. */
 #define DA(T) struct { T *items; size_t len; size_t cap; }
