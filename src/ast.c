@@ -170,3 +170,224 @@ void fatal_at(Span span, const char *fmt, ...)
     va_end(ap);
     exit(1);
 }
+
+/* ---- types ---- */
+
+static Type g_prims[] = {
+    {TY_NONE, NULL, NULL, 0, 0}, {TY_UNKNOWN, NULL, NULL, 0, 0},
+    {TY_VOID, NULL, NULL, 0, 0},
+    {TY_I8, NULL, NULL, 0, 0}, {TY_I16, NULL, NULL, 0, 0},
+    {TY_I32, NULL, NULL, 0, 0}, {TY_I64, NULL, NULL, 0, 0},
+    {TY_ISIZE, NULL, NULL, 0, 0},
+    {TY_U8, NULL, NULL, 0, 0}, {TY_U16, NULL, NULL, 0, 0},
+    {TY_U32, NULL, NULL, 0, 0}, {TY_U64, NULL, NULL, 0, 0},
+    {TY_USIZE, NULL, NULL, 0, 0},
+    {TY_F32, NULL, NULL, 0, 0}, {TY_F64, NULL, NULL, 0, 0},
+    {TY_BOOL, NULL, NULL, 0, 0}, {TY_CHAR, NULL, NULL, 0, 0},
+    {TY_STR, NULL, NULL, 0, 0},
+};
+
+Type *type_prim(TypeKind k)
+{
+    return &g_prims[k];
+}
+
+Type *type_default_int(void) { return type_prim(TY_I32); }
+Type *type_default_float(void) { return type_prim(TY_F64); }
+
+Type *type_null(void)
+{
+    return type_ptr(type_prim(TY_VOID), 1);
+}
+
+/* Composite cache keyed structurally; Type* stays comparable by identity
+ * for the common pointer/ref/slice shapes. */
+static DA(Type *) g_comp_types;
+
+static Type *type_comp(TypeKind k, Type *base, size_t count, int nullable,
+                        const char *name)
+{
+    for (size_t i = 0; i < g_comp_types.len; i++) {
+        Type *t = g_comp_types.items[i];
+        if (t->kind == k && t->base == base && t->count == count
+            && t->nullable == nullable
+            && ((t->name == NULL && name == NULL)
+                || (t->name && name && t->name == name)))
+            return t;
+    }
+    Type *t = zalloc(sizeof(Type));
+    t->kind = k;
+    t->base = base;
+    t->count = count;
+    t->nullable = nullable;
+    t->name = name;
+    da_push(&g_comp_types, t);
+    return t;
+}
+
+Type *type_ptr(Type *base, int nullable)
+{
+    return type_comp(TY_PTR, base, 0, nullable, NULL);
+}
+
+Type *type_ref(Type *base, int is_mut)
+{
+    return type_comp(is_mut ? TY_MUTREF : TY_REF, base, 0, 0, NULL);
+}
+
+Type *type_slice(Type *base)
+{
+    return type_comp(TY_SLICE, base, 0, 0, NULL);
+}
+
+Type *type_array(Type *base, size_t n)
+{
+    return type_comp(TY_ARRAY, base, n, 0, NULL);
+}
+
+Type *type_struct(const char *name)
+{
+    return type_comp(TY_STRUCT, NULL, 0, 0, name);
+}
+
+int type_eq(const Type *a, const Type *b)
+{
+    if (a == b)
+        return 1;
+    if (!a || !b || a->kind != b->kind)
+        return 0;
+    switch (a->kind) {
+    case TY_PTR:
+        return a->nullable == b->nullable && type_eq(a->base, b->base);
+    case TY_REF:
+    case TY_MUTREF:
+    case TY_SLICE:
+        return type_eq(a->base, b->base);
+    case TY_ARRAY:
+        return a->count == b->count && type_eq(a->base, b->base);
+    case TY_STRUCT:
+        return a->name == b->name;
+    default:
+        return 1;
+    }
+}
+
+const char *type_spelling(Type *t)
+{
+    if (!t)
+        return "<nil>";
+    switch (t->kind) {
+    case TY_NONE: return "<none>";
+    case TY_UNKNOWN: return "<extern>";
+    case TY_VOID: return "void";
+    case TY_I8: return "i8";
+    case TY_I16: return "i16";
+    case TY_I32: return "i32";
+    case TY_I64: return "i64";
+    case TY_ISIZE: return "isize";
+    case TY_U8: return "u8";
+    case TY_U16: return "u16";
+    case TY_U32: return "u32";
+    case TY_U64: return "u64";
+    case TY_USIZE: return "usize";
+    case TY_F32: return "f32";
+    case TY_F64: return "f64";
+    case TY_BOOL: return "bool";
+    case TY_CHAR: return "char";
+    case TY_STR: return "str";
+    case TY_PTR: {
+        char *s = zalloc(64);
+        snprintf(s, 64, "%s*%s", t->nullable ? "nullable " : "",
+                 type_spelling(t->base));
+        return s;
+    }
+    case TY_REF:
+    case TY_MUTREF: {
+        char *s = zalloc(64);
+        snprintf(s, 64, "&%s%s", t->kind == TY_MUTREF ? "mut " : "",
+                 type_spelling(t->base));
+        return s;
+    }
+    case TY_SLICE: {
+        char *s = zalloc(64);
+        snprintf(s, 64, "[]%s", type_spelling(t->base));
+        return s;
+    }
+    case TY_ARRAY: {
+        char *s = zalloc(64);
+        snprintf(s, 64, "[%lu]%s", (unsigned long)t->count,
+                 type_spelling(t->base));
+        return s;
+    }
+    case TY_STRUCT:
+        return t->name;
+    }
+    return "<invalid>";
+}
+
+Type *type_from_suffix(const char *suffix)
+{
+    static const struct { const char *s; TypeKind k; } tab[] = {
+        {"i8", TY_I8}, {"i16", TY_I16}, {"i32", TY_I32}, {"i64", TY_I64},
+        {"isize", TY_ISIZE}, {"u8", TY_U8}, {"u16", TY_U16},
+        {"u32", TY_U32}, {"u64", TY_U64}, {"usize", TY_USIZE},
+        {"f32", TY_F32}, {"f64", TY_F64},
+    };
+    if (!*suffix)
+        return NULL;
+    for (size_t i = 0; i < sizeof(tab) / sizeof(tab[0]); i++)
+        if (zstr_eq(tab[i].s, suffix))
+            return type_prim(tab[i].k);
+    return NULL;
+}
+
+int ty_is_int(TypeKind k)
+{
+    return k >= TY_I8 && k <= TY_USIZE;
+}
+
+int ty_is_float(TypeKind k)
+{
+    return k == TY_F32 || k == TY_F64;
+}
+
+int ty_is_num(TypeKind k)
+{
+    return ty_is_int(k) || ty_is_float(k);
+}
+
+int ty_is_bool_like(TypeKind k)
+{
+    return k == TY_BOOL;
+}
+
+/* ---- nodes ---- */
+
+Expr *expr_new(ExprKind kind, Span span)
+{
+    Expr *e = zalloc(sizeof(Expr));
+    e->kind = kind;
+    e->span = span;
+    return e;
+}
+
+Stmt *stmt_new(StmtKind kind, Span span)
+{
+    Stmt *s = zalloc(sizeof(Stmt));
+    s->kind = kind;
+    s->span = span;
+    return s;
+}
+
+Block *block_new(void)
+{
+    return zalloc(sizeof(Block));
+}
+
+Decl *decl_new(DeclKind kind, Span span)
+{
+    Decl *d = zalloc(sizeof(Decl));
+    d->kind = kind;
+    d->span = span;
+    return d;
+}
