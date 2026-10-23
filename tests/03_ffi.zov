@@ -1,0 +1,10 @@
+// extern C FFI through a namespaced header import
+use <stdio.h> as c;
+
+export fn main() i32 = {
+    let answer: i32 = 40 + 2;
+    defer c::puts("bye");
+    c::printf("answer is %d\n", answer);
+    c::puts("hello from zov");
+    return 0;
+};

@@ -1,0 +1,25 @@
+// defer LIFO order across early returns, loops, and break
+use <stdio.h> as c;
+
+export fn early() i32 = {
+    defer c::puts("second");
+    if (true) {
+        defer c::puts("first");
+        return 1;
+    };
+    return 0;
+};
+
+export fn main() i32 = {
+    defer c::puts("main-scope");
+    let mut i = 0;
+    while (i < 3) {
+        defer c::puts("iter");
+        i = i + 1;
+        if (i == 2) {
+            break;
+        };
+    };
+    early();
+    return 0;
+};
