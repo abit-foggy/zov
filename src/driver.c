@@ -24,4 +24,77 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-extern int zov_stub_pad_driver;
+#define _POSIX_C_SOURCE 200809L
+
+#include "driver.h"
+#include "common.h"
+
+#include <sys/wait.h>
+
+#ifdef USE_LIBTCC
+#include <libtcc.h>
+#endif
+
+static int compile_via_cc(const char *c_src, const char *out_path)
+{
+    char cmd[1024];
+    if (snprintf(cmd, sizeof(cmd), "cc -x c -std=c99 -O2 -o '%s' -", out_path)
+        >= (int)sizeof(cmd)) {
+        fatal("output path too long");
+        return 1;
+    }
+    FILE *cc = popen(cmd, "w");
+    if (!cc) {
+        fatal("failed to spawn cc");
+        return 1;
+    }
+    fputs(c_src, cc);
+    int st = pclose(cc);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        fatal("cc failed with status %d", st);
+        return 1;
+    }
+    return 0;
+}
+
+#ifdef USE_LIBTCC
+
+static int compile_via_tcc(const char *c_src, const char *out_path)
+{
+    TCCState *tcc = tcc_new();
+    if (!tcc) {
+        fatal("libtcc: state creation failed");
+        return 1;
+    }
+    tcc_set_output_type(tcc, TCC_OUTPUT_EXE);
+    if (tcc_compile_string(tcc, c_src) < 0) {
+        fatal("libtcc: compilation failed");
+        tcc_delete(tcc);
+        return 1;
+    }
+    if (tcc_output_file(tcc, out_path) < 0) {
+        fatal("libtcc: output to '%s' failed", out_path);
+        tcc_delete(tcc);
+        return 1;
+    }
+    tcc_delete(tcc);
+    return 0;
+}
+
+#endif /* USE_LIBTCC */
+
+int driver_compile(const char *c_src, const char *out_path,
+                   int emit_c_only, int force_cc)
+{
+    if (emit_c_only) {
+        fputs(c_src, stdout);
+        return 0;
+    }
+#ifdef USE_LIBTCC
+    if (!force_cc)
+        return compile_via_tcc(c_src, out_path);
+#else
+    (void)force_cc;
+#endif
+    return compile_via_cc(c_src, out_path);
+}
