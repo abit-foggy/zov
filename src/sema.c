@@ -354,6 +354,7 @@ static void check_let(Sema *se, Stmt *s)
             fatal_at(s->span, "cannot bind %s to %s", type_spelling(it),
                      type_spelling(declared));
     }
+    s->u.let.ty = declared; /* writeback so codegen sees the resolved type */
     Sym sym;
     memset(&sym, 0, sizeof(sym));
     sym.name = s->u.let.name;
