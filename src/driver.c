@@ -35,6 +35,8 @@
 #include <libtcc.h>
 #endif
 
+#define ZOV_TCC_DIR "vendor/tinycc"
+
 static int compile_via_cc(const char *c_src, const char *out_path)
 {
     char cmd[1024];
@@ -59,21 +61,28 @@ static int compile_via_cc(const char *c_src, const char *out_path)
 
 #ifdef USE_LIBTCC
 
+/* libtcc must come from the vendored tree; the runtime resolves its own
+ * headers and libtcc1.a relative to the lib path. */
 static int compile_via_tcc(const char *c_src, const char *out_path)
 {
     TCCState *tcc = tcc_new();
-    if (!tcc) {
-        fatal("libtcc: state creation failed");
+    if (!tcc)
+        return 1;
+    /* {B} expands inside tcc_set_output_type, so the lib path must be
+     * installed first */
+    tcc_set_lib_path(tcc, ZOV_TCC_DIR);
+    if (tcc_set_output_type(tcc, TCC_OUTPUT_EXE) < 0) {
+        tcc_delete(tcc);
         return 1;
     }
-    tcc_set_output_type(tcc, TCC_OUTPUT_EXE);
+    tcc_add_sysinclude_path(tcc, ZOV_TCC_DIR "/include");
+    tcc_add_sysinclude_path(tcc, "/usr/include");
+    tcc_add_library(tcc, "c");
     if (tcc_compile_string(tcc, c_src) < 0) {
-        fatal("libtcc: compilation failed");
         tcc_delete(tcc);
         return 1;
     }
     if (tcc_output_file(tcc, out_path) < 0) {
-        fatal("libtcc: output to '%s' failed", out_path);
         tcc_delete(tcc);
         return 1;
     }
@@ -91,8 +100,11 @@ int driver_compile(const char *c_src, const char *out_path,
         return 0;
     }
 #ifdef USE_LIBTCC
-    if (!force_cc)
-        return compile_via_tcc(c_src, out_path);
+    if (!force_cc) {
+        if (compile_via_tcc(c_src, out_path) == 0)
+            return 0;
+        /* libtcc failure falls through to the portable cc pipe */
+    }
 #else
     (void)force_cc;
 #endif
