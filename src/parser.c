@@ -441,6 +441,7 @@ static Expr *parse_call_args(Parser *p, Expr *callee)
         }
     }
     expect(p, TK_RPAREN, "')' or ','");
+    e->span.end = tok(p)->start;
     return e;
 }
 
@@ -682,6 +683,7 @@ static Expr *parse_binary_after(Parser *p, Expr *lhs, int min_prec)
         e->u.binary.op = op;
         e->u.binary.lhs = lhs;
         e->u.binary.rhs = parse_binary(p, prec + 1);
+        e->span.end = tok(p)->start; /* widen for assert diagnostics */
         lhs = e;
     }
 }
@@ -1094,6 +1096,20 @@ void parse_program(const char *src, const char *file, Program *prog)
         case TK_FN:
             da_push(&prog->decls, parse_fn_decl(p, sp, exported));
             break;
+        case TK_TEST: {
+            // test "desc" { ... }: checked always, run only in --test mode
+            advance(p);
+            Decl *d = decl_new(DL_TEST, sp);
+            if (!at(p, TK_STR))
+                fatal_at(tok(p)->span,
+                         "expected test description string");
+            d->u.test.desc = str_intern_c(tok(p)->str_val);
+            advance(p);
+            d->u.test.body = parse_block(p);
+            eat_semi(p);
+            da_push(&prog->decls, d);
+            break;
+        }
         default:
             fatal_at(sp, "expected 'use', 'type' or 'fn' at top level, "
                          "found %s", tok_desc(p));

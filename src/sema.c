@@ -1145,6 +1145,20 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (callee->kind == EX_IDENT) {
             Sym *fn = scope_find(se->scope, callee->u.ident);
             if (!fn) {
+                if (zstr_eq(callee->u.ident, "assert")
+                    && !scope_find(se->scope, "assert")) {
+                    if (e->u.call.args.len != 1)
+                        fatal_at(e->span, "assert(cond) takes one "
+                                          "argument");
+                    Type *t = check_expr(se, e->u.call.args.items[0], NULL);
+                    if (!is_unknown(t) && t->kind != TY_BOOL)
+                        fatal_at(e->u.call.args.items[0]->span,
+                                 "assert requires bool, got %s",
+                                 type_spelling(t));
+                    e->builtin_assert = 1;
+                    e->type = type_prim(TY_VOID);
+                    return e->type;
+                }
                 if (zstr_eq(callee->u.ident, "print")
                     || zstr_eq(callee->u.ident, "println")) {
                     for (size_t i = 0; i < e->u.call.args.len; i++) {
@@ -1685,6 +1699,8 @@ static void register_decl(Sema *se, Decl *d)
     while (se->scope->parent)
         se->scope = se->scope->parent;
     switch (d->kind) {
+    case DL_TEST:
+        break; /* test bodies carry no global symbols */
     case DL_USE: {
         if (d->u.use.zsyms.len > 0) {
             /* loaded .zov module: members resolve to global symbols */
@@ -1871,14 +1887,27 @@ static void check_fn(Sema *se, Decl *d)
     pop_scope(se);
 }
 
-void sema_check(Program *prog)
+static void check_test(Sema *se, Decl *d)
+{
+    push_scope(se);
+    Type *prev_ret = se->fn_ret;
+    int prev_loop = se->loop_depth;
+    se->loop_depth = 0;
+    se->fn_ret = type_prim(TY_VOID);
+    check_block(se, d->u.test.body);
+    se->fn_ret = prev_ret;
+    se->loop_depth = prev_loop;
+    pop_scope(se);
+}
+
+void sema_check(Program *prog, int test_mode)
 {
     Sema *se = zalloc(sizeof(Sema));
     se->prog = prog;
     push_scope(se); /* global scope */
     for (size_t i = 0; i < prog->decls.len; i++)
         register_decl(se, prog->decls.items[i]);
-    if (!se->has_main)
+    if (!se->has_main && !test_mode)
         fatal("no 'fn main' found in program");
     /* is_move fixpoint: a struct is linear if it is a resource or has a
      * linear field; iterate until the mark stops propagating */
@@ -1906,5 +1935,7 @@ void sema_check(Program *prog)
         Decl *d = prog->decls.items[i];
         if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
             check_fn(se, d);
+        if (d->kind == DL_TEST)
+            check_test(se, d);
     }
 }

@@ -155,6 +155,7 @@ typedef struct Expr {
     int builtin_io; /* EX_CALL to built-in print/println */
     Type *szarg;    /* EX_CALL to sizeof[T](): the type argument */
     int coerce_tag; /* EX_COERCE: deterministic member index in target */
+    int builtin_assert; /* EX_CALL to built-in assert(bool) */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);
@@ -199,7 +200,7 @@ typedef struct Stmt {
 Stmt *stmt_new(StmtKind kind, Span span);
 Block *block_new(void);
 
-typedef enum DeclKind { DL_USE, DL_TYPE, DL_FN } DeclKind;
+typedef enum DeclKind { DL_USE, DL_TYPE, DL_FN, DL_TEST } DeclKind;
 
 typedef struct Decl {
     DeclKind kind;
@@ -214,6 +215,7 @@ typedef struct Decl {
         struct { const char *name; DA(struct Param) params; Type *ret;
                   Block *body; StrList tparams; struct Param *recv;
                   const char *sname; const char *mname; } fn;
+        struct { const char *desc; Block *body; } test;
     } u;
 } Decl;
 

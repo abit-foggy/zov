@@ -240,8 +240,9 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
     free(subdir);
 }
 
-void modules_load(Program *prog, const char *main_file)
+void modules_load(Program *prog, const char *main_file, void *pkg_unused)
 {
+    (void)pkg_unused; /* package mapping arrives with the pkg milestone */
     Loader *ld = zalloc(sizeof(Loader));
     ld->prog = prog;
     char *srcdir = dirname_of(main_file);

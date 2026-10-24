@@ -34,6 +34,8 @@ typedef struct Buf {
 
 static void buf_puts(Buf *b, const char *s)
 {
+    if (!s || !*s)
+        return;
     size_t n = strlen(s);
     if (b->len + n + 1 > b->cap) {
         while (b->len + n + 1 > b->cap)
@@ -742,9 +744,33 @@ static void emit_match(CG *cg, Expr *e, int want_value)
     cg->switch_depth--;
 }
 
+static void emit_assert(CG *cg, Expr *e, int as_stmt)
+{
+    Buf *b = &*cg->cur;
+    cg->needs_io = 1;
+    cg->needs_abort = 1;
+    Expr *cond = e->u.call.args.items[0];
+    if (!as_stmt)
+        buf_puts(b, "({ ");
+    buf_puts(b, "if (!(");
+    emit_expr(cg, cond, 0);
+    buf_puts(b, ")) { fprintf(stderr, \"ASSERT FAILED at ");
+    append_fmt_str(b, cond->span.file, strlen(cond->span.file));
+    buf_printf(b, ":%lu: ", (unsigned long)cond->span.line);
+    append_fmt_str(b, cond->span.start,
+                   (size_t)(cond->span.end - cond->span.start));
+    buf_puts(b, "\\n\"); abort(); }\n");
+    if (!as_stmt)
+        buf_puts(b, "0; })\n");
+}
+
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    if (e->builtin_assert) {
+        emit_assert(cg, e, 0);
+        return;
+    }
     if (e->szarg) {
         buf_printf(&*cg->cur, "((size_t)sizeof(%s))", c_type(cg, e->szarg));
         return;
@@ -1147,6 +1173,10 @@ static int emit_stmt(CG *cg, Stmt *s)
         return 1;
     }
     case ST_EXPR:
+        if (s->u.expr->kind == EX_CALL && s->u.expr->builtin_assert) {
+            emit_assert(cg, s->u.expr, 1);
+            return 0;
+        }
         if (s->u.expr->kind == EX_MATCH) {
             // statement-position match: switch lowering without result
             emit_match(cg, s->u.expr, 0);
@@ -1232,7 +1262,45 @@ static void emit_fn(CG *cg, Decl *d, int proto_only)
     buf_puts(&*cg->cur, "}\n\n");
 }
 
+/* --test synthesis: one static fn per block plus a counting runner */
+static void emit_test_main(CG *cg, Program *prog)
+{
+    int n = 0;
+    for (size_t i = 0; i < prog->decls.len; i++) {
+        Decl *d = prog->decls.items[i];
+        if (d->kind != DL_TEST)
+            continue;
+        cg->cur = &cg->body;
+        buf_printf(&cg->body, "static void zov_test_%d(void)\n{\n", n);
+        cg->defers.len = 0;
+        emit_block(cg, d->u.test.body);
+        buf_puts(&cg->body, "}\n\n");
+        n++;
+    }
+    cg->cur = &cg->body;
+    buf_puts(&cg->body, "int main(void)\n{\nint _zv_passed = 0;\n");
+    n = 0;
+    for (size_t i = 0; i < prog->decls.len; i++) {
+        Decl *d = prog->decls.items[i];
+        if (d->kind != DL_TEST)
+            continue;
+        buf_printf(&cg->body, "zov_test_%d(); ", n);
+        buf_puts(&cg->body, "fprintf(stdout, \"[PASS] ");
+        append_fmt_str(&cg->body, d->u.test.desc, strlen(d->u.test.desc));
+        buf_puts(&cg->body, "\\n\"); _zv_passed = _zv_passed + 1;\n");
+        n++;
+    }
+    buf_printf(&cg->body,
+               "fprintf(stdout, \"%%d passed, 0 failed\\n\", "
+               "_zv_passed);\nreturn 0;\n}\n\n");
+}
+
 char *codegen_generate(Program *prog)
+{
+    return codegen_generate_mode(prog, 0);
+}
+
+char *codegen_generate_mode(Program *prog, int test_mode)
 {
     CG *cg = zalloc(sizeof(CG));
 
@@ -1267,14 +1335,22 @@ char *codegen_generate(Program *prog)
 
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
-            emit_fn(cg, d, 1);
+        if (d->kind != DL_FN || d->u.fn.tparams.len > 0)
+            continue;
+        if (test_mode && zstr_eq(d->u.fn.name, "main"))
+            continue; /* --test replaces the entry point */
+        emit_fn(cg, d, 1);
     }
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
-            emit_fn(cg, d, 0);
+        if (d->kind != DL_FN || d->u.fn.tparams.len > 0)
+            continue;
+        if (test_mode && zstr_eq(d->u.fn.name, "main"))
+            continue;
+        emit_fn(cg, d, 0);
     }
+    if (test_mode)
+        emit_test_main(cg, prog);
 
     /* assemble final buffer: head + slice typedefs + body */
     Buf out = {0};

@@ -31,6 +31,8 @@
 #include "borrow.h"
 #include "codegen.h"
 
+#include <sys/wait.h>
+
 static char *read_file(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -79,10 +81,23 @@ int main(int argc, char **argv)
     const char *out = "a.out";
     int emit_c = 0;
     int force_cc = 0;
+    int test_mode = 0;
+
+    /* minimal dispatch: full subcommands arrive with the CLI milestone */
+    if (argc >= 3 && strcmp(argv[1], "test") == 0
+        && strstr(argv[2], ".zov")) {
+        test_mode = 1;
+        out = ".zov-test-bin";
+        argv[1] = argv[2];
+        argv++;
+        argc--;
+    }
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-c") == 0) {
             emit_c = 1;
+        } else if (strcmp(argv[i], "--test") == 0) {
+            test_mode = 1;
         } else if (strcmp(argv[i], "--release") == 0) {
             force_cc = 1;
         } else if (strcmp(argv[i], "-o") == 0) {
@@ -114,12 +129,22 @@ int main(int argc, char **argv)
     char *src = read_file(file);
     Program prog = {0};
     parse_program(src, file, &prog);
-    modules_load(&prog, file);
-    sema_check(&prog);
+    modules_load(&prog, file, NULL);
+    sema_check(&prog, test_mode);
     borrow_check(&prog);
-    char *c_src = codegen_generate(&prog);
+    char *c_src = codegen_generate_mode(&prog, test_mode);
     int rc = driver_compile(c_src, out, emit_c, force_cc);
     free(c_src);
     free(src);
+    if (rc == 0 && test_mode) {
+        /* test mode: execute the synthesized runner and forward status */
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "./%s", out);
+        int st = system(cmd);
+        remove(out);
+        if (WIFEXITED(st))
+            return WEXITSTATUS(st);
+        return 1;
+    }
     return rc;
 }

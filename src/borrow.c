@@ -882,6 +882,19 @@ static void borrow_fn(Borrow *b, Decl *d)
     b_block(b, d->u.fn.body);
 }
 
+static void borrow_test(Borrow *b, Decl *d)
+{
+    b->vars.len = 0;
+    b->loans.len = 0;
+    b->pos = 0;
+    b->uses.len = 0;
+    for (size_t i = 0; i < d->u.test.body->stmts.len; i++)
+        note_use_stmt(b, d->u.test.body->stmts.items[i]);
+    b->pos = 0;
+    b->vars.len = 0;
+    b_block(b, d->u.test.body);
+}
+
 void borrow_check(Program *prog)
 {
     Borrow *b = zalloc(sizeof(Borrow));
@@ -890,5 +903,7 @@ void borrow_check(Program *prog)
         Decl *d = prog->decls.items[i];
         if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
             borrow_fn(b, d);
+        if (d->kind == DL_TEST)
+            borrow_test(b, d);
     }
 }

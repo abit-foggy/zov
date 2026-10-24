@@ -31,5 +31,6 @@
 
 /* Returns a heap buffer of ISO C99 text; caller frees. */
 char *codegen_generate(Program *prog);
+char *codegen_generate_mode(Program *prog, int test_mode);
 
 #endif /* ZOV_CODEGEN_H */

@@ -29,6 +29,7 @@
 
 #include "ast.h"
 
-void sema_check(Program *prog);
+/* test_mode: relax the main() requirement for test-only compilations */
+void sema_check(Program *prog, int test_mode);
 
 #endif /* ZOV_SEMA_H */

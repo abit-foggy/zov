@@ -40,7 +40,7 @@ static const Keyword keywords[] = {
     {"continue", TK_CONTINUE}, {"defer", TK_DEFER}, {"use", TK_USE},
     {"as", TK_AS}, {"export", TK_EXPORT}, {"nullable", TK_NULLABLE},
     {"null", TK_NULL}, {"true", TK_TRUE}, {"false", TK_FALSE},
-    {"resource", TK_RESOURCE}, {"in", TK_IN},
+    {"resource", TK_RESOURCE}, {"in", TK_IN}, {"test", TK_TEST},
     {"void", TK_VOID}, {"i8", TK_I8}, {"i16", TK_I16}, {"i32", TK_I32},
     {"i64", TK_I64}, {"isize", TK_ISIZE}, {"u8", TK_U8}, {"u16", TK_U16},
     {"u32", TK_U32}, {"u64", TK_U64}, {"usize", TK_USIZE},
@@ -67,12 +67,14 @@ static int is_ident0(char c)
 }
 static int is_ident(char c) { return is_ident0(c) || is_digit(c); }
 
-static Span here(Lexer *lx, const char *at)
+static Span here(Lexer *lx, const char *at, const char *to)
 {
     Span s;
     s.file = lx->file;
     s.line = lx->line;
     s.col = (size_t)(at - lx->bol) + 1;
+    s.start = at;
+    s.end = to; /* widened by composite exprs in the parser */
     return s;
 }
 
@@ -112,7 +114,7 @@ static void skip_ws(Lexer *lx)
             lx->pos += 2;
             for (;;) {
                 if (peek(lx) == '\0') {
-                    fatal_at(here(lx, open), "unterminated block comment");
+                    fatal_at(here(lx, open, open), "unterminated block comment");
                     return;
                 }
                 if (peek(lx) == '\n') {
@@ -155,14 +157,14 @@ static uint32_t lex_escape(Lexer *lx)
         uint32_t v = 0;
         for (int i = 0; i < 2; i++) {
             if (!is_hex(peek(lx)))
-                fatal_at(here(lx, at), "invalid \\x escape");
+                fatal_at(here(lx, at, at), "invalid \\x escape");
             v = v * 16 + (uint32_t)strtoul(lx->pos, NULL, 16);
             lx->pos++;
         }
         return v;
     }
     default:
-        fatal_at(here(lx, at), "unknown escape sequence '\\%c'", c);
+        fatal_at(here(lx, at, at), "unknown escape sequence '\\%c'", c);
         return 0;
     }
 }
@@ -175,7 +177,7 @@ static void lex_string(Lexer *lx)
     for (;;) {
         char c = peek(lx);
         if (c == '\0' || c == '\n')
-            fatal_at(here(lx, at), "unterminated string literal");
+            fatal_at(here(lx, at, at), "unterminated string literal");
         if (c == '"') {
             lx->pos++;
             break;
@@ -208,14 +210,14 @@ static void lex_char(Lexer *lx)
     if (peek(lx) == '\\') {
         v = lex_escape(lx);
     } else if (peek(lx) == '\0' || peek(lx) == '\n') {
-        fatal_at(here(lx, at), "unterminated character literal");
+        fatal_at(here(lx, at, at), "unterminated character literal");
         return;
     } else {
         v = (unsigned char)peek(lx);
         lx->pos++;
     }
     if (peek(lx) != '\'')
-        fatal_at(here(lx, at), "unterminated character literal");
+        fatal_at(here(lx, at, at), "unterminated character literal");
     lx->pos++;
     lx->tok.kind = TK_CHAR;
     lx->tok.char_val = v;
@@ -272,14 +274,14 @@ static void lex_number(Lexer *lx)
         lx->pos++;
     const char *suf = str_intern(num_end, lx->pos);
     if (!is_type_suffix(suf))
-        fatal_at(here(lx, at), "invalid numeric suffix '%s'", suf);
+        fatal_at(here(lx, at, at), "invalid numeric suffix '%s'", suf);
     if (is_float && *suf && !(*suf == 'f'))
-        fatal_at(here(lx, at), "float literal with integer suffix '%s'", suf);
+        fatal_at(here(lx, at, at), "float literal with integer suffix '%s'", suf);
 
     char buf[64];
     size_t n = (size_t)(num_end - at);
     if (n >= sizeof(buf))
-        fatal_at(here(lx, at), "numeric literal too long");
+        fatal_at(here(lx, at, at), "numeric literal too long");
     memcpy(buf, at, n);
     buf[n] = '\0';
     if (is_float) {
@@ -304,17 +306,20 @@ static void lex_ident(Lexer *lx)
 
 void lex_next(Lexer *lx)
 {
+    const char *tok_start = lx->pos;
     skip_ws(lx);
     Token *t = &lx->tok;
     memset(t, 0, sizeof(*t));
     t->suffix = str_intern_c("");
     t->start = lx->pos;
-    t->span = here(lx, lx->pos);
+    t->span = here(lx, lx->pos, lx->pos);
+    (void)tok_start;
 
     char c = peek(lx);
     if (c == '\0') {
         t->kind = TK_EOF;
         t->end = lx->pos;
+        t->span.end = lx->pos;
         return;
     }
     if (is_ident0(c)) {
@@ -390,4 +395,5 @@ void lex_next(Lexer *lx)
         return;
     }
     t->end = lx->pos;
+    t->span.end = lx->pos;
 }

@@ -38,6 +38,8 @@ typedef struct Span {
     const char *file;
     size_t line;
     size_t col;
+    const char *start; /* token text bounds; widened by composite exprs */
+    const char *end;
 } Span;
 
 typedef struct Arena {
