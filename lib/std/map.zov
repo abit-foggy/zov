@@ -1,0 +1,212 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+use std::mem as mem;
+use <stdlib.h> as c;
+
+export type MapNotFound = !void;
+
+// resource: the borrow checker rejects use-after-free and double-frees
+export type Map[K, V] = resource struct {
+    keys: nullable *K,
+    vals: nullable *V,
+    states: nullable *u8, // 0 empty, 1 occupied, 2 tombstone
+    length: usize,
+    cap: usize,
+};
+
+export fn new[K, V]() Map[K, V] = {
+    return Map[K, V]{ keys = null, vals = null, states = null,
+                      length = 0usize, cap = 0usize };
+};
+
+export fn (self: &mut Map[K, V]) grow() void = {
+    let new_cap: usize = self.cap * 2usize + 8usize;
+    // calloc zeroes the state table: every slot starts empty
+    let nk: *K = mem::alloc[K](new_cap);
+    let nv: *V = mem::alloc[V](new_cap);
+    let ns: *u8 = mem::alloc[u8](new_cap);
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        if ((self.states!)[i] == 1u8) {
+            let k: K = (self.keys!)[i];
+            let v: V = (self.vals!)[i];
+            let h: u64 = hash_val[K](k);
+            let mut idx: usize = (h % (new_cap as u64)) as usize;
+            while ((ns)[idx] == 1u8) {
+                idx = (idx + 1usize) % new_cap;
+            };
+            (nk)[idx] = k;
+            (nv)[idx] = v;
+            (ns)[idx] = 1u8;
+        };
+        i += 1usize;
+    };
+    if (self.keys != null) { mem::free_ptr[K](self.keys!); };
+    if (self.vals != null) { mem::free_ptr[V](self.vals!); };
+    if (self.states != null) { mem::free_ptr[u8](self.states!); };
+    self.keys = nk;
+    self.vals = nv;
+    self.states = ns;
+    self.cap = new_cap;
+};
+
+export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
+    // resize at a 70% load factor before probing
+    if ((self.length + 1usize) * 10usize > self.cap * 7usize) {
+        self.grow();
+    };
+    let h: u64 = hash_val[K](key);
+    let mut idx: usize = (h % (self.cap as u64)) as usize;
+    let mut inserted = false;
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        let st: u8 = (self.states!)[idx];
+        if (st == 0u8) {
+            (self.keys!)[idx] = key;
+            (self.vals!)[idx] = val;
+            (self.states!)[idx] = 1u8;
+            self.length += 1usize;
+            inserted = true;
+            break;
+        };
+        if (st == 1u8) {
+            let k: K = (self.keys!)[idx];
+            if (k == key) {
+                (self.vals!)[idx] = val;
+                inserted = true;
+                break;
+            };
+        };
+        idx = (idx + 1usize) % self.cap;
+        i += 1usize;
+    };
+    if (!inserted) { c::abort(); };
+};
+
+export fn (self: &Map[K, V]) get(key: K) (V | MapNotFound) = {
+    if (self.cap == 0usize) { return MapNotFound; };
+    let h: u64 = hash_val[K](key);
+    let mut idx: usize = (h % (self.cap as u64)) as usize;
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        let st: u8 = (self.states!)[idx];
+        if (st == 0u8) { return MapNotFound; };
+        if (st == 1u8) {
+            let k: K = (self.keys!)[idx];
+            if (k == key) {
+                return (self.vals!)[idx];
+            };
+        };
+        idx = (idx + 1usize) % self.cap;
+        i += 1usize;
+    };
+    return MapNotFound;
+};
+
+export fn (self: &Map[K, V]) contains(key: K) bool = {
+    let r = self.get(key);
+    let found: bool = match (r) {
+        case MapNotFound => false,
+        case _ => true,
+    };
+    return found;
+};
+
+export fn (self: &mut Map[K, V]) remove(key: K) bool = {
+    if (self.cap == 0usize) { return false; };
+    let h: u64 = hash_val[K](key);
+    let mut idx: usize = (h % (self.cap as u64)) as usize;
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        let st: u8 = (self.states!)[idx];
+        if (st == 0u8) { return false; };
+        if (st == 1u8) {
+            let k: K = (self.keys!)[idx];
+            if (k == key) {
+                (self.states!)[idx] = 2u8;
+                self.length -= 1usize;
+                return true;
+            };
+        };
+        idx = (idx + 1usize) % self.cap;
+        i += 1usize;
+    };
+    return false;
+};
+
+export fn (self: &Map[K, V]) len() usize = {
+    return self.length;
+};
+
+export fn (self: Map[K, V]) free() void = {
+    if (self.keys != null) { mem::free_ptr[K](self.keys!); };
+    if (self.vals != null) { mem::free_ptr[V](self.vals!); };
+    if (self.states != null) { mem::free_ptr[u8](self.states!); };
+};
+
+test "map basics" {
+    let mut m = new[str, i32]();
+    m.insert("alpha", 1);
+    m.insert("beta", 2);
+    assert(m.len() == 2usize);
+    let b = m.get("beta");
+    let bv: i32 = match (b) {
+        case let v: i32 => v,
+        case MapNotFound => -1,
+    };
+    assert(bv == 2);
+    m.insert("beta", 20);
+    let b2 = m.get("beta");
+    let bv2: i32 = match (b2) {
+        case let v: i32 => v,
+        case MapNotFound => -2,
+    };
+    assert(bv2 == 20);
+    assert(m.contains("alpha"));
+    assert(!m.contains("gamma"));
+    assert(m.remove("alpha"));
+    assert(!m.contains("alpha"));
+    assert(!m.remove("alpha"));
+    m.free();
+};
+
+test "map resizes past fifty entries" {
+    let mut m = new[str, i32]();
+    let mut i: i32 = 0;
+    while (i < 60) {
+        m.insert("key", i);
+        m.insert("key", i);
+        i += 1;
+    };
+    m.insert("count", 60);
+    let r = m.get("count");
+    let v: i32 = match (r) {
+        case let n: i32 => n,
+        case MapNotFound => -1,
+    };
+    assert(v == 60);
+    assert(m.len() == 2usize);
+    m.free();
+};

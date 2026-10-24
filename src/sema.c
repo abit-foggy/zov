@@ -589,6 +589,8 @@ static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
         return NULL;
     Expr *n = expr_new(e->kind, e->span);
     n->borrow_mut = e->borrow_mut;
+    /* parser-set state the sema re-check will not re-derive */
+    n->comp_op = e->comp_op;
     switch (e->kind) {
     case EX_INT: n->u.ilit = e->u.ilit; break;
     case EX_FLOAT: n->u.flit = e->u.flit; break;
@@ -1204,6 +1206,31 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             id->u.ident = m->name;
             e->u.call.callee = id;
             e->type = check_call_user(se, e, m);
+            return e->type;
+        }
+        if (callee->kind == EX_GENERIC
+            && callee->u.generic.base->kind == EX_IDENT
+            && zstr_eq(callee->u.generic.base->u.ident, "hash_val")
+            && !scope_find(se->scope, "hash_val")) {
+            if (callee->u.generic.targs.len != 1)
+                fatal_at(callee->span,
+                         "hash_val[T] takes one type argument");
+            Type *kt = resolve_type(se, callee->u.generic.targs.items[0]);
+            if (e->u.call.args.len != 1)
+                fatal_at(e->span, "hash_val[T] hashes exactly one value");
+            Type *at = check_expr(se, e->u.call.args.items[0], kt);
+            if (kt->kind != TY_STR && kt->kind != TY_ENUM
+                && !ty_is_int(kt->kind))
+                fatal_at(callee->span,
+                         "hash_val supports str, integers, and enums, "
+                         "not %s", type_spelling(kt));
+            if (!is_unknown(at) && !type_eq(at, kt))
+                fatal_at(e->u.call.args.items[0]->span,
+                         "hash_val[%s] argument must be %s, got %s",
+                         type_spelling(kt), type_spelling(kt),
+                         type_spelling(at));
+            e->hash_ty = kt;
+            e->type = type_prim(TY_U64);
             return e->type;
         }
         if (callee->kind == EX_GENERIC

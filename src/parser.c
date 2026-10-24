@@ -538,6 +538,22 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
             e->u.index.index = idx;
             return e;
         }
+        if (at(p, TK_COMMA)) {
+            /* multi-arg generic: Name[K, V] in expr position */
+            Expr *g = expr_new(EX_GENERIC, sp);
+            g->u.generic.base = base;
+            da_push(&g->u.generic.targs, type_struct(nm));
+            while (at(p, TK_COMMA)) {
+                advance(p);
+                if (!at(p, TK_IDENT))
+                    fatal_at(tok(p)->span,
+                              "expected type argument identifier");
+                da_push(&g->u.generic.targs, type_struct(tok(p)->name));
+                advance(p);
+            }
+            expect(p, TK_RBRACKET, "']'");
+            return g;
+        }
         /* not a lone ident: general index or slice expression */
         Expr *idx0 = expr_new(EX_IDENT, nsp);
         idx0->u.ident = nm;

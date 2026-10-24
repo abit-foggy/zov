@@ -98,6 +98,7 @@ typedef struct CG {
     int needs_string; /* memcmp emission for native str equality */
     int needs_slice; /* runtime slice bounds helper */
     int needs_env;   /* std::env runtime helpers */
+    int needs_hash;  /* hash_val helpers for std::map */
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
     int tmp_id;       /* unique temp/label counter */
@@ -890,6 +891,19 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    if (e->hash_ty) {
+        cg->needs_hash = 1;
+        if (e->hash_ty->kind == TY_STR) {
+            buf_puts(&*cg->cur, "zov_hash_str((");
+            emit_expr(cg, e->u.call.args.items[0], 0);
+            buf_puts(&*cg->cur, "))");
+            return;
+        }
+        buf_puts(&*cg->cur, "zov_hash_u64((uint64_t)(");
+        emit_expr(cg, e->u.call.args.items[0], 0);
+        buf_puts(&*cg->cur, "))");
+        return;
+    }
     if (e->builtin_env_kind) {
         cg->needs_env = 1;
         switch (e->builtin_env_kind) {
@@ -1804,6 +1818,22 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         buf_puts(&out, "#include <stdlib.h>\n");
     if (cg->needs_string)
         buf_puts(&out, "#include <string.h>\n");
+    if (cg->needs_hash) {
+        /* FNV-1a over bytes; splitmix64 finalizer for scalars */
+        buf_puts(&out,
+                 "static uint64_t zov_hash_str(zov_str s) {\n"
+                 "    uint64_t h = 1469598103934665603ULL;\n"
+                 "    for (size_t i = 0; i < s.len; i++) {\n"
+                 "        h ^= s.data[i]; h *= 1099511628211ULL;\n"
+                 "    }\n"
+                 "    return h;\n"
+                 "}\n"
+                 "static uint64_t zov_hash_u64(uint64_t x) {\n"
+                 "    x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ULL;\n"
+                 "    x ^= x >> 27; x *= 0x94d049bb133111ebULL;\n"
+                 "    x ^= x >> 31; return x;\n"
+                 "}\n");
+    }
     if (cg->needs_env) {
         buf_puts(&out, "#include <stdio.h>\n#include <stdlib.h>\n"
                        "#include <string.h>\n");
