@@ -460,6 +460,25 @@ static Expr *parse_primary(Parser *p)
         expect(p, TK_RPAREN, "')'");
         return e;
     }
+    case TK_LBRACKET: {
+        /* fixed-array literal: [e0, e1, ...] (slices are postfix ops) */
+        advance(p);
+        Expr *e = expr_new(EX_ARR_LIT, sp);
+        if (!at(p, TK_RBRACKET)) {
+            for (;;) {
+                da_push(&e->u.elems, parse_expr(p));
+                if (at(p, TK_COMMA)) {
+                    advance(p);
+                    if (at(p, TK_RBRACKET))
+                        break; /* trailing comma */
+                    continue;
+                }
+                break;
+            }
+        }
+        expect(p, TK_RBRACKET, "']' after array literal");
+        return e;
+    }
     default:
         fatal_at(sp, "expected expression, found %s", tok_desc(p));
         return NULL;
@@ -490,6 +509,7 @@ static Expr *parse_call_args(Parser *p, Expr *callee)
 
 static Expr *parse_binary_after(Parser *p, Expr *lhs, int min_prec);
 static Expr *parse_postfix_after(Parser *p, Expr *e);
+static Expr *parse_slice_rest(Parser *p, Expr *base, Expr *start);
 
 /* '[' after an expression: generic args vs indexing. A bare-ident arg
  * is ambiguous (Foo[T] vs arr[i]); the token AFTER ']' disambiguates. */
@@ -518,10 +538,14 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
             e->u.index.index = idx;
             return e;
         }
-        /* not a lone ident: it opens a general index expression */
+        /* not a lone ident: general index or slice expression */
         Expr *idx0 = expr_new(EX_IDENT, nsp);
         idx0->u.ident = nm;
         Expr *idx = parse_binary_after(p, parse_postfix_after(p, idx0), 1);
+        if (at(p, TK_DOTDOT)) {
+            advance(p);
+            return parse_slice_rest(p, base, idx);
+        }
         expect(p, TK_RBRACKET, "']'");
         Expr *e = expr_new(EX_INDEX, sp);
         e->u.index.base = base;
@@ -548,7 +572,15 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
         return e;
     }
     default: {
+        if (at(p, TK_DOTDOT)) {
+            advance(p);
+            return parse_slice_rest(p, base, NULL);
+        }
         Expr *idx = parse_expr(p);
+        if (at(p, TK_DOTDOT)) {
+            advance(p);
+            return parse_slice_rest(p, base, idx);
+        }
         expect(p, TK_RBRACKET, "']'");
         Expr *e = expr_new(EX_INDEX, sp);
         e->u.index.base = base;
@@ -556,6 +588,19 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
         return e;
     }
     }
+}
+
+/* x[a..b], x[a..], x[..b]: shared tail after the '..' is seen */
+static Expr *parse_slice_rest(Parser *p, Expr *base, Expr *start)
+{
+    Expr *e = expr_new(EX_SLICE, base->span);
+    e->u.slice.base = base;
+    e->u.slice.start = start;
+    if (!at(p, TK_RBRACKET)) {
+        e->u.slice.end = parse_expr(p);
+    }
+    expect(p, TK_RBRACKET, "']'");
+    return e;
 }
 
 /* Name{ f = e, ... } / Name[T]{ ... }: struct literal. */
@@ -879,11 +924,21 @@ static Stmt *parse_stmt(Parser *p)
         s->u.forr.name = tok(p)->name;
         advance(p);
         expect(p, TK_IN, "'in' after loop variable");
-        s->u.forr.start = parse_expr(p);
-        expect(p, TK_DOTDOT, "'..' in range for");
-        s->u.forr.end = parse_expr(p);
+        Expr *first = parse_expr(p);
+        if (at(p, TK_DOTDOT)) {
+            s->u.forr.start = first;
+            expect(p, TK_DOTDOT, "'..' in range for");
+            s->u.forr.end = parse_expr(p);
+        } else {
+            /* slice iteration: for (let x in slice_or_array_or_str) */
+            s->kind = ST_FOR_EACH;
+            s->u.foreach.iter = first;
+        }
         expect(p, TK_RPAREN, "')' after range");
-        s->u.forr.body = parse_block(p);
+        if (s->kind == ST_FOR_EACH)
+            s->u.foreach.body = parse_block(p);
+        else
+            s->u.forr.body = parse_block(p);
         eat_semi(p);
         return s;
     }

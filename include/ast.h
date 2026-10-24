@@ -98,7 +98,7 @@ typedef enum ExprKind {
     EX_ASSIGN, EX_BINARY, EX_UNARY,
     EX_CALL, EX_INDEX, EX_CAST, EX_GENERIC,
     EX_MATCH, EX_TRY, EX_UNWRAP, EX_COERCE,
-    EX_DEREF, EX_FIELD, EX_STRUCT_LIT,
+    EX_DEREF, EX_FIELD, EX_STRUCT_LIT, EX_SLICE, EX_ARR_LIT,
 } ExprKind;
 
 typedef enum PatKind {
@@ -154,6 +154,8 @@ typedef struct Expr {
         struct { struct Expr *base; const char *name; } field;
         struct { const char *name; DA(FieldInit) fields;
                  DA(Type *) targs; } stlit;
+        struct { struct Expr *base, *start, *end; } slice;
+        DA(struct Expr *) elems; /* EX_ARR_LIT */
     } u;
     int borrow_mut; /* &mut in EX_UNARY AMP */
     int via_ref;    /* EX_FIELD reached through a reference: emit '->' */
@@ -186,7 +188,7 @@ typedef struct Field {
 
 typedef enum StmtKind {
     ST_LET, ST_DEFER, ST_IF, ST_WHILE, ST_RETURN, ST_BREAK, ST_CONTINUE,
-    ST_EXPR, ST_BLOCK, ST_FOR_RANGE,
+    ST_EXPR, ST_BLOCK, ST_FOR_RANGE, ST_FOR_EACH,
 } StmtKind;
 
 typedef struct Block {
@@ -203,6 +205,8 @@ typedef struct Stmt {
         struct { Expr *cond; Block *body; } whilee;
         struct { const char *name; Type *ty; Expr *start, *end;
                  Block *body; } forr;
+        struct { const char *name; Type *ty; Expr *iter;
+                 Block *body; } foreach;
         Expr *ret;
         Expr *expr;
         Block *block;

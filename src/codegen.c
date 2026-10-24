@@ -1034,6 +1034,122 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     case EX_CALL:
         emit_call(cg, e);
         break;
+    case EX_ARR_LIT: {
+        /* C99 compound literal: elements evaluated left to right */
+        Type *et = e->type->base;
+        buf_printf(b, "((%s[%lu]){ ", c_type(cg, et),
+                   (unsigned long)e->u.elems.len);
+        for (size_t i = 0; i < e->u.elems.len; i++) {
+            if (i)
+                buf_puts(b, ", ");
+            emit_expr(cg, e->u.elems.items[i], 0);
+        }
+        buf_puts(b, " })");
+        break;
+    }
+    case EX_SLICE: {
+        cg->needs_slice = 1;
+        cg->needs_io = 1;
+        cg->needs_abort = 1;
+        Type *bt = e->u.slice.base->type;
+        int id = cg->tmp_id++;
+        if (bt->kind == TY_STR) {
+            /* str sub-slice: same fat-pointer type, offset data */
+            buf_printf(b, "({ zov_str _sl%d = (", id);
+            emit_expr(cg, e->u.slice.base, 0);
+            buf_printf(b, "); size_t _sa%d = (size_t)(", id);
+            if (e->u.slice.start)
+                emit_expr(cg, e->u.slice.start, 0);
+            else
+                buf_puts(b, "0u");
+            buf_printf(b, "), _sb%d = (size_t)(", id);
+            if (e->u.slice.end)
+                emit_expr(cg, e->u.slice.end, 0);
+            else
+                buf_printf(b, "_sl%d.len", id);
+            buf_printf(b, "); zov_slice_check(_sa%d, _sb%d, _sl%d.len, ", id,
+                       id, id);
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %luu); ", (unsigned long)e->span.line);
+            buf_printf(b, "(zov_str){ _sl%d.data + _sa%d, _sb%d - _sa%d }; "
+                          "})", id, id, id, id);
+            break;
+        }
+        if (bt->kind == TY_SLICE) {
+            buf_printf(b, "({ %s _sl%d = (", c_type(cg, bt), id);
+            emit_expr(cg, e->u.slice.base, 0);
+            buf_printf(b, "); size_t _sa%d = (size_t)(", id);
+            if (e->u.slice.start)
+                emit_expr(cg, e->u.slice.start, 0);
+            else
+                buf_puts(b, "0u");
+            buf_printf(b, "), _sb%d = (size_t)(", id);
+            if (e->u.slice.end)
+                emit_expr(cg, e->u.slice.end, 0);
+            else
+                buf_printf(b, "_sl%d.len", id);
+            buf_printf(b, "); zov_slice_check(_sa%d, _sb%d, _sl%d.len, ", id,
+                       id, id);
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %luu); ", (unsigned long)e->span.line);
+            buf_printf(b, "(%s){ _sl%d.data + _sa%d, _sb%d - _sa%d }; })",
+                       c_type(cg, e->type), id, id, id, id);
+            break;
+        }
+        if (bt->kind == TY_ARRAY) {
+            /* arrays decay: length is the compile-time element count */
+            buf_printf(b, "(%s){ (", c_type(cg, e->type));
+            emit_expr(cg, e->u.slice.base, 0);
+            buf_printf(b, ") + zov_slice_check((size_t)(");
+            if (e->u.slice.start)
+                emit_expr(cg, e->u.slice.start, 0);
+            else
+                buf_puts(b, "0u");
+            buf_printf(b, "), (size_t)(");
+            if (e->u.slice.end)
+                emit_expr(cg, e->u.slice.end, 0);
+            else
+                buf_printf(b, "%luu", (unsigned long)bt->count);
+            buf_printf(b, "), %luu, ", (unsigned long)bt->count);
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %luu), (size_t)(", (unsigned long)e->span.line);
+            if (e->u.slice.end)
+                emit_expr(cg, e->u.slice.end, 0);
+            else
+                buf_printf(b, "%luu", (unsigned long)bt->count);
+            buf_puts(b, ") - (size_t)(");
+            if (e->u.slice.start)
+                emit_expr(cg, e->u.slice.start, 0);
+            else
+                buf_puts(b, "0u");
+            buf_puts(b, ") }");
+            break;
+        }
+        if (bt->kind == TY_PTR) {
+            /* raw pointer slice: no base length, end is caller-trusted */
+            buf_printf(b, "(%s){ (", c_type(cg, e->type));
+            emit_expr(cg, e->u.slice.base, 0);
+            buf_printf(b, ") + (size_t)(");
+            if (e->u.slice.start)
+                emit_expr(cg, e->u.slice.start, 0);
+            else
+                buf_puts(b, "0u");
+            buf_printf(b, "), (size_t)(");
+            if (e->u.slice.end)
+                emit_expr(cg, e->u.slice.end, 0);
+            else
+                buf_puts(b, "0u");
+            buf_puts(b, ") - (size_t)(");
+            if (e->u.slice.start)
+                emit_expr(cg, e->u.slice.start, 0);
+            else
+                buf_puts(b, "0u");
+            buf_puts(b, ") }");
+            break;
+        }
+        fatal("internal: unprintable slice base");
+        break;
+    }
     case EX_INDEX: {
         cg->needs_bounds = 1;
         /* sizeof operand is unevaluated, so duplicating the base expr
@@ -1079,7 +1195,28 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         emit_expr(cg, e->u.deref, 0);
         buf_puts(b, ")");
         break;
-    case EX_FIELD:
+    case EX_FIELD: {
+        Type *fbt = e->u.field.base->type;
+        if (fbt && (fbt->kind == TY_STR || fbt->kind == TY_SLICE)) {
+            /* fat-pointer halves: .ptr maps to the C data member */
+            buf_puts(b, "(");
+            emit_expr(cg, e->u.field.base, 0);
+            if (zstr_eq(e->u.field.name, "ptr"))
+                buf_puts(b, ").data");
+            else
+                buf_printf(b, ").%s", e->u.field.name);
+            break;
+        }
+        if (fbt && fbt->kind == TY_ARRAY
+            && zstr_eq(e->u.field.name, "len")) {
+            /* compile-time element count; sizeof never evaluates */
+            buf_puts(b, "(sizeof(");
+            emit_expr(cg, e->u.field.base, 0);
+            buf_puts(b, ") / sizeof((");
+            emit_expr(cg, e->u.field.base, 0);
+            buf_puts(b, ")[0]))");
+            break;
+        }
         if (e->u.field.base->type && e->u.field.base->type->kind == TY_STR) {
             /* str fat-pointer halves: raw C member names */
             buf_puts(b, "(");
@@ -1092,6 +1229,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         buf_printf(b, ")%s%s", e->via_ref ? "->" : ".",
                    mangle_local(e->u.field.name));
         break;
+    }
     case EX_STRUCT_LIT:
         buf_printf(b, "((%s){ ", c_type(cg, e->type));
         for (size_t i = 0; i < e->u.stlit.fields.len; i++) {
@@ -1204,6 +1342,18 @@ static int emit_stmt(CG *cg, Stmt *s)
     switch (s->kind) {
     case ST_LET: {
         emit_var(&*cg->cur, cg, s->u.let.ty, mangle_local(s->u.let.name));
+        if (s->u.let.init->kind == EX_ARR_LIT && s->u.let.ty
+            && s->u.let.ty->kind == TY_ARRAY) {
+            /* arrays take initializer lists, not compound literals */
+            buf_puts(&*cg->cur, " = { ");
+            for (size_t i = 0; i < s->u.let.init->u.elems.len; i++) {
+                if (i)
+                    buf_puts(&*cg->cur, ", ");
+                emit_expr(cg, s->u.let.init->u.elems.items[i], 0);
+            }
+            buf_puts(&*cg->cur, " };\n");
+            return 0;
+        }
         buf_puts(&*cg->cur, " = ");
         emit_expr(cg, s->u.let.init, 0);
         /* unused locals are legal in Zov; silence -Wall in the C output */
@@ -1263,6 +1413,42 @@ static int emit_stmt(CG *cg, Stmt *s)
         buf_printf(&*cg->cur, "zov_cont_%d: ;\n}\n", id);
         buf_printf(&*cg->cur, "zov_brk_%d: ;\n", id);
         buf_puts(&*cg->cur, "}\n");
+        return 0;
+    }
+    case ST_FOR_EACH: {
+        Type *it = s->u.foreach.iter->type;
+        int id = cg->tmp_id++;
+        Buf *cur = &*cg->cur;
+        buf_puts(cur, "{\n");
+        if (it->kind == TY_ARRAY) {
+            /* arrays decay once: pointer + compile-time count */
+            emit_var(cur, cg, type_ptr(it->base, 0), "_zv_itp");
+            buf_puts(cur, " = (");
+            emit_expr(cg, s->u.foreach.iter, 0);
+            buf_printf(cur, ");\nfor (size_t _i%d = 0; _i%d < %luu; "
+                             "_i%d++) {\n", id, id,
+                       (unsigned long)it->count, id);
+        } else {
+            emit_var(cur, cg, it, "_zv_it");
+            buf_puts(cur, " = (");
+            emit_expr(cg, s->u.foreach.iter, 0);
+            buf_printf(cur, ");\nfor (size_t _i%d = 0; _i%d < "
+                             "(size_t)_zv_it.len; _i%d++) {\n",
+                       id, id, id);
+        }
+        buf_puts(cur, "size_t zov_cont_guard = 0; (void)zov_cont_guard;\n");
+        emit_var(cur, cg, s->u.foreach.ty, mangle_local(s->u.foreach.name));
+        if (it->kind == TY_ARRAY)
+            buf_printf(cur, " = _zv_itp[_i%d];\n", id);
+        else
+            buf_printf(cur, " = _zv_it.data[_i%d];\n", id);
+        da_push(&cg->loop_marks, cg->defers.len);
+        da_push(&cg->loop_ids, id);
+        emit_block(cg, s->u.foreach.body);
+        cg->loop_marks.len--;
+        cg->loop_ids.len--;
+        buf_printf(cur, "zov_cont_%d: ;\n}\n", id);
+        buf_printf(cur, "zov_brk_%d: ;\n}\n", id);
         return 0;
     }
     case ST_WHILE: {
@@ -1543,6 +1729,20 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         buf_puts(&out, "#include <stdlib.h>\n");
     if (cg->needs_string)
         buf_puts(&out, "#include <string.h>\n");
+    if (cg->needs_slice) {
+        buf_puts(&out, "#include <string.h>\n");
+        buf_puts(&out,
+                 "static size_t zov_slice_check(size_t a, size_t b, "
+                 "size_t n, const char *f, unsigned long l) {\n"
+                 "    if (a > b || b > n) {\n"
+                 "        fprintf(stderr, \"zov: slice out of bounds at "
+                 "%s:%lu (%lu..%lu of %lu)\\n\", f, l, "
+                 "(unsigned long)a, (unsigned long)b, (unsigned long)n);\n"
+                 "        abort();\n"
+                 "    }\n"
+                 "    return a;\n"
+                 "}\n");
+    }
     if (cg->needs_io) {
         buf_puts(&out, "#include <stdio.h>\n#include <inttypes.h>\n");
         if (cg->needs_utf8) {

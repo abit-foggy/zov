@@ -1222,6 +1222,55 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         fatal_at(callee->span, "expression is not callable");
         return NULL;
     }
+    case EX_ARR_LIT: {
+        Type *elem = NULL;
+        if (hint && hint->kind == TY_ARRAY)
+            elem = hint->base; /* annotation drives element coercion */
+        for (size_t i = 0; i < e->u.elems.len; i++) {
+            Type *t = check_expr(se, e->u.elems.items[i], elem);
+            if (!elem)
+                elem = t;
+            else if (!is_unknown(t) && !type_eq(elem, t))
+                fatal_at(e->u.elems.items[i]->span,
+                         "array element %lu: expected %s, got %s",
+                         (unsigned long)i, type_spelling(elem),
+                         type_spelling(t));
+        }
+        if (!elem)
+            elem = unknown();
+        e->type = type_array(elem, e->u.elems.len);
+        return e->type;
+    }
+    case EX_SLICE: {
+        Type *bt = check_expr(se, e->u.slice.base, NULL);
+        Type *st = e->u.slice.start
+                       ? check_expr(se, e->u.slice.start, type_prim(TY_USIZE))
+                       : NULL;
+        Type *et = e->u.slice.end
+                       ? check_expr(se, e->u.slice.end, type_prim(TY_USIZE))
+                       : NULL;
+        if (st && !is_unknown(st) && !ty_is_int(st->kind))
+            fatal_at(e->u.slice.start->span, "slice start must be an "
+                     "integer, got %s", type_spelling(st));
+        if (et && !is_unknown(et) && !ty_is_int(et->kind))
+            fatal_at(e->u.slice.end->span, "slice end must be an integer, "
+                     "got %s", type_spelling(et));
+        if (bt->kind == TY_ARRAY || bt->kind == TY_SLICE) {
+            e->type = type_slice(bt->base);
+            return e->type;
+        }
+        if (bt->kind == TY_STR) {
+            e->type = type_prim(TY_STR);
+            return e->type;
+        }
+        if (bt->kind == TY_PTR && !bt->nullable) {
+            /* raw pointer slicing: bounds are caller-supplied */
+            e->type = type_slice(bt->base);
+            return e->type;
+        }
+        fatal_at(e->span, "cannot slice %s", type_spelling(bt));
+        return NULL;
+    }
     case EX_INDEX: {
         Type *bt = check_expr(se, e->u.index.base, NULL);
         Type *it = check_expr(se, e->u.index.index, type_prim(TY_USIZE));
@@ -1289,7 +1338,25 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 e->type = type_prim(TY_USIZE);
                 return e->type;
             }
+            if (zstr_eq(e->u.field.name, "ptr")) {
+                e->type = type_ptr(type_prim(TY_U8), 0);
+                return e->type;
+            }
             fatal_at(e->span, "str has no field '%s'", e->u.field.name);
+        }
+        if (t->kind == TY_SLICE) {
+            if (zstr_eq(e->u.field.name, "len")) {
+                e->type = type_prim(TY_USIZE);
+                return e->type;
+            }
+            if (zstr_eq(e->u.field.name, "ptr")) {
+                e->type = type_ptr(t->base, 0);
+                return e->type;
+            }
+        }
+        if (t->kind == TY_ARRAY && zstr_eq(e->u.field.name, "len")) {
+            e->type = type_prim(TY_USIZE);
+            return e->type;
         }
         /* references auto-deref for field access */
         while (t && (t->kind == TY_REF || t->kind == TY_MUTREF)) {
@@ -1762,6 +1829,31 @@ static void check_stmt(Sema *se, Stmt *s)
         scope_add(se, iv);
         se->loop_depth++;
         check_block(se, s->u.forr.body);
+        se->loop_depth--;
+        pop_scope(se);
+        break;
+    }
+    case ST_FOR_EACH: {
+        Type *it = check_expr(se, s->u.foreach.iter, NULL);
+        Type *elem = NULL;
+        if (it->kind == TY_SLICE || it->kind == TY_ARRAY)
+            elem = it->base;
+        if (it->kind == TY_STR)
+            elem = type_prim(TY_U8);
+        if (!elem)
+            fatal_at(s->span, "cannot iterate %s", type_spelling(it));
+        s->u.foreach.ty = elem;
+        push_scope(se);
+        Sym iv;
+        memset(&iv, 0, sizeof(iv));
+        iv.name = s->u.foreach.name;
+        iv.kind = SYM_VAR;
+        iv.span = s->span;
+        iv.type = elem;
+        iv.mut = 0;
+        scope_add(se, iv);
+        se->loop_depth++;
+        check_block(se, s->u.foreach.body);
         se->loop_depth--;
         pop_scope(se);
         break;

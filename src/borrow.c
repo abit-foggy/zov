@@ -211,6 +211,11 @@ static void note_use_stmt(Borrow *b, Stmt *s)
     case ST_FOR_RANGE:
         note_use_range(b, s);
         return;
+    case ST_FOR_EACH:
+        note_use(b, s->u.foreach.iter);
+        for (size_t i = 0; i < s->u.foreach.body->stmts.len; i++)
+            note_use_stmt(b, s->u.foreach.body->stmts.items[i]);
+        return;
     case ST_RETURN: note_use(b, s->u.ret); return;
     case ST_EXPR: note_use(b, s->u.expr); return;
     case ST_BLOCK:
@@ -257,6 +262,15 @@ static void note_use(Borrow *b, Expr *e)
     case EX_INDEX:
         note_use(b, e->u.index.base);
         note_use(b, e->u.index.index);
+        return;
+    case EX_SLICE:
+        note_use(b, e->u.slice.base);
+        note_use(b, e->u.slice.start);
+        note_use(b, e->u.slice.end);
+        return;
+    case EX_ARR_LIT:
+        for (size_t i = 0; i < e->u.elems.len; i++)
+            note_use(b, e->u.elems.items[i]);
         return;
     case EX_CAST: note_use(b, e->u.cast.e); return;
     case EX_STRUCT_LIT:
@@ -544,6 +558,20 @@ static void bx_expr(Borrow *b, Expr *e)
         bx_expr(b, e->u.index.base);
         bx_expr(b, e->u.index.index);
         return;
+    case EX_ARR_LIT:
+        for (size_t i = 0; i < e->u.elems.len; i++)
+            bx_expr(b, e->u.elems.items[i]);
+        return;
+    case EX_SLICE: {
+        /* slicing takes a shared read of the root for sub's lifetime */
+        const char *root = resolve_root(b, e->u.slice.base);
+        if (root)
+            check_root_read(b, e, root);
+        bx_expr(b, e->u.slice.base);
+        bx_expr(b, e->u.slice.start);
+        bx_expr(b, e->u.slice.end);
+        return;
+    }
     case EX_CAST:
         bx_expr(b, e->u.cast.e);
         return;
@@ -728,6 +756,44 @@ static void note_use_range(Borrow *b, Stmt *s)
         note_use_stmt(b, s->u.forr.body->stmts.items[i]);
 }
 
+static int b_foreach(Borrow *b, Stmt *s)
+{
+    tick(b);
+    bx_expr(b, s->u.foreach.iter);
+    /* the container is shared-borrowed for the whole loop lifetime */
+    const char *root = resolve_root(b, s->u.foreach.iter);
+    if (root && !root_locked(b, root)) {
+        Loan l;
+        memset(&l, 0, sizeof(l));
+        l.holder = s->u.foreach.name;
+        l.root = root;
+        l.exclusive = 0;
+        l.active = 1;
+        l.last_use = 1 << 28; /* outlives every statement position */
+        da_push(&b->loans, l);
+    }
+    size_t nvars = b->vars.len;
+    BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+    for (size_t i = 0; i < nvars; i++)
+        base[i] = b->vars.items[i];
+    var_add(b, s->u.foreach.name, s->u.foreach.ty, 0);
+    b_block(b, s->u.foreach.body);
+    for (size_t i = 0; i < nvars && i < b->vars.len; i++)
+        if (!base[i].moved && b->vars.items[i].moved)
+            bfatal(s->span,
+                   "'%s' moved inside loop body without reinitialization",
+                   base[i].name);
+    b->vars.len = nvars;
+    for (size_t i = 0; i < nvars; i++)
+        b->vars.items[i] = base[i];
+    if (root)
+        for (size_t i = 0; i < b->loans.len; i++)
+            if (b->loans.items[i].holder == s->u.foreach.name)
+                b->loans.items[i].active = 0;
+    free(base);
+    return 0;
+}
+
 static int b_range(Borrow *b, Stmt *s)
 {
     tick(b);
@@ -780,7 +846,23 @@ static int b_stmt(Borrow *b, Stmt *s)
         bx_expr(b, init);
         if (init->kind == EX_MATCH)
             walk_match(b, init);
-        var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
+        BVar *bv0 = var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
+        (void)bv0;
+        if (init->kind == EX_SLICE) {
+            /* provenance: sub holds a shared loan on the base root until
+             * its last lexical use */
+            const char *root = resolve_root(b, init->u.slice.base);
+            if (root && !root_locked(b, root)) {
+                Loan l;
+                memset(&l, 0, sizeof(l));
+                l.holder = s->u.let.name;
+                l.root = root;
+                l.exclusive = 0;
+                l.active = 1;
+                l.last_use = recorded_last_use(b, s->u.let.name);
+                da_push(&b->loans, l);
+            }
+        }
         return 0;
     }
     case ST_DEFER:
@@ -840,6 +922,8 @@ static int b_stmt(Borrow *b, Stmt *s)
         return 1;
     case ST_FOR_RANGE:
         return b_range(b, s);
+    case ST_FOR_EACH:
+        return b_foreach(b, s);
     case ST_EXPR:
         if (s->u.expr->kind == EX_MATCH)
             walk_match(b, s->u.expr);
