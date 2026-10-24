@@ -660,12 +660,17 @@ static int cg_union_idx(Type *u, Type *m)
 /* Resolve a pattern arm to its union member; NULL for null/wildcards. */
 static Type *arm_member(Type *st, MatchArm *a)
 {
+    /* qualified error names (mod::NotFound) resolve by suffix */
+    const char *aname = a->name;
+    const char *qsep = a->name ? strstr(a->name, "::") : NULL;
+    if (qsep)
+        aname = qsep + 2;
     for (size_t k = 0; k < st->members.len; k++) {
         Type *m = st->members.items[k];
         if (a->kind == PAT_TYPE_VAL) {
-            if (m->kind == TY_ERR && m->name == a->name)
+            if (m->kind == TY_ERR && zstr_eq(m->name, aname))
                 return m;
-            if (zstr_eq(type_spelling(m), a->name))
+            if (zstr_eq(type_spelling(m), aname))
                 return m;
         } else if (a->kind == PAT_TYPE_BIND && type_eq(m, a->ty)) {
             return m;
@@ -1732,7 +1737,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     if (cg->needs_string)
         buf_puts(&out, "#include <string.h>\n");
     if (cg->needs_slice) {
-        buf_puts(&out, "#include <string.h>\n");
+        /* the helper precedes stdio: declare fprintf's dependency */
+        buf_puts(&out, "#include <stdio.h>\n#include <string.h>\n");
         buf_puts(&out,
                  "static size_t zov_slice_check(size_t a, size_t b, "
                  "size_t n, const char *f, unsigned long l) {\n"

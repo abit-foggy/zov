@@ -1471,13 +1471,19 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     fatal_at(a->span,
                              "'null' pattern requires a nullable pointer");
                 else if (a->kind == PAT_TYPE_VAL) {
-                    Sym *sym = scope_find(se->scope, a->name);
+                    /* qualified error names (mod::NotFound) split first */
+                    const char *vname = a->name;
+                    const char *qsep = strstr(a->name, "::");
+                    if (qsep)
+                        vname = qsep + 2;
+                    Sym *sym = scope_find(se->scope, vname);
                     if (sym && sym->kind == SYM_TYPE && sym->type)
                         idx = union_member_index(st, sym->type);
                     else
                         for (size_t k = 0; k < st->members.len; k++)
                             if (st->members.items[k]->kind == TY_ERR
-                                && st->members.items[k]->name == a->name)
+                                && zstr_eq(st->members.items[k]->name,
+                                           vname))
                                 idx = (int)k;
                     if (idx < 0)
                         fatal_at(a->span, "'%s' is not a variant of %s",

@@ -1,0 +1,8 @@
+// MUST FAIL: arr is shared-borrowed by sub until sub's last use
+export fn main() i32 = {
+    let mut arr: [4]i32 = [1, 2, 3, 4];
+    let sub = arr[0..2];
+    arr[0usize] = 99;
+    println("{sub.len}");
+    return 0;
+};

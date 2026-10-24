@@ -53,6 +53,8 @@ run_exit  09_std_vec tests/09_std_vec_and_methods.zov 0
 rm -f zov_std_fs_test.txt
 run_exit  10_std_fs tests/10_std_fs.zov 0
 rm -f zov_std_fs_test.txt
+run_stdout 12_enums tests/12_enums_and_slices.zov tests/12_enums_and_slices.expected
+run_stdout 13_std_arena tests/13_std_arena_and_str.zov tests/13_std_arena_and_str.expected
 
 # test-block runner: zovc test <file>
 if $ZOV test tests/11_test_blocks.zov > "$TMP/11.out" 2>&1; then

@@ -1,0 +1,9 @@
+// MUST FAIL: value matches on open domains require case _ =>
+export fn main() i32 = {
+    let cmd: str = "go";
+    match (cmd) {
+        case "go" => return 1,
+        case "stop" => return 2,
+    };
+    return 0;
+};

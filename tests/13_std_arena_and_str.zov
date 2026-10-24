@@ -1,0 +1,41 @@
+// std::arena bump allocation, std::str utilities, Vec::as_slice
+use std::arena as arena;
+use std::str as strlib;
+use std::vec as vec;
+
+export fn main() i32 = {
+    let mut a = arena::new(256usize);
+    defer a.free();
+    let p = a.alloc_bytes(4usize);
+    let q = a.alloc_bytes(8usize);
+    assert(p != q);
+    a.reset();
+    assert(a.offset == 0usize);
+
+    let padded: str = "  padded  ";
+    let t = strlib::trim(padded);
+    assert(t == "padded");
+    println("trimmed=[{t}]");
+    assert(strlib::starts_with("zovlang", "zov"));
+    assert(strlib::ends_with("zovlang", "lang"));
+    let r = strlib::find_byte("main.zov", 46u8);
+    let dot: usize = match (r) {
+        case let i: usize => i,
+        case strlib::NotFound => 99usize,
+    };
+    assert(dot == 4usize);
+
+    let mut v = vec::new[i32]();
+    for (let i in 0..5) {
+        v.push(i + 1);
+    };
+    let sl = v.as_slice();
+    assert(sl.len == 5usize);
+    let mut total = 0;
+    for (let x in sl) {
+        total = total + x;
+    };
+    println("slice sum={total}");
+    v.free();
+    return 0;
+};
