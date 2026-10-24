@@ -64,6 +64,8 @@ typedef struct Type {
     int is_error;     /* TY_ERR marker; error-wrapping unions set this too */
     int is_move;      /* linear types: resource structs and &mut T */
     const char *c_name; /* verbatim C spelling for imported types */
+    const char *tmpl;    /* originating generic template name, if any */
+    TypeList inst_args; /* concrete type arguments for generic instances */
     TypeList members; /* TY_UNION payload members, tag == index;
                          TY_INST stores concrete type arguments */
 } Type;
@@ -210,7 +212,7 @@ typedef struct Decl {
                   StrList tparams; } type;
         struct { const char *name; DA(struct Param) params; Type *ret;
                   Block *body; StrList tparams; struct Param *recv;
-                  const char *sname; } fn;
+                  const char *sname; const char *mname; } fn;
     } u;
 } Decl;
 

@@ -55,7 +55,14 @@ typedef struct Sema {
     int loop_depth;
     int has_main;
     Program *prog;
+    DA(struct Meth) methods;
 } Sema;
+
+typedef struct Meth {
+    const char *sname; /* struct template name: Vec, Point */
+    const char *mname; /* method name as written: push */
+    Sym *sym;
+} Meth;
 
 static void push_scope(Sema *se)
 {
@@ -263,6 +270,49 @@ static Expr *maybe_coerce(Expr *e, Type *target)
 static void register_decl(Sema *se, Decl *d);
 static void check_fn(Sema *se, Decl *d);
 
+static Sym *find_method(Sema *se, const char *sname, const char *mname)
+{
+    for (size_t i = 0; i < se->methods.len; i++)
+        if (se->methods.items[i].sname == sname
+            && se->methods.items[i].mname == mname)
+            return se->methods.items[i].sym;
+    return NULL;
+}
+
+/* Receiver template params: unresolved type names inside the receiver
+ * (Vec[T] yields ["T"]), collected in syntactic order. */
+static void collect_recv_tparams(Sema *se, Type *t, StrList *out)
+{
+    if (!t)
+        return;
+    switch (t->kind) {
+    case TY_REF:
+    case TY_MUTREF:
+    case TY_PTR:
+    case TY_SLICE:
+        collect_recv_tparams(se, t->base, out);
+        return;
+    case TY_ARRAY:
+        collect_recv_tparams(se, t->base, out);
+        return;
+    case TY_INST:
+        for (size_t i = 0; i < t->members.len; i++)
+            collect_recv_tparams(se, t->members.items[i], out);
+        return;
+    case TY_STRUCT:
+        if (t->name && !strstr(t->name, "::")
+            && !scope_find(se->scope, t->name)) {
+            for (size_t i = 0; i < out->len; i++)
+                if (out->items[i] == t->name)
+                    return;
+            da_push(out, t->name);
+        }
+        return;
+    default:
+        return;
+    }
+}
+
 /* cache key component: sanitize a type spelling into [A-Za-z0-9_.] */
 static char *mangle_spelling(const char *s)
 {
@@ -381,7 +431,11 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
         d->u.type.is_resource = 1;
     da_push(&se->prog->decls, d);
     register_decl(se, d);
-    return type_struct(d->u.type.name);
+    Type *it = type_struct(d->u.type.name);
+    it->tmpl = sym->decl->u.type.name;
+    for (size_t i = 0; i < args->len; i++)
+        da_push(&it->inst_args, args->items[i]);
+    return it;
 }
 
 /* deep AST clone with tparam substitution; types are re-checked */
@@ -546,17 +600,9 @@ static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
     return n;
 }
 
-static Sym *instantiate_fn(Sema *se, const char *fname, TypeList *args,
-                           Span span)
+static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
+                               TypeList *args, const char *key)
 {
-    Sym *sym = scope_find(se->scope, fname);
-    if (!sym || sym->kind != SYM_FN || !sym->is_template || !sym->decl)
-        fatal_at(span, "'%s' is not a generic function", fname);
-    StrList *tps = &sym->decl->u.fn.tparams;
-    if (tps->len != args->len)
-        fatal_at(span, "'%s' expects %lu type argument(s), got %lu", fname,
-                 (unsigned long)tps->len, (unsigned long)args->len);
-    char *key = inst_key(fname, args);
     const char *keyi = str_intern_c(key);
     Decl *existing = find_decl_by_name(se, keyi);
     if (existing)
@@ -577,6 +623,54 @@ static Sym *instantiate_fn(Sema *se, const char *fname, TypeList *args,
     register_decl(se, d);
     check_fn(se, d);
     return scope_find(se->scope, keyi);
+}
+
+static Sym *instantiate_fn(Sema *se, const char *fname, TypeList *args,
+                           Span span)
+{
+    Sym *sym = scope_find(se->scope, fname);
+    if (!sym || sym->kind != SYM_FN || !sym->is_template || !sym->decl)
+        fatal_at(span, "'%s' is not a generic function", fname);
+    StrList *tps = &sym->decl->u.fn.tparams;
+    if (tps->len != args->len)
+        fatal_at(span, "'%s' expects %lu type argument(s), got %lu", fname,
+                 (unsigned long)tps->len, (unsigned long)args->len);
+    char *key = inst_key(fname, args);
+    return instantiate_fn_from(se, sym, tps, args, key);
+}
+
+/* Receiver args follow the struct template's tparam order, so the
+ * placeholder -> concrete mapping is purely positional. */
+static Sym *instantiate_method(Sema *se, Sym *m, const char *key,
+                              const char *tmpl_sname, TypeList *inst_args)
+{
+    Decl *td = NULL;
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind == DL_TYPE && d->u.type.name == tmpl_sname
+            && d->u.type.tparams.len > 0)
+            td = d;
+    }
+    if (!td)
+        fatal("unknown generic struct '%s'", tmpl_sname);
+    if (td->u.type.tparams.len != inst_args->len)
+        fatal("'%s' instantiation arity mismatch", tmpl_sname);
+    TypeList margs = {0};
+    for (size_t i = 0; i < m->decl->u.fn.tparams.len; i++) {
+        const char *want = m->decl->u.fn.tparams.items[i];
+        int found = 0;
+        for (size_t j = 0; j < td->u.type.tparams.len; j++)
+            if (td->u.type.tparams.items[j] == want) {
+                da_push(&margs, inst_args->items[j]);
+                found = 1;
+                break;
+            }
+        if (!found)
+            fatal("method type parameter '%s' is not bound by the receiver",
+                  want);
+    }
+    StrList *tps = &m->decl->u.fn.tparams;
+    return instantiate_fn_from(se, m, tps, &margs, key);
 }
 
 static void require_bool(Expr *cond)
@@ -875,6 +969,64 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
+        if (callee->kind == EX_FIELD) {
+            /* expr.method(...): receiver resolution with auto-borrowing */
+            Type *bt = check_expr(se, callee->u.field.base, NULL);
+            if (!bt || (bt->kind != TY_STRUCT && bt->kind != TY_REF
+                        && bt->kind != TY_MUTREF))
+                fatal_at(callee->span,
+                         "method calls require a struct receiver");
+            Type *st = bt;
+            while (st && (st->kind == TY_REF || st->kind == TY_MUTREF))
+                st = st->base;
+            if (!st || st->kind != TY_STRUCT || !st->name)
+                fatal_at(callee->span, "methods require a struct receiver");
+            const char *sname = st->tmpl ? st->tmpl : st->name;
+            Sym *m = find_method(se, sname, callee->u.field.name);
+            if (!m)
+                fatal_at(callee->span, "struct '%s' has no method '%s'",
+                         sname, callee->u.field.name);
+            if (m->is_template) {
+                char key[512];
+                snprintf(key, sizeof(key), "%s__%s", st->name,
+                         callee->u.field.name);
+                m = instantiate_method(se, m, key, sname, &st->inst_args);
+            }
+            Param *rp = &m->params.items[0];
+            Expr *recv = callee->u.field.base;
+            if (rp->ty->kind == TY_REF || rp->ty->kind == TY_MUTREF) {
+                /* auto-borrow: &obj or &mut obj from a plain value */
+                if (bt->kind == TY_REF || bt->kind == TY_MUTREF) {
+                    if (!type_eq(bt, rp->ty))
+                        fatal_at(recv->span,
+                                 "receiver expects %s, got %s",
+                                 type_spelling(rp->ty), type_spelling(bt));
+                } else {
+                    Expr *amp = expr_new(EX_UNARY, recv->span);
+                    amp->u.unary.op = TK_AMP;
+                    amp->u.unary.e = recv;
+                    amp->borrow_mut = (rp->ty->kind == TY_MUTREF);
+                    recv = amp;
+                }
+            } else if (bt->kind == TY_REF || bt->kind == TY_MUTREF) {
+                /* auto-deref for by-value receivers */
+                Expr *dr = expr_new(EX_DEREF, recv->span);
+                dr->u.deref = recv;
+                recv = dr;
+            }
+            ExprList nargs = {0};
+            da_push(&nargs, recv);
+            for (size_t i = 0; i < e->u.call.args.len; i++)
+                da_push(&nargs, e->u.call.args.items[i]);
+            e->u.call.args.items = nargs.items;
+            e->u.call.args.len = nargs.len;
+            e->u.call.args.cap = nargs.cap;
+            Expr *id = expr_new(EX_IDENT, callee->span);
+            id->u.ident = m->name;
+            e->u.call.callee = id;
+            e->type = check_call_user(se, e, m);
+            return e->type;
+        }
         if (callee->kind == EX_GENERIC
             && callee->u.generic.base->kind == EX_IDENT
             && zstr_eq(callee->u.generic.base->u.ident, "sizeof")
@@ -1477,17 +1629,58 @@ static void register_decl(Sema *se, Decl *d)
         break;
     }
     case DL_FN: {
-        for (size_t i = 0; i < d->u.fn.params.len; i++)
-            d->u.fn.params.items[i].ty =
-                resolve_type(se, d->u.fn.params.items[i].ty);
-        d->u.fn.ret = resolve_type(se, d->u.fn.ret);
         Sym sym;
         memset(&sym, 0, sizeof(sym));
         sym.name = d->u.fn.name;
         sym.kind = SYM_FN;
         sym.span = d->span;
-        sym.is_template = d->u.fn.tparams.len > 0;
         sym.decl = d;
+        int is_method = d->u.fn.recv != NULL;
+        if (is_method && !d->u.fn.sname)
+            fatal_at(d->span, "method registration requires a struct name");
+        if (is_method) {
+            /* template methods keep their receiver unresolved until the
+             * call site supplies concrete struct args */
+            StrList rtps = {0};
+            collect_recv_tparams(se, d->u.fn.recv->ty, &rtps);
+            if (rtps.len > 0) {
+                for (size_t i = 0; i < rtps.len; i++)
+                    da_push(&d->u.fn.tparams, rtps.items[i]);
+            } else {
+                d->u.fn.recv->ty = resolve_type(se, d->u.fn.recv->ty);
+            }
+            /* receiver rides as the first parameter for uniform calls */
+            {
+                if (d->u.fn.params.len >= d->u.fn.params.cap) {
+                    size_t cap = d->u.fn.params.cap
+                                     ? d->u.fn.params.cap * 2 : 4;
+                    Param *np = realloc(d->u.fn.params.items,
+                                        cap * sizeof(Param));
+                    if (!np)
+                        fatal("out of memory");
+                    d->u.fn.params.items = np;
+                    d->u.fn.params.cap = cap;
+                }
+                memmove(d->u.fn.params.items + 1, d->u.fn.params.items,
+                        d->u.fn.params.len * sizeof(Param));
+                d->u.fn.params.items[0] = *d->u.fn.recv;
+                d->u.fn.params.len++;
+            }
+        }
+        sym.is_template = d->u.fn.tparams.len > 0;
+        if (!sym.is_template && d->u.fn.tparams.len == 0 && !is_method) {
+            for (size_t i = 0; i < d->u.fn.params.len; i++)
+                d->u.fn.params.items[i].ty =
+                    resolve_type(se, d->u.fn.params.items[i].ty);
+            d->u.fn.ret = resolve_type(se, d->u.fn.ret);
+        } else if (!sym.is_template && is_method) {
+            /* non-template method: params (incl. recv) resolve now, but
+             * the ret may reference the struct only */
+            for (size_t i = 0; i < d->u.fn.params.len; i++)
+                d->u.fn.params.items[i].ty =
+                    resolve_type(se, d->u.fn.params.items[i].ty);
+            d->u.fn.ret = resolve_type(se, d->u.fn.ret);
+        }
         if (!sym.is_template) {
             sym.params.items = d->u.fn.params.items;
             sym.params.len = d->u.fn.params.len;
@@ -1495,6 +1688,14 @@ static void register_decl(Sema *se, Decl *d)
             sym.ret = d->u.fn.ret;
         }
         scope_add(se, sym);
+        Sym *reg = scope_find(se->scope, sym.name);
+        if (is_method) {
+            Meth m;
+            m.sname = d->u.fn.sname;
+            m.mname = d->u.fn.mname;
+            m.sym = reg;
+            da_push(&se->methods, m);
+        }
         if (zstr_eq(d->u.fn.name, "main")) {
             se->has_main = 1;
             if (d->u.fn.params.len != 0)

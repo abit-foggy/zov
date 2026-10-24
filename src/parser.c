@@ -208,6 +208,7 @@ static Type *parse_type(Parser *p)
 /* ---- expressions ---- */
 
 static Expr *parse_expr(Parser *p);
+static Expr *parse_binary(Parser *p, int min_prec);
 
 // "a{x}b" desugars to "a" + (x) + "b"; '\{' stays literal via marker 0x01
 static Expr *build_string_expr(Parser *p, const char *val, size_t len)
@@ -426,12 +427,44 @@ static Expr *parse_call_args(Parser *p, Expr *callee)
     return e;
 }
 
-/* '[' after an expression: type-keyword start means generic args;
- * anything else is indexing. */
+static Expr *parse_binary_after(Parser *p, Expr *lhs, int min_prec);
+
+/* '[' after an expression: generic args vs indexing. A bare-ident arg
+ * is ambiguous (Foo[T] vs arr[i]); the token AFTER ']' disambiguates. */
 static Expr *parse_postfix_bracket(Parser *p, Expr *base)
 {
     Span sp = tok(p)->span;
     advance(p); /* '[' */
+    if (at(p, TK_IDENT) && base->kind == EX_IDENT) {
+        const char *nm = tok(p)->name;
+        Span nsp = tok(p)->span;
+        advance(p);
+        if (at(p, TK_RBRACKET)) {
+            advance(p);
+            if (at(p, TK_LBRACE) || at(p, TK_LPAREN)) {
+                Expr *g = expr_new(EX_GENERIC, sp);
+                g->u.generic.base = base;
+                da_push(&g->u.generic.targs, type_struct(nm));
+                return g;
+            }
+            /* plain index by identifier: arr[i] */
+            Expr *idx = expr_new(EX_IDENT, nsp);
+            idx->u.ident = nm;
+            Expr *e = expr_new(EX_INDEX, sp);
+            e->u.index.base = base;
+            e->u.index.index = idx;
+            return e;
+        }
+        /* not a lone ident: it opens a general index expression */
+        Expr *idx0 = expr_new(EX_IDENT, nsp);
+        idx0->u.ident = nm;
+        Expr *idx = parse_binary_after(p, idx0, 1);
+        expect(p, TK_RBRACKET, "']'");
+        Expr *e = expr_new(EX_INDEX, sp);
+        e->u.index.base = base;
+        e->u.index.index = idx;
+        return e;
+    }
     switch (kind(p)) {
     case TK_VOID: case TK_I8: case TK_I16: case TK_I32: case TK_I64:
     case TK_ISIZE: case TK_U8: case TK_U16: case TK_U32: case TK_U64:
@@ -614,9 +647,8 @@ static int bin_prec(TokenKind k)
     }
 }
 
-static Expr *parse_binary(Parser *p, int min_prec)
+static Expr *parse_binary_after(Parser *p, Expr *lhs, int min_prec)
 {
-    Expr *lhs = parse_unary(p);
     for (;;) {
         int prec = bin_prec(kind(p));
         if (prec < min_prec || prec == 0)
@@ -629,6 +661,11 @@ static Expr *parse_binary(Parser *p, int min_prec)
         e->u.binary.rhs = parse_binary(p, prec + 1);
         lhs = e;
     }
+}
+
+static Expr *parse_binary(Parser *p, int min_prec)
+{
+    return parse_binary_after(p, parse_unary(p), min_prec);
 }
 
 static Expr *parse_expr(Parser *p)
@@ -955,6 +992,8 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
         snprintf(mangled, sizeof(mangled), "%s__%s", sname->name,
                  tok(p)->name);
         d->u.fn.name = str_intern_c(mangled);
+        d->u.fn.sname = sname->name;
+        d->u.fn.mname = tok(p)->name;
     }
     if (!at(p, TK_IDENT))
         fatal_at(tok(p)->span, "expected function name");
