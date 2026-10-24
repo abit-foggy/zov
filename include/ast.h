@@ -206,7 +206,8 @@ typedef struct Decl {
     Span span;
     int exported;
     union {
-        struct { int is_c_header; const char *path; const char *alias; } use;
+        struct { int is_c_header; const char *path; const char *alias;
+                 StrList zsyms; } use;
         struct { const char *name; DA(struct Field) fields;
                   Type *alias_ty; int is_resource;
                   StrList tparams; } type;

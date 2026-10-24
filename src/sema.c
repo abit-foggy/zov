@@ -40,6 +40,8 @@ typedef struct Sym {
     DA(Param) params; /* function signature */
     Type *ret;
     CHeader *hdr;     /* imported C namespace members */
+    int is_zov;       /* namespace of a loaded .zov module */
+    StrList zsyms;    /* exported symbol names of the module */
     int is_template;  /* generic decl, checked only via instantiation */
     Decl *decl;       /* owning decl for templates */
 } Sym;
@@ -168,6 +170,17 @@ static Type *resolve_type(Sema *se, Type *t);
 static Type *instantiate_struct(Sema *se, const char *tname,
                                  TypeList *args);
 
+static int zov_ns_member(Sema *se, const char *ns, const char *name)
+{
+    Sym *s = scope_find(se->scope, ns);
+    if (!s || s->kind != SYM_NS || !s->is_zov)
+        return 0;
+    for (size_t i = 0; i < s->zsyms.len; i++)
+        if (s->zsyms.items[i] == name)
+            return 1;
+    return 0;
+}
+
 static Type *resolve_ns_type(Sema *se, const char *qual)
 {
     const char *sep = strstr(qual, "::");
@@ -179,7 +192,16 @@ static Type *resolve_ns_type(Sema *se, const char *qual)
     memcpy(nbuf, qual, (size_t)(sep - qual));
     nbuf[sep - qual] = '\0';
     Sym *ns = scope_find(se->scope, str_intern_c(nbuf));
-    if (!ns || ns->kind != SYM_NS || !ns->hdr)
+    if (!ns || ns->kind != SYM_NS)
+        return NULL;
+    if (ns->is_zov) {
+        /* loaded .zov module: member resolves to the global symbol */
+        Sym *member = scope_find(se->scope, sep + 2);
+        if (member && member->kind == SYM_TYPE && member->type)
+            return member->type;
+        return NULL;
+    }
+    if (!ns->hdr)
         return NULL;
     CMember *m = cimport_find(ns->hdr, sep + 2);
     if (!m || m->kind != CM_TYPE)
@@ -407,6 +429,18 @@ static char *inst_key(const char *base, TypeList *args)
 static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
 {
     Sym *sym = scope_find(se->scope, tname);
+    if (!sym && strstr(tname, "::")) {
+        /* qualified template: vec::Vec[i32] -> the module's Vec template */
+        const char *sep = strstr(tname, "::");
+        char nbuf[128];
+        if ((size_t)(sep - tname) < sizeof(nbuf)) {
+            memcpy(nbuf, tname, (size_t)(sep - tname));
+            nbuf[sep - tname] = '\0';
+            Sym *ns = scope_find(se->scope, str_intern_c(nbuf));
+            if (ns && ns->kind == SYM_NS && ns->is_zov)
+                sym = scope_find(se->scope, sep + 2);
+        }
+    }
     if (!sym || sym->kind != SYM_TYPE || !sym->is_template || !sym->decl)
         fatal("'%s' is not a generic type", tname);
     StrList *tps = &sym->decl->u.type.tparams;
@@ -969,6 +1003,23 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
+        if (callee->kind == EX_NS_IDENT
+            && zov_ns_member(se, callee->u.nident.ns,
+                             callee->u.nident.name)) {
+            /* module fn: rewrite to the merged global symbol */
+            Expr *id = expr_new(EX_IDENT, callee->span);
+            id->u.ident = callee->u.nident.name;
+            e->u.call.callee = id;
+            callee = id;
+        }
+        if (callee->kind == EX_GENERIC
+            && callee->u.generic.base->kind == EX_NS_IDENT
+            && zov_ns_member(se, callee->u.generic.base->u.nident.ns,
+                             callee->u.generic.base->u.nident.name)) {
+            Expr *id = expr_new(EX_IDENT, callee->u.generic.base->span);
+            id->u.ident = callee->u.generic.base->u.nident.name;
+            callee->u.generic.base = id;
+        }
         if (callee->kind == EX_FIELD) {
             /* expr.method(...): receiver resolution with auto-borrowing */
             Type *bt = check_expr(se, callee->u.field.base, NULL);
@@ -1574,8 +1625,20 @@ static void register_decl(Sema *se, Decl *d)
 {
     switch (d->kind) {
     case DL_USE: {
+        if (d->u.use.zsyms.len > 0) {
+            /* loaded .zov module: members resolve to global symbols */
+            Sym sym;
+            memset(&sym, 0, sizeof(sym));
+            sym.name = d->u.use.alias;
+            sym.kind = SYM_NS;
+            sym.span = d->span;
+            sym.is_zov = 1;
+            sym.zsyms = d->u.use.zsyms;
+            scope_add(se, sym);
+            break;
+        }
         if (!d->u.use.is_c_header)
-            return; /* std module paths carry no symbols in v0.2 */
+            return; /* std module paths carry no symbols */
         CHeader *h = cimport_header(d->u.use.path, 1);
         if (!h)
             h = cimport_header(d->u.use.path, 0);

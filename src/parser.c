@@ -179,6 +179,23 @@ static Type *parse_type(Parser *p)
                 snprintf(joined, sizeof(joined), "%s::%s", name,
                          tok(p)->name);
                 advance(p);
+                if (at(p, TK_LBRACKET)) {
+                    /* vec::Vec[i32]: qualified generic instantiation */
+                    Type *inst = zalloc(sizeof(Type));
+                    inst->kind = TY_INST;
+                    inst->name = str_intern_c(joined);
+                    advance(p);
+                    for (;;) {
+                        da_push(&inst->members, parse_type(p));
+                        if (at(p, TK_COMMA)) {
+                            advance(p);
+                            continue;
+                        }
+                        break;
+                    }
+                    expect(p, TK_RBRACKET, "']'");
+                    return inst;
+                }
                 return type_struct(str_intern_c(joined));
             }
             if (at(p, TK_LBRACKET)) {
@@ -858,6 +875,7 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
         /* module path: std::io::x recorded verbatim for later phases */
         DA(char) path = {0};
         const char *seg = tok(p)->name;
+        const char *last = seg; /* interned name of the final segment */
         while (*seg)
             da_push(&path, *seg++);
         advance(p);
@@ -869,6 +887,7 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
             while (*sep)
                 da_push(&path, *sep++);
             seg = tok(p)->name;
+            last = seg;
             while (*seg)
                 da_push(&path, *seg++);
             advance(p);
@@ -876,7 +895,7 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
         da_push(&path, '\0');
         d->u.use.is_c_header = 0;
         d->u.use.path = path.items;
-        d->u.use.alias = seg; /* default alias: last module segment */
+        d->u.use.alias = last; /* default alias: last module segment */
     } else {
         fatal_at(tok(p)->span, "expected '<header.h>', \"header.h\" or "
                                 "module path after 'use'");
