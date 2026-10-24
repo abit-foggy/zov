@@ -745,6 +745,10 @@ static void emit_match(CG *cg, Expr *e, int want_value)
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    if (e->szarg) {
+        buf_printf(&*cg->cur, "((size_t)sizeof(%s))", c_type(cg, e->szarg));
+        return;
+    }
     if (e->builtin_io) {
         /* print/println in value position: void statement-expression */
         int nl = zstr_eq(callee->u.ident, "println");
@@ -869,6 +873,14 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         /* sizeof operand is unevaluated, so duplicating the base expr
          * for the length computation is side-effect free */
         Type *bt = e->u.index.base->type;
+        if (bt && bt->kind == TY_PTR) {
+            /* raw pointer indexing: unchecked, emitted directly */
+            emit_expr(cg, e->u.index.base, 0);
+            buf_puts(b, "[");
+            emit_expr(cg, e->u.index.index, 0);
+            buf_puts(b, "]");
+            break;
+        }
         if (bt && bt->kind == TY_ARRAY) {
             emit_expr(cg, e->u.index.base, 0);
             buf_puts(b, "[zov_bounds((size_t)(");
@@ -902,6 +914,13 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         buf_puts(b, ")");
         break;
     case EX_FIELD:
+        if (e->u.field.base->type && e->u.field.base->type->kind == TY_STR) {
+            /* str fat-pointer halves: raw C member names */
+            buf_puts(b, "(");
+            emit_expr(cg, e->u.field.base, 0);
+            buf_printf(b, ").%s", e->u.field.name);
+            break;
+        }
         buf_puts(b, "(");
         emit_expr(cg, e->u.field.base, 0);
         buf_printf(b, ")%s%s", e->via_ref ? "->" : ".",
@@ -1049,6 +1068,33 @@ static int emit_stmt(CG *cg, Stmt *s)
             t = 0;
         }
         return t;
+    }
+    case ST_FOR_RANGE: {
+        // half-open range; the bound is evaluated exactly once
+        int id = cg->tmp_id++;
+        char ub[24];
+        snprintf(ub, sizeof(ub), "_zv_fub%d", id);
+        buf_puts(&*cg->cur, "{\n");
+        emit_var(&*cg->cur, cg, s->u.forr.ty, ub);
+        buf_puts(&*cg->cur, " = ");
+        emit_expr(cg, s->u.forr.end, 0);
+        buf_printf(&*cg->cur, ";\n");
+        buf_puts(&*cg->cur, "for (");
+        emit_var(&*cg->cur, cg, s->u.forr.ty, mangle_local(s->u.forr.name));
+        buf_puts(&*cg->cur, " = ");
+        emit_expr(cg, s->u.forr.start, 0);
+        buf_printf(&*cg->cur, "; %s < %s; %s = %s + 1) {\n",
+                   mangle_local(s->u.forr.name), ub,
+                   mangle_local(s->u.forr.name), mangle_local(s->u.forr.name));
+        da_push(&cg->loop_marks, cg->defers.len);
+        da_push(&cg->loop_ids, id);
+        emit_block(cg, s->u.forr.body);
+        cg->loop_marks.len--;
+        cg->loop_ids.len--;
+        buf_printf(&*cg->cur, "zov_cont_%d: ;\n}\n", id);
+        buf_printf(&*cg->cur, "zov_brk_%d: ;\n", id);
+        buf_puts(&*cg->cur, "}\n");
+        return 0;
     }
     case ST_WHILE: {
         buf_puts(&*cg->cur, "while (");

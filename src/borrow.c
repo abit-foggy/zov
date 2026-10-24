@@ -183,6 +183,7 @@ static const char *resolve_root(Borrow *b, Expr *e)
 /* ---- last-use pre-scan (NLL release points) ---- */
 
 static void note_use(Borrow *b, Expr *e);
+static void note_use_range(Borrow *b, Stmt *s);
 
 static void note_use_stmt(Borrow *b, Stmt *s)
 {
@@ -206,6 +207,9 @@ static void note_use_stmt(Borrow *b, Stmt *s)
         note_use(b, s->u.whilee.cond);
         for (size_t i = 0; i < s->u.whilee.body->stmts.len; i++)
             note_use_stmt(b, s->u.whilee.body->stmts.items[i]);
+        return;
+    case ST_FOR_RANGE:
+        note_use_range(b, s);
         return;
     case ST_RETURN: note_use(b, s->u.ret); return;
     case ST_EXPR: note_use(b, s->u.expr); return;
@@ -703,6 +707,41 @@ static void tick(Borrow *b)
             b->loans.items[i].active = 0;
 }
 
+static void note_use_range(Borrow *b, Stmt *s);
+
+static int b_stmt(Borrow *b, Stmt *s);
+static void note_use_stmt(Borrow *b, Stmt *s);
+static void note_use_range(Borrow *b, Stmt *s)
+{
+    note_use(b, s->u.forr.start);
+    note_use(b, s->u.forr.end);
+    for (size_t i = 0; i < s->u.forr.body->stmts.len; i++)
+        note_use_stmt(b, s->u.forr.body->stmts.items[i]);
+}
+
+static int b_range(Borrow *b, Stmt *s)
+{
+    tick(b);
+    bx_expr(b, s->u.forr.start);
+    bx_expr(b, s->u.forr.end);
+    size_t nvars = b->vars.len;
+    BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+    for (size_t i = 0; i < nvars; i++)
+        base[i] = b->vars.items[i];
+    var_add(b, s->u.forr.name, s->u.forr.ty, 0);
+    b_block(b, s->u.forr.body);
+    for (size_t i = 0; i < nvars && i < b->vars.len; i++)
+        if (!base[i].moved && b->vars.items[i].moved)
+            bfatal(s->span,
+                   "'%s' moved inside loop body without reinitialization",
+                   base[i].name);
+    b->vars.len = nvars;
+    for (size_t i = 0; i < nvars; i++)
+        b->vars.items[i] = base[i];
+    free(base);
+    return 0;
+}
+
 static int b_stmt(Borrow *b, Stmt *s)
 {
     tick(b);
@@ -790,6 +829,8 @@ static int b_stmt(Borrow *b, Stmt *s)
     case ST_BREAK:
     case ST_CONTINUE:
         return 1;
+    case ST_FOR_RANGE:
+        return b_range(b, s);
     case ST_EXPR:
         if (s->u.expr->kind == EX_MATCH)
             walk_match(b, s->u.expr);

@@ -151,6 +151,8 @@ typedef struct Expr {
     int borrow_mut; /* &mut in EX_UNARY AMP */
     int via_ref;    /* EX_FIELD reached through a reference: emit '->' */
     int builtin_io; /* EX_CALL to built-in print/println */
+    Type *szarg;    /* EX_CALL to sizeof[T](): the type argument */
+    int coerce_tag; /* EX_COERCE: deterministic member index in target */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);
@@ -169,7 +171,7 @@ typedef struct Field {
 
 typedef enum StmtKind {
     ST_LET, ST_DEFER, ST_IF, ST_WHILE, ST_RETURN, ST_BREAK, ST_CONTINUE,
-    ST_EXPR, ST_BLOCK,
+    ST_EXPR, ST_BLOCK, ST_FOR_RANGE,
 } StmtKind;
 
 typedef struct Block {
@@ -184,6 +186,8 @@ typedef struct Stmt {
         struct Stmt *defer;
         struct { Expr *cond; Block *then_blk; struct Stmt *else_stmt; } iff;
         struct { Expr *cond; Block *body; } whilee;
+        struct { const char *name; Type *ty; Expr *start, *end;
+                 Block *body; } forr;
         Expr *ret;
         Expr *expr;
         Block *block;
@@ -205,7 +209,8 @@ typedef struct Decl {
                   Type *alias_ty; int is_resource;
                   StrList tparams; } type;
         struct { const char *name; DA(struct Param) params; Type *ret;
-                  Block *body; StrList tparams; } fn;
+                  Block *body; StrList tparams; struct Param *recv;
+                  const char *sname; } fn;
     } u;
 } Decl;
 

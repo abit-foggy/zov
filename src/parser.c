@@ -763,10 +763,27 @@ static Stmt *parse_stmt(Parser *p)
         eat_semi(p);
         return s;
     }
-    case TK_FOR:
+    case TK_FOR: {
+        // for (let i in a..b) { ... }: half-open range, immutable index
+        advance(p);
+        expect(p, TK_LPAREN, "'(' after 'for'");
+        expect(p, TK_LET, "'let' in range for");
+        Stmt *s = stmt_new(ST_FOR_RANGE, sp);
+        if (!at(p, TK_IDENT))
+            fatal_at(tok(p)->span, "expected loop variable name");
+        s->u.forr.name = tok(p)->name;
+        advance(p);
+        expect(p, TK_IN, "'in' after loop variable");
+        s->u.forr.start = parse_expr(p);
+        expect(p, TK_DOTDOT, "'..' in range for");
+        s->u.forr.end = parse_expr(p);
+        expect(p, TK_RPAREN, "')' after range");
+        s->u.forr.body = parse_block(p);
+        eat_semi(p);
+        return s;
+    }
     case TK_ENUM:
-        fatal_at(sp, "'%s' is not supported in v0.2",
-                 kind(p) == TK_FOR ? "for" : "enum");
+        fatal_at(sp, "'enum' is not supported in v0.4");
         return NULL;
     default: {
         Stmt *s = stmt_new(ST_EXPR, sp);
@@ -903,11 +920,46 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
 static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
 {
     advance(p); /* 'fn' */
-    if (!at(p, TK_IDENT))
-        fatal_at(tok(p)->span, "expected function name");
     Decl *d = decl_new(DL_FN, sp);
     d->exported = exported;
-    d->u.fn.name = tok(p)->name;
+    if (at(p, TK_LPAREN)) {
+        /* receiver method: fn (self: RecvType) name(...) */
+        advance(p);
+        Param recv;
+        memset(&recv, 0, sizeof(recv));
+        if (!at(p, TK_IDENT))
+            fatal_at(tok(p)->span, "expected receiver name");
+        recv.name = tok(p)->name;
+        recv.span = tok(p)->span;
+        advance(p);
+        expect(p, TK_COLON, "':' after receiver name");
+        recv.ty = parse_type(p);
+        d->u.fn.recv = zalloc(sizeof(Param));
+        *d->u.fn.recv = recv;
+        expect(p, TK_RPAREN, "')' after receiver type");
+        if (!at(p, TK_IDENT))
+            fatal_at(tok(p)->span, "expected method name");
+        /* receiver structs name their methods: Vec__push, Point__len */
+        Type *sname = recv.ty;
+        while (sname) {
+            if (sname->kind == TY_REF || sname->kind == TY_MUTREF)
+                sname = sname->base;
+            else if (sname->kind == TY_INST)
+                sname = type_struct(sname->name);
+            else
+                break;
+        }
+        if (!sname || sname->kind != TY_STRUCT || !sname->name)
+            fatal_at(recv.span, "receiver must be a struct type");
+        char mangled[256];
+        snprintf(mangled, sizeof(mangled), "%s__%s", sname->name,
+                 tok(p)->name);
+        d->u.fn.name = str_intern_c(mangled);
+    }
+    if (!at(p, TK_IDENT))
+        fatal_at(tok(p)->span, "expected function name");
+    if (!d->u.fn.name)
+        d->u.fn.name = tok(p)->name;
     advance(p);
     if (at(p, TK_LBRACKET)) {
         advance(p);

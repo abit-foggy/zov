@@ -875,6 +875,16 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
+        if (callee->kind == EX_GENERIC
+            && callee->u.generic.base->kind == EX_IDENT
+            && zstr_eq(callee->u.generic.base->u.ident, "sizeof")
+            && !scope_find(se->scope, "sizeof")) {
+            if (callee->u.generic.targs.len != 1)
+                fatal_at(callee->span, "sizeof[T]() takes one type argument");
+            e->szarg = resolve_type(se, callee->u.generic.targs.items[0]);
+            e->type = type_prim(TY_USIZE);
+            return e->type;
+        }
         if (callee->kind == EX_GENERIC) {
             /* swap in the specialized ident, then re-enter as a plain
              * user-fn call against the instantiated signature */
@@ -940,6 +950,15 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = bt->base;
             return e->type;
         }
+        if (bt->kind == TY_PTR) {
+            if (bt->nullable)
+                fatal_at(e->span, "cannot index nullable %s; narrow it "
+                                  "via match or unwrap",
+                         type_spelling(bt));
+            // raw pointer indexing: unchecked, for low-level containers
+            e->type = bt->base;
+            return e->type;
+        }
         fatal_at(e->span, "cannot index %s", type_spelling(bt));
         return NULL;
     }
@@ -976,6 +995,18 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Type *t = check_expr(se, e->u.field.base, NULL);
         if (is_unknown(t))
             return unknown();
+        if (t->kind == TY_STR) {
+            // str exposes its fat-pointer halves as intrinsic fields
+            if (zstr_eq(e->u.field.name, "data")) {
+                e->type = type_ptr(type_prim(TY_U8), 0);
+                return e->type;
+            }
+            if (zstr_eq(e->u.field.name, "len")) {
+                e->type = type_prim(TY_USIZE);
+                return e->type;
+            }
+            fatal_at(e->span, "str has no field '%s'", e->u.field.name);
+        }
         /* references auto-deref for field access */
         while (t && (t->kind == TY_REF || t->kind == TY_MUTREF)) {
             e->via_ref = 1;
@@ -1302,6 +1333,32 @@ static void check_stmt(Sema *se, Stmt *s)
                 pop_scope(se);
             }
         }
+        break;
+    }
+    case ST_FOR_RANGE: {
+        Type *st = check_expr(se, s->u.forr.start, NULL);
+        Type *et = check_expr(se, s->u.forr.end, st);
+        if (!is_unknown(st) && !ty_is_int(st->kind))
+            fatal_at(s->u.forr.start->span,
+                     "range start must be an integer, got %s",
+                     type_spelling(st));
+        if (is_unknown(st) || is_unknown(et))
+            fatal_at(s->span, "range bounds must have concrete types");
+        require_same(s->u.forr.start, s->u.forr.end, "range");
+        s->u.forr.ty = st;
+        push_scope(se);
+        Sym iv;
+        memset(&iv, 0, sizeof(iv));
+        iv.name = s->u.forr.name;
+        iv.kind = SYM_VAR;
+        iv.span = s->span;
+        iv.type = st;
+        iv.mut = 0;
+        scope_add(se, iv);
+        se->loop_depth++;
+        check_block(se, s->u.forr.body);
+        se->loop_depth--;
+        pop_scope(se);
         break;
     }
     case ST_WHILE: {
