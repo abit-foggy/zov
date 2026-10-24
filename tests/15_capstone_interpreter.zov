@@ -1,0 +1,233 @@
+// capstone: a mini expression evaluator written in pure Zov, exercising
+// enums, exhaustive match, Map, Vec, slicing, bitwise ops, ? propagation,
+// error unions, and deterministic defer cleanup
+use std::map as map;
+use std::vec as vec;
+
+export type EvalError = !void;
+
+export type Tk = enum {
+    Num,
+    Name,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Amp,
+    LP,
+    RP,
+    End,
+};
+
+export type Token = struct {
+    kind: Tk,
+    num: i32,
+    at: usize,
+    len: usize,
+};
+
+export fn tokenize(line: str) Vec[Token] = {
+    let mut out = vec::new[Token]();
+    let mut i: usize = 0usize;
+    while (i < line.len) {
+        let ch: u8 = line.ptr[i];
+        if (ch == 32u8 || ch == 9u8) {
+            i += 1usize;
+            continue;
+        };
+        let t = Token{ kind = Tk::Plus, num = 0, at = i, len = 1usize };
+        if (ch >= 48u8 && ch <= 57u8) {
+            let start: usize = i;
+            let mut val: i32 = 0;
+            while (i < line.len && line.ptr[i] >= 48u8
+                   && line.ptr[i] <= 57u8) {
+                val = val * 10 + (line.ptr[i] as i32 - 48);
+                i += 1usize;
+            };
+            let nt = Token{ kind = Tk::Num, num = val, at = start,
+                           len = i - start };
+            out.push(nt);
+            continue;
+        };
+        if ((ch >= 97u8 && ch <= 122u8)
+            || (ch >= 65u8 && ch <= 90u8)) {
+            let start: usize = i;
+            while (i < line.len
+                   && ((line.ptr[i] >= 97u8 && line.ptr[i] <= 122u8)
+                       || (line.ptr[i] >= 48u8
+                           && line.ptr[i] <= 57u8))) {
+                i += 1usize;
+            };
+            let nt = Token{ kind = Tk::Name, num = 0, at = start,
+                            len = i - start };
+            out.push(nt);
+            continue;
+        };
+        let kt = match (ch) {
+            case 43u8 => Tk::Plus,
+            case 45u8 => Tk::Minus,
+            case 42u8 => Tk::Star,
+            case 47u8 => Tk::Slash,
+            case 38u8 => Tk::Amp,
+            case 40u8 => Tk::LP,
+            case 41u8 => Tk::RP,
+            case _ => Tk::End,
+        };
+        if (kt == Tk::End) {
+            return out;
+        };
+        let nt = Token{ kind = kt, num = 0, at = i, len = 1usize };
+        out.push(nt);
+        i += 1usize;
+    };
+    return out;
+};
+
+export fn cur(toks: &Vec[Token], pos: usize) Token = {
+    if (pos >= toks.len()) {
+        return Token{ kind = Tk::End, num = 0, at = 0usize, len = 0usize };
+    };
+    return toks.get(pos);
+};
+
+export fn parse_factor(line: str, toks: &Vec[Token],
+                       pos: &mut usize, vars: &map::Map[str, i32])
+                       (i32 | EvalError) = {
+    let t = cur(toks, *pos);
+    if (t.kind == Tk::Num) {
+        *pos += 1usize;
+        return t.num;
+    };
+    if (t.kind == Tk::Name) {
+        *pos += 1usize;
+        let name: str = line[t.at..(t.at + t.len)];
+        let r = vars.get(name);
+        return match (r) {
+            case let v: i32 => v,
+            case map::MapNotFound => return EvalError,
+        };
+    };
+    if (t.kind == Tk::Minus) {
+        *pos += 1usize;
+        let v = parse_factor(line, toks, pos, vars)?;
+        return -v;
+    };
+    if (t.kind == Tk::LP) {
+        *pos += 1usize;
+        let v = parse_expr(line, toks, pos, vars)?;
+        let close = cur(toks, *pos);
+        if (close.kind != Tk::RP) {
+            return EvalError;
+        };
+        *pos += 1usize;
+        return v;
+    };
+    return EvalError;
+};
+
+export fn parse_term(line: str, toks: &Vec[Token],
+                     pos: &mut usize, vars: &map::Map[str, i32])
+                     (i32 | EvalError) = {
+    let mut acc = parse_factor(line, toks, pos, vars)?;
+    for (let _ in 0..1024) {
+        let t = cur(toks, *pos);
+        if (t.kind == Tk::Star || t.kind == Tk::Slash
+            || t.kind == Tk::Amp) {
+            *pos += 1usize;
+            let rhs = parse_factor(line, toks, pos, vars)?;
+            if (t.kind == Tk::Star) {
+                acc = acc * rhs;
+            } else if (t.kind == Tk::Slash) {
+                acc = acc / rhs;
+            } else {
+                acc = acc & rhs;
+            };
+            continue;
+        };
+        break;
+    };
+    return acc;
+};
+
+export fn parse_expr(line: str, toks: &Vec[Token],
+                     pos: &mut usize, vars: &map::Map[str, i32])
+                     (i32 | EvalError) = {
+    let mut acc = parse_term(line, toks, pos, vars)?;
+    for (let _ in 0..1024) {
+        let t = cur(toks, *pos);
+        if (t.kind == Tk::Plus || t.kind == Tk::Minus) {
+            *pos += 1usize;
+            let rhs = parse_term(line, toks, pos, vars)?;
+            if (t.kind == Tk::Plus) {
+                acc = acc + rhs;
+            } else {
+                acc = acc - rhs;
+            };
+            continue;
+        };
+        break;
+    };
+    return acc;
+};
+
+export fn eval_line(line: str, vars: &map::Map[str, i32])
+                   (i32 | EvalError) = {
+    let toks = tokenize(line);
+    defer toks.free();
+    let mut pos: usize = 0usize;
+    let v = parse_expr(line, &toks, &mut pos, vars)?;
+    let tail = cur(&toks, pos);
+    if (tail.kind != Tk::End) {
+        return EvalError;
+    };
+    return v;
+};
+
+export fn doubled(line: str, vars: &map::Map[str, i32])
+                 (i32 | EvalError) = {
+    let v = eval_line(line, vars)?;
+    return v * 2;
+};
+
+export fn main() i32 = {
+    let mut vars = map::new[str, i32]();
+    defer vars.free();
+    vars.insert("x", 10);
+    vars.insert("y", 3);
+
+    let lines: [6]str = [
+        "1 + 2",
+        "(1 + x) * y",
+        "x & 6",
+        "y * (x + 5)",
+        "-x + 1",
+        "bogus + 1",
+    ];
+    let want: [6]i32 = [3, 33, 2, 45, -9, -999];
+    for (let i in 0..5) {
+        let line: str = lines[i as usize];
+        let r = eval_line(line, &vars);
+        let v: i32 = match (r) {
+            case let n: i32 => n,
+            case EvalError => -999,
+        };
+        println("{line} = {v}");
+        assert(v == want[i as usize]);
+    };
+    let bad = eval_line(lines[5usize], &vars);
+    let bv: i32 = match (bad) {
+        case let n: i32 => n,
+        case EvalError => -999,
+    };
+    assert(bv == -999);
+
+    let d = doubled("(x + y) * 2", &vars);
+    let dv: i32 = match (d) {
+        case let n: i32 => n,
+        case EvalError => -777,
+    };
+    println("doubled = {dv}");
+    assert(dv == 52);
+    println("capstone ok");
+    return 0;
+};

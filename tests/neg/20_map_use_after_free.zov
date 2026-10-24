@@ -1,0 +1,10 @@
+// MUST FAIL: Map is a resource; free() consumes it by value
+use std::map as map;
+
+export fn main() i32 = {
+    let mut m = map::new[str, i32]();
+    m.insert("k", 1);
+    m.free();
+    m.insert("k2", 2);
+    return 0;
+};

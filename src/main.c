@@ -212,6 +212,7 @@ static void usage(const char *prog)
             "options:\n"
             "  --emit-c     print generated ISO C99 to stdout\n"
             "  --release    use the system cc pipe even with libtcc\n"
+            "  --version    print the compiler version\n"
             "  -o <path>    output executable path (default a.out)\n",
             prog);
 }
@@ -282,6 +283,12 @@ int main(int argc, char **argv)
         }
     }
 
+
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0
+                       || strcmp(argv[1], "-V") == 0)) {
+        printf("zovc 1.0.0\n");
+        return 0;
+    }
 
     for (int i = file ? 2 : 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-c") == 0) {

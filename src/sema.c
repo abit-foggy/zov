@@ -218,7 +218,7 @@ static Type *resolve_ns_type(Sema *se, const char *qual)
         return NULL;
     if (ns->is_zov) {
         /* loaded .zov module: member resolves to the global symbol */
-        Sym *member = scope_find(se->scope, sep + 2);
+        Sym *member = scope_find(se->scope, str_intern_c(sep + 2));
         if (member && member->kind == SYM_TYPE && member->type)
             return member->type;
         return NULL;
@@ -476,11 +476,14 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
             nbuf[sep - tname] = '\0';
             Sym *ns = scope_find(se->scope, str_intern_c(nbuf));
             if (ns && ns->kind == SYM_NS && ns->is_zov)
-                sym = scope_find(se->scope, sep + 2);
+                sym = scope_find(se->scope, str_intern_c(sep + 2));
         }
     }
     if (!sym || sym->kind != SYM_TYPE || !sym->is_template || !sym->decl)
         fatal("'%s' is not a generic type", tname);
+    /* canonicalize qualified names: the key must match receiver
+     * instantiations built inside the defining module */
+    tname = sym->decl->u.type.name;
     StrList *tps = &sym->decl->u.type.tparams;
     if (tps->len != args->len)
         fatal("'%s' expects %lu type argument(s), got %lu", tname,
@@ -2082,6 +2085,9 @@ static void check_block(Sema *se, Block *b)
 
 static void register_decl(Sema *se, Decl *d)
 {
+    if (d->registered)
+        return; /* pass-1 iterates a list instantiations append to */
+    d->registered = 1;
     /* instantiations register while a body check holds a local scope;
      * all decls must land in the global scope */
     Scope *saved = se->scope;

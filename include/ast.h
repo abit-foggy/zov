@@ -227,6 +227,7 @@ typedef struct Decl {
     int exported;
     const char *modname; /* originating module: enables fn mangling */
     const char *regname; /* name registered in sema (may be mangled) */
+    int registered;      /* idempotence: instantiations append mid-loop */
     union {
         struct { int is_c_header; const char *path; const char *alias;
                  StrList zsyms;    /* exported plain symbol names */
