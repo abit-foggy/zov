@@ -987,12 +987,14 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
         advance(p);
         while (at(p, TK_COLONCOLON)) {
             advance(p);
-            if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected module segment after '::'");
+            /* keyword segments (std::str) carry no .name: use raw text */
+            char segbuf[64];
+            snprintf(segbuf, sizeof(segbuf), "%.*s",
+                     (int)(tok(p)->end - tok(p)->start), tok(p)->start);
+            seg = str_intern_c(segbuf);
             const char *sep = "::";
             while (*sep)
                 da_push(&path, *sep++);
-            seg = tok(p)->name;
             last = seg;
             while (*seg)
                 da_push(&path, *seg++);

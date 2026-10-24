@@ -42,6 +42,8 @@ typedef struct Sym {
     CHeader *hdr;     /* imported C namespace members */
     int is_zov;       /* namespace of a loaded .zov module */
     StrList zsyms;    /* exported symbol names of the module */
+    StrList ztargets; /* registered spellings for ns call rewrites */
+    const char *alias_to; /* module-scope alias: the registered name */
     int is_template;  /* generic decl, checked only via instantiation */
     Decl *decl;       /* owning decl for templates */
 } Sym;
@@ -189,15 +191,16 @@ static Type *resolve_type(Sema *se, Type *t);
 static Type *instantiate_struct(Sema *se, const char *tname,
                                  TypeList *args);
 
-static int zov_ns_member(Sema *se, const char *ns, const char *name)
+/* module fn access resolves to the mangled registered spelling */
+static const char *zov_ns_target(Sema *se, const char *ns, const char *name)
 {
     Sym *s = scope_find(se->scope, ns);
     if (!s || s->kind != SYM_NS || !s->is_zov)
-        return 0;
+        return NULL;
     for (size_t i = 0; i < s->zsyms.len; i++)
         if (s->zsyms.items[i] == name)
-            return 1;
-    return 0;
+            return s->ztargets.items[i];
+    return NULL;
 }
 
 static Type *resolve_ns_type(Sema *se, const char *qual)
@@ -380,11 +383,14 @@ static char *mangle_spelling(const char *s)
 
 static Decl *find_decl_by_name(Sema *se, const char *name)
 {
-    for (size_t i = 0; i < se->prog->decls.len; i++)
-        if (se->prog->decls.items[i]->kind == DL_TYPE
-                ? se->prog->decls.items[i]->u.type.name == name
-                : se->prog->decls.items[i]->u.fn.name == name)
-            return se->prog->decls.items[i];
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->regname && d->regname == name)
+            return d;
+        if (d->kind == DL_TYPE ? d->u.type.name == name
+                               : d->u.fn.name == name)
+            return d;
+    }
     return NULL;
 }
 
@@ -642,6 +648,16 @@ static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
                     subst_type(se, e->u.generic.targs.items[i], tps, args));
         break;
     case EX_DEREF: n->u.deref = clone_expr(se, e->u.deref, tps, args); break;
+    case EX_SLICE:
+        n->u.slice.base = clone_expr(se, e->u.slice.base, tps, args);
+        n->u.slice.start = clone_expr(se, e->u.slice.start, tps, args);
+        n->u.slice.end = clone_expr(se, e->u.slice.end, tps, args);
+        break;
+    case EX_ARR_LIT:
+        for (size_t i = 0; i < e->u.elems.len; i++)
+            da_push(&n->u.elems,
+                    clone_expr(se, e->u.elems.items[i], tps, args));
+        break;
     case EX_FIELD:
         n->u.field.base = clone_expr(se, e->u.field.base, tps, args);
         n->u.field.name = e->u.field.name;
@@ -1070,22 +1086,27 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
-        if (callee->kind == EX_NS_IDENT
-            && zov_ns_member(se, callee->u.nident.ns,
-                             callee->u.nident.name)) {
-            /* module fn: rewrite to the merged global symbol */
-            Expr *id = expr_new(EX_IDENT, callee->span);
-            id->u.ident = callee->u.nident.name;
-            e->u.call.callee = id;
-            callee = id;
+        if (callee->kind == EX_NS_IDENT) {
+            const char *tgt = zov_ns_target(se, callee->u.nident.ns,
+                                            callee->u.nident.name);
+            if (tgt) {
+                /* module fn: rewrite to the mangled registered symbol */
+                Expr *id = expr_new(EX_IDENT, callee->span);
+                id->u.ident = tgt;
+                e->u.call.callee = id;
+                callee = id;
+            }
         }
         if (callee->kind == EX_GENERIC
-            && callee->u.generic.base->kind == EX_NS_IDENT
-            && zov_ns_member(se, callee->u.generic.base->u.nident.ns,
-                             callee->u.generic.base->u.nident.name)) {
-            Expr *id = expr_new(EX_IDENT, callee->u.generic.base->span);
-            id->u.ident = callee->u.generic.base->u.nident.name;
-            callee->u.generic.base = id;
+            && callee->u.generic.base->kind == EX_NS_IDENT) {
+            const char *tgt = zov_ns_target(
+                se, callee->u.generic.base->u.nident.ns,
+                callee->u.generic.base->u.nident.name);
+            if (tgt) {
+                Expr *id = expr_new(EX_IDENT, callee->u.generic.base->span);
+                id->u.ident = tgt;
+                callee->u.generic.base = id;
+            }
         }
         if (callee->kind == EX_FIELD) {
             /* expr.method(...): receiver resolution with auto-borrowing */
@@ -1209,6 +1230,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (fn->kind != SYM_FN)
                 fatal_at(callee->span, "'%s' is not callable",
                          callee->u.ident);
+            if (fn->alias_to) {
+                /* module alias: rewrite to the registered spelling */
+                callee->u.ident = fn->alias_to;
+                fn = scope_find(se->scope, fn->alias_to);
+                if (!fn)
+                    fatal_at(callee->span, "unresolved module symbol '%s'",
+                             callee->u.ident);
+            }
             if (fn->is_template)
                 fatal_at(callee->span,
                          "generic function '%s' requires explicit type "
@@ -1408,6 +1437,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             Type *it = check_expr(se, fi->val, ft);
             if (fi->val->kind == EX_NULL && ft->kind == TY_PTR && ft->nullable)
                 continue; /* null widens to any nullable pointer */
+            if (ptr_widens(it, ft))
+                continue; /* *T widens to nullable *T */
             if (!is_unknown(it) && !type_eq(it, ft))
                 fatal_at(fi->span, "field '%s' expects %s, got %s", fi->name,
                          type_spelling(ft), type_spelling(it));
@@ -1808,8 +1839,8 @@ static void check_stmt(Sema *se, Stmt *s)
         break;
     }
     case ST_FOR_RANGE: {
-        Type *st = check_expr(se, s->u.forr.start, NULL);
-        Type *et = check_expr(se, s->u.forr.end, st);
+        Type *et = check_expr(se, s->u.forr.end, NULL);
+        Type *st = check_expr(se, s->u.forr.start, et);
         if (!is_unknown(st) && !ty_is_int(st->kind))
             fatal_at(s->u.forr.start->span,
                      "range start must be an integer, got %s",
@@ -1954,6 +1985,7 @@ static void register_decl(Sema *se, Decl *d)
             sym.span = d->span;
             sym.is_zov = 1;
             sym.zsyms = d->u.use.zsyms;
+            sym.ztargets = d->u.use.ztargets;
             scope_add(se, sym);
             break;
         }
@@ -2032,10 +2064,16 @@ static void register_decl(Sema *se, Decl *d)
     case DL_FN: {
         Sym sym;
         memset(&sym, 0, sizeof(sym));
-        sym.name = d->u.fn.name;
+        /* module fns register mangled; methods keep their plain names */
+        if (d->modname && d->regname && !d->u.fn.recv)
+            sym.name = d->regname;
+        else
+            sym.name = d->u.fn.name;
         sym.kind = SYM_FN;
         sym.span = d->span;
         sym.decl = d;
+        if (!d->regname)
+            d->regname = sym.name;
         int is_method = d->u.fn.recv != NULL;
         if (is_method && !d->u.fn.sname)
             fatal_at(d->span, "method registration requires a struct name");
@@ -2146,6 +2184,33 @@ static void check_test(Sema *se, Decl *d)
     pop_scope(se);
 }
 
+/* plain-name call sites inside a module resolve to its mangled fns */
+static void push_module_scope(Sema *se, const char *modname)
+{
+    if (!modname) {
+        push_scope(se);
+        return;
+    }
+    Scope *saved = se->scope;
+    while (se->scope->parent)
+        se->scope = se->scope->parent;
+    push_scope(se);
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind != DL_FN || !d->modname || d->modname != modname
+            || d->u.fn.recv)
+            continue;
+        Sym *real = scope_find(se->scope, d->regname);
+        if (!real)
+            continue;
+        Sym alias = *real;
+        alias.name = d->u.fn.name;
+        alias.alias_to = d->regname;
+        scope_add(se, alias);
+    }
+    se->scope->parent = saved;
+}
+
 void sema_check(Program *prog, int test_mode)
 {
     Sema *se = zalloc(sizeof(Sema));
@@ -2177,11 +2242,23 @@ void sema_check(Program *prog, int test_mode)
             }
         }
     }
+    const char *curmod = (const char *)1;
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
-            check_fn(se, d);
-        if (d->kind == DL_TEST)
-            check_test(se, d);
+        if ((d->kind == DL_FN && d->u.fn.tparams.len == 0)
+            || d->kind == DL_TEST) {
+            if (d->modname != curmod) {
+                if (curmod != (const char *)1)
+                    pop_scope(se);
+                curmod = d->modname;
+                push_module_scope(se, curmod);
+            }
+            if (d->kind == DL_FN)
+                check_fn(se, d);
+            else
+                check_test(se, d);
+        }
     }
+    if (curmod != (const char *)1)
+        pop_scope(se);
 }

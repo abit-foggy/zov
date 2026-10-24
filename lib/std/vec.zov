@@ -69,6 +69,15 @@ export fn (self: &Vec[T]) len() usize = {
     return self.length;
 };
 
+export fn (self: &Vec[T]) as_slice() []T = {
+    if (self.length == 0usize) {
+        let empty: *T = mem::alloc[T](0usize);
+        return empty[0..0];
+    };
+    let d: *T = self.data!;
+    return d[0..self.length];
+};
+
 export fn (self: Vec[T]) free() void = {
     if (self.data == null) { return; };
     let d: *T = self.data!;

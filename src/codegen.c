@@ -1566,7 +1566,8 @@ static void emit_fn(CG *cg, Decl *d, int proto_only)
 {
     if (proto_only) {
         cg->cur = &cg->protos;
-        emit_var(&*cg->cur, cg, d->u.fn.ret, mangle_fn(d->u.fn.name));
+        emit_var(&*cg->cur, cg, d->u.fn.ret,
+                 mangle_fn(d->regname ? d->regname : d->u.fn.name));
         buf_puts(&*cg->cur, "(");
         emit_params(cg, d);
         buf_puts(&*cg->cur, ");\n");
@@ -1574,7 +1575,8 @@ static void emit_fn(CG *cg, Decl *d, int proto_only)
     }
 
     cg->cur = &cg->body;
-    emit_var(&*cg->cur, cg, d->u.fn.ret, mangle_fn(d->u.fn.name));
+    emit_var(&*cg->cur, cg, d->u.fn.ret,
+             mangle_fn(d->regname ? d->regname : d->u.fn.name));
     buf_puts(&*cg->cur, "(");
     emit_params(cg, d);
     buf_puts(&*cg->cur, ")\n{\n");

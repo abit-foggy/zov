@@ -222,9 +222,13 @@ typedef struct Decl {
     DeclKind kind;
     Span span;
     int exported;
+    const char *modname; /* originating module: enables fn mangling */
+    const char *regname; /* name registered in sema (may be mangled) */
     union {
         struct { int is_c_header; const char *path; const char *alias;
-                 StrList zsyms; } use;
+                 StrList zsyms;    /* exported plain symbol names */
+                 StrList ztargets; /* registered (mangled) fn targets */
+                 } use;
         struct { const char *name; DA(struct Field) fields;
                   Type *alias_ty; int is_resource; int is_enum;
                   DA(struct EnumVariant) variants;

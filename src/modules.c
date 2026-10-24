@@ -222,8 +222,29 @@ static char *resolve_via_pkg(Loader *ld, const char *path,
     return strdup(out);
 }
 
+/* module fns register as zovmod_<canon>__<name> to avoid cross-module
+ * collisions; ztargets records the registered spelling for ns rewrites */
+static const char *mangled_mod_fn(const char *canon, const char *name)
+{
+    char buf[512];
+    snprintf(buf, sizeof(buf), "zovmod_%s__%s", canon, name);
+    return str_intern_c(buf);
+}
+
+static const char *canonical_modname(const char *path)
+{
+    const char *sep = strstr(path, "::");
+    const char *last = sep ? sep + 2 : path;
+    const char *sep2 = strstr(last, "::");
+    while (sep2) {
+        last = sep2 + 2;
+        sep2 = strstr(last, "::");
+    }
+    return str_intern_c(last);
+}
+
 static void load_module(Loader *ld, const char *path, const char *srcdir,
-                        StrList *syms_out)
+                        StrList *syms_out, StrList *targets_out)
 {
     char *file = resolve_via_pkg(ld, path, srcdir);
     if (!file)
@@ -251,8 +272,10 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
     for (size_t i = 0; i < sub.decls.len; i++) {
         Decl *d = sub.decls.items[i];
         if (d->kind == DL_USE && !d->u.use.is_c_header)
-            load_module(ld, d->u.use.path, subdir, &d->u.use.zsyms);
+            load_module(ld, d->u.use.path, subdir, &d->u.use.zsyms,
+                    &d->u.use.ztargets);
     }
+    const char *canon = canonical_modname(path);
     for (size_t i = 0; i < sub.decls.len; i++) {
         Decl *d = sub.decls.items[i];
         if (d->kind == DL_USE && !d->u.use.is_c_header
@@ -261,18 +284,26 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
         if (d->kind != DL_USE && !d->exported)
             continue;
         /* staged ahead of importers: registration order is topological */
+        d->modname = canon;
         da_push(&ld->staged, d);
         const char *nm = NULL;
-        if (d->kind == DL_FN && !d->u.fn.recv)
+        if (d->kind == DL_FN && !d->u.fn.recv) {
             nm = d->u.fn.name;
-        if (d->kind == DL_TYPE)
+            d->regname = mangled_mod_fn(canon, nm);
+        }
+        if (d->kind == DL_TYPE) {
             nm = d->u.type.name;
+            d->regname = nm;
+        }
         if (nm) {
+            int dup = 0;
             for (size_t k = 0; k < syms_out->len; k++)
                 if (syms_out->items[k] == nm)
-                    nm = NULL;
-            if (nm)
+                    dup = 1;
+            if (!dup) {
                 da_push(syms_out, nm);
+                da_push(targets_out, d->regname ? d->regname : nm);
+            }
         }
     }
     da_push(&ld->visited, ld->loading.items[ld->loading.len - 1]);
@@ -292,7 +323,8 @@ void modules_load(Program *prog, const char *main_file, struct Pkg *pkg)
         Decl *d = prog->decls.items[i];
         if (d->kind != DL_USE || d->u.use.is_c_header)
             continue;
-        load_module(ld, d->u.use.path, srcdir, &d->u.use.zsyms);
+        load_module(ld, d->u.use.path, srcdir, &d->u.use.zsyms,
+                    &d->u.use.ztargets);
     }
     /* diamond re-imports: re-expose symbols of already-merged modules */
     for (size_t i = 0; i < n; i++) {
@@ -308,6 +340,7 @@ void modules_load(Program *prog, const char *main_file, struct Pkg *pkg)
             die("cannot open module '%s'", d->u.use.path);
         Program sub = {0};
         parse_program(src, file, &sub);
+        const char *canon = canonical_modname(d->u.use.path);
         for (size_t j = 0; j < sub.decls.len; j++) {
             Decl *sd = sub.decls.items[j];
             if (sd->kind == DL_USE || !sd->exported)
@@ -317,8 +350,14 @@ void modules_load(Program *prog, const char *main_file, struct Pkg *pkg)
                 nm = sd->u.fn.name;
             if (sd->kind == DL_TYPE)
                 nm = sd->u.type.name;
-            if (nm)
+            if (nm) {
                 da_push(&d->u.use.zsyms, nm);
+                if (sd->kind == DL_FN)
+                    da_push(&d->u.use.ztargets,
+                            mangled_mod_fn(canon, nm));
+                else
+                    da_push(&d->u.use.ztargets, nm);
+            }
         }
         free(src);
         free(file);
