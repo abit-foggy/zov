@@ -1,0 +1,33 @@
+// built-in print/println: + chains, multi-args, {expr} interpolation,
+// and standalone str + T scratch-buffer values -- no stdio import needed
+export type Handle = resource struct { fd: i32 };
+
+export fn compute_fn(x: i32) i32 = {
+    return x * 2;
+};
+
+export fn consume(h: Handle) i32 = {
+    return h.fd;
+};
+
+export fn get_label() str = {
+    return "dyn";
+};
+
+export fn main() i32 = {
+    println("hello1 " + compute_fn(21) + " bool=" + true + " hex=" + 0xffu32);
+    print("part1 ");
+    println("part2", 99, false);
+    let msg: str = "count=" + 42;
+    println(msg);
+    let h = Handle{ fd = 7 };
+    println("fd=" + h.fd);
+    let v = consume(h);
+    let name: str = "zov";
+    println("v={v} pi={3.14} n={compute_fn(3)} name={name}");
+    println("dyn=" + get_label() + " big=" + 12345678901i64);
+    let ch: char = 'Z';
+    println("ch={ch} brace=\{literal}");
+    println();
+    return v - 7;
+};

@@ -1,0 +1,8 @@
+// MUST FAIL: concatenating a raw composite with str is not printable
+export type S = struct { x: i32 };
+
+export fn main() i32 = {
+    let s = S{ x = 1 };
+    println("value=" + s);
+    return 0;
+};
