@@ -25,6 +25,7 @@
  */
 
 #include "sema.h"
+#include "cimport.h"
 
 typedef enum SymKind { SYM_VAR, SYM_FN, SYM_NS, SYM_TYPE } SymKind;
 
@@ -32,10 +33,11 @@ typedef struct Sym {
     const char *name;
     SymKind kind;
     Span span;
-    Type *type;      /* variable type or struct type */
+    Type *type;      /* variable type, alias type, or struct type */
     int mut;
     DA(Param) params; /* function signature */
     Type *ret;
+    CHeader *hdr;     /* imported C namespace members */
 } Sym;
 
 typedef struct Scope {
@@ -99,6 +101,114 @@ static int is_ptrish(Type *t)
                  || t->kind == TY_MUTREF);
 }
 
+static int union_has_error(Type *u)
+{
+    for (size_t i = 0; i < u->members.len; i++)
+        if (u->members.items[i]->is_error)
+            return 1;
+    return 0;
+}
+
+static Type *union_payload(Type *u)
+{
+    Type *found = NULL;
+    for (size_t i = 0; i < u->members.len; i++)
+        if (!u->members.items[i]->is_error) {
+            if (found)
+                return NULL; /* ambiguous payload */
+            found = u->members.items[i];
+        }
+    return found;
+}
+
+/* Resolve parser placeholders: ns::Type from C imports, local named
+ * aliases/error types, and structural recursion into composites. */
+static Type *resolve_type(Sema *se, Type *t);
+
+static Type *resolve_ns_type(Sema *se, const char *qual)
+{
+    const char *sep = strstr(qual, "::");
+    if (!sep)
+        return NULL;
+    char nbuf[128];
+    if ((size_t)(sep - qual) >= sizeof(nbuf))
+        return NULL;
+    memcpy(nbuf, qual, (size_t)(sep - qual));
+    nbuf[sep - qual] = '\0';
+    Sym *ns = scope_find(se->scope, str_intern_c(nbuf));
+    if (!ns || ns->kind != SYM_NS || !ns->hdr)
+        return NULL;
+    CMember *m = cimport_find(ns->hdr, sep + 2);
+    if (!m || m->kind != CM_TYPE)
+        return NULL;
+    return m->ret;
+}
+
+static Type *resolve_type(Sema *se, Type *t)
+{
+    if (!t)
+        return t;
+    switch (t->kind) {
+    case TY_STRUCT: {
+        if (!strstr(t->name, "::"))
+            return t; /* local struct decls already carry their identity */
+        Type *r = resolve_ns_type(se, t->name);
+        if (!r)
+            fatal("unknown imported type '%s'", t->name);
+        return r;
+    }
+    case TY_PTR:
+        return type_ptr(resolve_type(se, t->base), t->nullable);
+    case TY_REF:
+    case TY_MUTREF:
+        return type_ref(resolve_type(se, t->base), t->kind == TY_MUTREF);
+    case TY_SLICE:
+        return type_slice(resolve_type(se, t->base));
+    case TY_ARRAY:
+        return type_array(resolve_type(se, t->base), t->count);
+    case TY_UNION: {
+        TypeList ms = {0};
+        for (size_t i = 0; i < t->members.len; i++)
+            da_push(&ms, resolve_type(se, t->members.items[i]));
+        Type *u = type_union(&ms);
+        u->is_error = t->is_error;
+        return u;
+    }
+    case TY_ERR:
+        return type_err(t->name, resolve_type(se, t->base));
+    default:
+        return t;
+    }
+}
+
+/* Member index of `t` inside union `u`; error variants key by name. */
+static int union_member_index(Type *u, Type *t)
+{
+    for (size_t i = 0; i < u->members.len; i++) {
+        Type *m = u->members.items[i];
+        if (m->kind == TY_ERR && t->kind == TY_ERR && m->name == t->name)
+            return (int)i;
+        if (type_eq(m, t))
+            return (int)i;
+    }
+    return -1;
+}
+
+/* Wrap e in EX_COERCE when target is a union and e holds a member type. */
+static Expr *maybe_coerce(Expr *e, Type *target)
+{
+    if (!target || target->kind != TY_UNION || !e->type)
+        return e;
+    if (e->type->kind == TY_UNION || e->type->kind == TY_UNKNOWN)
+        return e;
+    if (union_member_index(target, e->type) < 0)
+        return e;
+    Expr *c = expr_new(EX_COERCE, e->span);
+    c->u.coerce.e = e;
+    c->u.coerce.target = target;
+    return c;
+}
+
 static void require_bool(Expr *cond)
 {
     if (cond->type && cond->type->kind == TY_BOOL)
@@ -127,14 +237,104 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
                  (unsigned long)e->u.call.args.len);
     for (size_t i = 0; i < fn->params.len; i++) {
         Expr *arg = e->u.call.args.items[i];
-        check_expr(se, arg, fn->params.items[i].ty);
+        Type *pt = fn->params.items[i].ty;
+        check_expr(se, arg, pt);
+        if (pt->kind == TY_UNION) {
+            e->u.call.args.items[i] = maybe_coerce(arg, pt);
+            continue;
+        }
         if (is_unknown(arg->type))
             continue;
-        if (!type_eq(arg->type, fn->params.items[i].ty))
+        if (!type_eq(arg->type, pt))
             fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
-                     (unsigned long)(i + 1), fn->name,
-                     type_spelling(fn->params.items[i].ty),
+                     (unsigned long)(i + 1), fn->name, type_spelling(pt),
                      type_spelling(arg->type));
+    }
+    return fn->ret;
+}
+
+/* C call-site rule: pointer params take *T / &T / &mut T (or a str for
+ * *i8 / *u8); a nullable *T must be narrowed first. */
+static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
+                        size_t idx)
+{
+    check_expr(se, arg, pt);
+    Type *at = arg->type;
+    if (!at || is_unknown(at))
+        return;
+    if (pt->kind == TY_PTR && !pt->nullable) {
+        if (at->kind == TY_PTR && !at->nullable && type_eq(at->base, pt->base))
+            return;
+        if ((at->kind == TY_REF || at->kind == TY_MUTREF)
+            && type_eq(at->base, pt->base))
+            return;
+        if (at->kind == TY_STR
+            && (pt->base->kind == TY_I8 || pt->base->kind == TY_U8))
+            return;
+        if (at->kind == TY_PTR && at->nullable)
+            fatal_at(arg->span,
+                     "cannot pass nullable %s to '%s' parameter %lu: "
+                     "narrow it via match or unwrap",
+                     type_spelling(at), fname, (unsigned long)idx);
+        fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+                 (unsigned long)idx, fname, type_spelling(pt),
+                 type_spelling(at));
+    }
+    if (pt->kind == TY_PTR && pt->nullable) {
+        if (at->kind == TY_PTR && type_eq(at->base, pt->base))
+            return;
+        if ((at->kind == TY_REF || at->kind == TY_MUTREF)
+            && type_eq(at->base, pt->base))
+            return;
+        if (at->kind == TY_STR
+            && (pt->base->kind == TY_I8 || pt->base->kind == TY_U8))
+            return;
+        fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+                 (unsigned long)idx, fname, type_spelling(pt),
+                 type_spelling(at));
+    }
+    if (type_eq(at, pt))
+        return;
+    fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+             (unsigned long)idx, fname, type_spelling(pt), type_spelling(at));
+}
+
+static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
+{
+    Sym *ns = scope_find(se->scope, callee->u.nident.ns);
+    if (!ns)
+        fatal_at(callee->span, "unknown namespace '%s'", callee->u.nident.ns);
+    if (ns->kind != SYM_NS || !ns->hdr)
+        fatal_at(callee->span, "'%s' is not a C namespace",
+                 callee->u.nident.ns);
+    CMember *fn = cimport_find(ns->hdr, callee->u.nident.name);
+    if (!fn)
+        fatal_at(callee->span, "unknown C symbol '%s::%s'",
+                 callee->u.nident.ns, callee->u.nident.name);
+    if (fn->kind != CM_FN)
+        fatal_at(callee->span, "'%s::%s' is not a function",
+                 callee->u.nident.ns, callee->u.nident.name);
+    if (e->u.call.args.len < fn->params.len
+        || (!fn->variadic && e->u.call.args.len > fn->params.len))
+        fatal_at(e->span, "'%s' expects %lu argument(s)%s, got %lu",
+                 fn->name, (unsigned long)fn->params.len,
+                 fn->variadic ? " or more" : "",
+                 (unsigned long)e->u.call.args.len);
+    for (size_t i = 0; i < e->u.call.args.len; i++) {
+        Expr *arg = e->u.call.args.items[i];
+        if (i < fn->params.len) {
+            check_c_arg(se, arg, fn->params.items[i], fn->name, i + 1);
+        } else {
+            /* variadic tail: primitives, pointers, and str are admissible */
+            check_expr(se, arg, NULL);
+            Type *at = arg->type;
+            if (at && !is_unknown(at) && !ty_is_num(at->kind)
+                && at->kind != TY_STR && !is_ptrish(at)
+                && at->kind != TY_CHAR && at->kind != TY_BOOL
+                && at->kind != TY_UNION)
+                fatal_at(arg->span, "cannot pass %s through '...'",
+                         type_spelling(at));
+        }
     }
     return fn->ret;
 }
@@ -176,6 +376,13 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         return e->type;
     case EX_IDENT: {
         Sym *sym = scope_find(se->scope, e->u.ident);
+        if (sym && sym->kind == SYM_TYPE && sym->type
+            && sym->type->kind == TY_ERR
+            && sym->type->base->kind == TY_VOID) {
+            // bare error name constructs a zero-sized !void error value
+            e->type = sym->type;
+            return e->type;
+        }
         if (!sym)
             fatal_at(e->span, "undefined symbol '%s'", e->u.ident);
         if (sym->kind != SYM_VAR)
@@ -187,10 +394,19 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Sym *ns = scope_find(se->scope, e->u.nident.ns);
         if (!ns)
             fatal_at(e->span, "unknown namespace '%s'", e->u.nident.ns);
-        if (ns->kind != SYM_NS)
+        if (ns->kind != SYM_NS || !ns->hdr)
             fatal_at(e->span, "'%s' is not a namespace", e->u.nident.ns);
-        e->type = unknown();
-        return e->type;
+        CMember *m = cimport_find(ns->hdr, e->u.nident.name);
+        if (!m)
+            fatal_at(e->span, "unknown symbol '%s::%s'", e->u.nident.ns,
+                     e->u.nident.name);
+        if (m->kind == CM_CONST) {
+            e->type = m->ret;
+            return e->type;
+        }
+        fatal_at(e->span, "'%s::%s' is not a value", e->u.nident.ns,
+                 e->u.nident.name);
+        return NULL;
     }
     case EX_ASSIGN: {
         Expr *lhs = e->u.assign.lhs;
@@ -291,14 +507,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = check_call_user(se, e, fn);
             return e->type;
         }
-        if (callee->kind == EX_NS_IDENT) {
-            /* C namespace passthrough: signature comes from the header */
-            check_expr(se, callee, NULL);
-            for (size_t i = 0; i < e->u.call.args.len; i++)
-                check_expr(se, e->u.call.args.items[i], NULL);
-            e->type = unknown();
-            return e->type;
-        }
+        if (callee->kind == EX_NS_IDENT)
+            return check_call_ns(se, e, callee);
         fatal_at(callee->span, "expression is not callable");
         return NULL;
     }
@@ -332,12 +542,204 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     case EX_GENERIC:
         fatal_at(e->span, "generic instantiation is not supported in v0.1");
         return NULL;
-    case EX_MATCH:
-    case EX_TRY:
-    case EX_UNWRAP:
-    case EX_COERCE:
-        fatal_at(e->span, "match/?/! are not type-checked yet (v0.2 milestone 4)");
+    case EX_MATCH: {
+        Type *st = check_expr(se, e->u.match.scrutinee, NULL);
+        if (st->kind == TY_UNION) {
+            // exhaustiveness bitmask over deterministic member indices
+            size_t cover = 0;
+            int wild = 0;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                int idx = -1;
+                if (a->kind == PAT_WILDCARD)
+                    wild = 1;
+                else if (a->kind == PAT_NULL)
+                    fatal_at(a->span,
+                             "'null' pattern requires a nullable pointer");
+                else if (a->kind == PAT_TYPE_VAL) {
+                    Sym *sym = scope_find(se->scope, a->name);
+                    if (sym && sym->kind == SYM_TYPE && sym->type)
+                        idx = union_member_index(st, sym->type);
+                    else
+                        for (size_t k = 0; k < st->members.len; k++)
+                            if (st->members.items[k]->kind == TY_ERR
+                                && st->members.items[k]->name == a->name)
+                                idx = (int)k;
+                    if (idx < 0)
+                        fatal_at(a->span, "'%s' is not a variant of %s",
+                                 a->name, type_spelling(st));
+                } else {
+                    a->ty = resolve_type(se, a->ty);
+                    idx = union_member_index(st, a->ty);
+                    if (idx < 0)
+                        fatal_at(a->span, "%s has no variant %s",
+                                 type_spelling(st), type_spelling(a->ty));
+                    if (st->members.items[idx]->is_error)
+                        fatal_at(a->span,
+                                 "cannot bind error variant %s; match it "
+                                 "by name",
+                                 type_spelling(st->members.items[idx]));
+                }
+                if (idx >= 0) {
+                    if (cover & ((size_t)1 << idx))
+                        fatal_at(a->span, "duplicate match arm for %s",
+                                 type_spelling(st->members.items[idx]));
+                    cover |= (size_t)1 << idx;
+                }
+            }
+            if (!wild && cover != ((size_t)1 << st->members.len) - 1)
+                for (size_t k = 0; k < st->members.len; k++)
+                    if (!(cover & ((size_t)1 << k)))
+                        fatal_at(e->span,
+                                 "non-exhaustive match: missing variant %s",
+                                 type_spelling(st->members.items[k]));
+            e->type = type_prim(TY_VOID);
+            Type *mty = NULL;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                push_scope(se);
+                int idx = -1;
+                if (a->kind == PAT_TYPE_BIND) {
+                    idx = union_member_index(st, a->ty);
+                    Sym b;
+                    memset(&b, 0, sizeof(b));
+                    b.name = a->name;
+                    b.kind = SYM_VAR;
+                    b.span = a->span;
+                    b.type = st->members.items[idx];
+                    b.mut = 0;
+                    scope_add(se, b);
+                }
+                if (a->jump) {
+                    check_stmt(se, a->jump);
+                } else {
+                    Type *at = check_expr(se, a->val, mty ? mty : hint);
+                    if (!mty)
+                        mty = at;
+                    else if (!is_unknown(at) && !type_eq(mty, at))
+                        fatal_at(a->span, "match arm type %s differs from %s",
+                                 type_spelling(at), type_spelling(mty));
+                }
+                pop_scope(se);
+            }
+            e->type = mty ? mty : type_prim(TY_VOID);
+            return e->type;
+        }
+        if (st->kind == TY_PTR && st->nullable) {
+            int has_null = 0, has_val = 0, wild = 0;
+            Type *nonnull = type_ptr(st->base, 0);
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                if (a->kind == PAT_WILDCARD)
+                    wild = 1;
+                else if (a->kind == PAT_NULL)
+                    has_null = 1;
+                else if (a->kind == PAT_TYPE_BIND) {
+                    a->ty = resolve_type(se, a->ty);
+                    if (!type_eq(a->ty, nonnull))
+                        fatal_at(a->span, "bind pattern must be %s, got %s",
+                                 type_spelling(nonnull),
+                                 type_spelling(a->ty));
+                    has_val = 1;
+                } else {
+                    fatal_at(a->span, "pointer match has no named variants");
+                }
+            }
+            if (!wild && (!has_null || !has_val))
+                fatal_at(e->span,
+                         "non-exhaustive match on nullable: must cover "
+                         "'null' and '%s' (or use '_')",
+                         type_spelling(nonnull));
+            e->type = type_prim(TY_VOID);
+            Type *mty = NULL;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                push_scope(se);
+                if (a->kind == PAT_TYPE_BIND) {
+                    Sym b;
+                    memset(&b, 0, sizeof(b));
+                    b.name = a->name;
+                    b.kind = SYM_VAR;
+                    b.span = a->span;
+                    b.type = nonnull;
+                    b.mut = 0;
+                    scope_add(se, b);
+                }
+                if (a->jump) {
+                    check_stmt(se, a->jump);
+                } else {
+                    Type *at = check_expr(se, a->val, mty ? mty : hint);
+                    if (!mty)
+                        mty = at;
+                    else if (!is_unknown(at) && !type_eq(mty, at))
+                        fatal_at(a->span, "match arm type %s differs from %s",
+                                 type_spelling(at), type_spelling(mty));
+                }
+                pop_scope(se);
+            }
+            e->type = mty ? mty : type_prim(TY_VOID);
+            return e->type;
+        }
+        fatal_at(e->span, "match requires a tagged union or nullable "
+                          "pointer, got %s", type_spelling(st));
         return NULL;
+    }
+    case EX_TRY: {
+        Type *t = check_expr(se, e->u.tryy, NULL);
+        Type *rt = se->fn_ret;
+        if (t->kind == TY_UNION) {
+            if (union_has_error(t) && (!rt || rt->kind != TY_UNION))
+                fatal_at(e->span,
+                         "'?' cannot propagate: enclosing function returns %s",
+                         rt ? type_spelling(rt) : "void");
+            for (size_t i = 0; i < t->members.len; i++) {
+                Type *m = t->members.items[i];
+                if (m->is_error && rt && union_member_index(rt, m) < 0)
+                    fatal_at(e->span,
+                             "'?' error variant %s is not in the enclosing "
+                             "return type %s", type_spelling(m),
+                             type_spelling(rt));
+            }
+            Type *payload = union_payload(t);
+            if (!payload)
+                fatal_at(e->span,
+                         "'?' requires exactly one non-error variant");
+            e->type = payload;
+            return e->type;
+        }
+        if (t->kind == TY_PTR && t->nullable) {
+            if (!rt || rt->kind != TY_PTR || !rt->nullable
+                || !type_eq(rt->base, t->base))
+                fatal_at(e->span,
+                         "'?' on a nullable requires the enclosing function "
+                         "to return %s", type_spelling(type_ptr(t->base, 1)));
+            e->type = type_ptr(t->base, 0);
+            return e->type;
+        }
+        fatal_at(e->span, "'?' requires a tagged union or nullable pointer");
+        return NULL;
+    }
+    case EX_UNWRAP: {
+        Type *t = check_expr(se, e->u.unwrap, NULL);
+        if (t->kind == TY_UNION) {
+            Type *payload = union_payload(t);
+            if (!payload)
+                fatal_at(e->span,
+                         "'!' requires exactly one non-error variant");
+            e->type = payload;
+            return e->type;
+        }
+        if (t->kind == TY_PTR && t->nullable) {
+            e->type = type_ptr(t->base, 0);
+            return e->type;
+        }
+        fatal_at(e->span, "'!' requires a tagged union or nullable pointer");
+        return NULL;
+    }
+    case EX_COERCE:
+        check_expr(se, e->u.coerce.e, NULL);
+        e->type = e->u.coerce.target;
+        return e->type;
     }
     fatal_at(e->span, "invalid expression");
     return NULL;
@@ -345,9 +747,15 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
 
 static void check_let(Sema *se, Stmt *s)
 {
+    if (s->u.let.ty)
+        s->u.let.ty = resolve_type(se, s->u.let.ty);
     if (s->u.let.init == NULL)
         fatal_at(s->span, "let requires an initializer in v0.1");
     Type *it = check_expr(se, s->u.let.init, s->u.let.ty);
+    if (s->u.let.ty && s->u.let.ty->kind == TY_UNION) {
+        s->u.let.init = maybe_coerce(s->u.let.init, s->u.let.ty);
+        it = s->u.let.init->type;
+    }
     Type *declared = s->u.let.ty;
     if (!declared) {
         if (is_unknown(it))
@@ -413,6 +821,9 @@ static void check_stmt(Sema *se, Stmt *s)
             Type *t = check_expr(se, s->u.ret, ret);
             if (ret->kind == TY_VOID)
                 fatal_at(s->span, "void function cannot return a value");
+            if (ret->kind == TY_UNION)
+                s->u.ret = maybe_coerce(s->u.ret, ret);
+            t = s->u.ret->type;
             if (!is_unknown(t) && !type_eq(ret, t))
                 fatal_at(s->span, "returning %s from a %s function",
                          type_spelling(t), type_spelling(ret));
@@ -427,9 +838,16 @@ static void check_stmt(Sema *se, Stmt *s)
             fatal_at(s->span, "%s outside of a loop",
                      s->kind == ST_BREAK ? "break" : "continue");
         break;
-    case ST_EXPR:
-        check_expr(se, s->u.expr, NULL);
+    case ST_EXPR: {
+        Type *t = check_expr(se, s->u.expr, NULL);
+        // #[must_use]: dropping an error-carrying union is a hard error
+        if (t && (t->kind == TY_ERR
+                  || (t->kind == TY_UNION && union_has_error(t))))
+            fatal_at(s->span,
+                     "error-typed value must be handled: use '?', 'match', "
+                     "or 'let _ = ...'");
         break;
+    }
     case ST_BLOCK:
         push_scope(se);
         check_block(se, s->u.block);
@@ -449,12 +867,18 @@ static void register_decl(Sema *se, Decl *d)
     switch (d->kind) {
     case DL_USE: {
         if (!d->u.use.is_c_header)
-            return; /* std module paths carry no symbols in v0.1 */
+            return; /* std module paths carry no symbols in v0.2 */
+        CHeader *h = cimport_header(d->u.use.path, 1);
+        if (!h)
+            h = cimport_header(d->u.use.path, 0);
+        if (!h)
+            fatal_at(d->span, "cannot import C header '%s'", d->u.use.path);
         Sym sym;
         memset(&sym, 0, sizeof(sym));
         sym.name = d->u.use.alias;
         sym.kind = SYM_NS;
         sym.span = d->span;
+        sym.hdr = h;
         scope_add(se, sym);
         break;
     }
@@ -464,11 +888,26 @@ static void register_decl(Sema *se, Decl *d)
         sym.name = d->u.type.name;
         sym.kind = SYM_TYPE;
         sym.span = d->span;
-        sym.type = type_struct(d->u.type.name);
+        if (d->u.type.alias_ty) {
+            Type *r = resolve_type(se, d->u.type.alias_ty);
+            if (r->kind == TY_ERR) {
+                /* type Name = !T: clone with the name for variant identity */
+                sym.type = type_err(d->u.type.name, r->base);
+                sym.type->is_error = 1;
+            } else {
+                sym.type = r;
+            }
+        } else {
+            sym.type = type_struct(d->u.type.name);
+        }
         scope_add(se, sym);
         break;
     }
     case DL_FN: {
+        for (size_t i = 0; i < d->u.fn.params.len; i++)
+            d->u.fn.params.items[i].ty =
+                resolve_type(se, d->u.fn.params.items[i].ty);
+        d->u.fn.ret = resolve_type(se, d->u.fn.ret);
         Sym sym;
         memset(&sym, 0, sizeof(sym));
         sym.name = d->u.fn.name;
