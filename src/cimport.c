@@ -479,12 +479,10 @@ static void parse_define(CHeader *h, char *line)
     while (*p && *p != ' ' && *p != '\t' && *p != '(')
         p++;
     /* C99: a macro is function-like only when '(' abuts the name */
-    if (*p == '(')
+    if (*p == '(' || p == name)
         return;
-    if (p == name)
-        return;
-    char *body = p;
-    (void)0;
+    *p = '\0'; /* terminate the macro name in place */
+    char *body = p + 1;
     /* integer-only: strip parens/whitespace then strtoll */
     char cleaned[128];
     size_t n = 0;
