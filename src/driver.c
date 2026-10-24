@@ -37,12 +37,23 @@
 
 #define ZOV_TCC_DIR "vendor/tinycc"
 
-static int compile_via_cc(const char *c_src, const char *out_path)
+static int compile_via_cc_ex(const char *c_src, const char *out_path,
+                             char **links, size_t nlinks, char **include_dirs,
+                             size_t ninclude)
 {
-    char cmd[1024];
-    if (snprintf(cmd, sizeof(cmd), "cc -x c -std=c99 -O2 -o '%s' -", out_path)
-        >= (int)sizeof(cmd)) {
-        fatal("output path too long");
+    char cmd[2048];
+    size_t off = (size_t)snprintf(cmd, sizeof(cmd),
+                                  "cc -x c -std=c99 -O2");
+    for (size_t i = 0; i < ninclude && off < sizeof(cmd) - 256; i++)
+        off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                                " -I'%s'", include_dirs[i]);
+    for (size_t i = 0; i < nlinks && off < sizeof(cmd) - 256; i++)
+        off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                                " -l%s", links[i]);
+    off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                            " -o '%s' -", out_path);
+    if (off >= sizeof(cmd)) {
+        fatal("link command too long");
         return 1;
     }
     FILE *cc = popen(cmd, "w");
@@ -63,7 +74,9 @@ static int compile_via_cc(const char *c_src, const char *out_path)
 
 /* libtcc must come from the vendored tree; the runtime resolves its own
  * headers and libtcc1.a relative to the lib path. */
-static int compile_via_tcc(const char *c_src, const char *out_path)
+static int compile_via_tcc_ex(const char *c_src, const char *out_path,
+                              char **links, size_t nlinks,
+                              char **include_dirs, size_t ninclude)
 {
     TCCState *tcc = tcc_new();
     if (!tcc)
@@ -77,7 +90,11 @@ static int compile_via_tcc(const char *c_src, const char *out_path)
     }
     tcc_add_sysinclude_path(tcc, ZOV_TCC_DIR "/include");
     tcc_add_sysinclude_path(tcc, "/usr/include");
+    for (size_t i = 0; i < ninclude; i++)
+        tcc_add_sysinclude_path(tcc, include_dirs[i]);
     tcc_add_library(tcc, "c");
+    for (size_t i = 0; i < nlinks; i++)
+        tcc_add_library(tcc, links[i]);
     if (tcc_compile_string(tcc, c_src) < 0) {
         tcc_delete(tcc);
         return 1;
@@ -92,8 +109,9 @@ static int compile_via_tcc(const char *c_src, const char *out_path)
 
 #endif /* USE_LIBTCC */
 
-int driver_compile(const char *c_src, const char *out_path,
-                   int emit_c_only, int force_cc)
+int driver_compile_ex(const char *c_src, const char *out_path,
+                      int emit_c_only, int force_cc, char **links,
+                      size_t nlinks, char **include_dirs, size_t ninclude)
 {
     if (emit_c_only) {
         fputs(c_src, stdout);
@@ -101,12 +119,22 @@ int driver_compile(const char *c_src, const char *out_path,
     }
 #ifdef USE_LIBTCC
     if (!force_cc) {
-        if (compile_via_tcc(c_src, out_path) == 0)
+        if (compile_via_tcc_ex(c_src, out_path, links, nlinks, include_dirs,
+                               ninclude)
+            == 0)
             return 0;
         /* libtcc failure falls through to the portable cc pipe */
     }
 #else
     (void)force_cc;
 #endif
-    return compile_via_cc(c_src, out_path);
+    return compile_via_cc_ex(c_src, out_path, links, nlinks, include_dirs,
+                             ninclude);
+}
+
+int driver_compile(const char *c_src, const char *out_path,
+                   int emit_c_only, int force_cc)
+{
+    return driver_compile_ex(c_src, out_path, emit_c_only, force_cc, NULL,
+                             0, NULL, 0);
 }

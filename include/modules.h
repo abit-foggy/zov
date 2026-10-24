@@ -31,6 +31,7 @@
 
 /* Resolves use std::<mod> / use <local>::<mod> imports, parses them
  * recursively, and merges their exported decls into prog. */
-void modules_load(Program *prog, const char *main_file, void *pkg);
+struct Pkg;
+void modules_load(Program *prog, const char *main_file, struct Pkg *pkg);
 
 #endif /* ZOV_MODULES_H */

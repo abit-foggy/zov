@@ -46,6 +46,9 @@ typedef struct CHeader {
 /* Preprocesses via `cc -E -P -dD` and extracts declarations; angle
  * selects <h> vs "h" include form. Returns NULL on preprocessor failure. */
 CHeader *cimport_header(const char *path, int angle);
+
+/* extra -I dirs for header extraction (from [c-libraries]) */
+void cimport_add_include_dir(const char *dir);
 CMember *cimport_find(CHeader *h, const char *name);
 
 #endif /* ZOV_CIMPORT_H */

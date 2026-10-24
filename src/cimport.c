@@ -71,14 +71,31 @@ static char *tok_text(CTok *tok)
 
 /* ---- preprocessor invocation ---- */
 
+static DA(char) g_incdirs_cmd; /* pre-joined " -I'a' -I'b'" fragment */
+
+void cimport_add_include_dir(const char *dir)
+{
+    char frag[512];
+    int w = snprintf(frag, sizeof(frag), " -I'%s'", dir);
+    if (w <= 0)
+        return;
+    for (int i = 0; i < w; i++)
+        da_push(&g_incdirs_cmd, frag[i]);
+    da_push(&g_incdirs_cmd, '\0');
+    g_incdirs_cmd.len--; /* keep a single NUL terminated fragment */
+}
+
 static char *preprocess(const char *path, int angle)
 {
-    char cmd[512];
+    const char *incs = g_incdirs_cmd.items ? g_incdirs_cmd.items : "";
+    char cmd[1024];
     if (angle)
         snprintf(cmd, sizeof(cmd),
-                 "printf '#include <%s>\\n' | cc -E -P -dD -x c -", path);
+                 "printf '#include <%s>\\n' | cc -E -P -dD -x c - %s",
+                 path, incs);
     else
-        snprintf(cmd, sizeof(cmd), "cc -E -P -dD -x c '%s'", path);
+        snprintf(cmd, sizeof(cmd), "cc -E -P -dD -x c %s '%s'", incs,
+                 path);
     if ((int)strlen(cmd) >= (int)sizeof(cmd))
         return NULL;
     FILE *out = popen(cmd, "r");

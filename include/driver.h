@@ -27,8 +27,15 @@
 #ifndef ZOV_DRIVER_H
 #define ZOV_DRIVER_H
 
+#include <stddef.h>
+
 /* 0 on success, nonzero on compilation failure. */
 int driver_compile(const char *c_src, const char *out_path,
                    int emit_c_only, int force_cc);
+
+/* Extended form carrying [c-libraries] links and include dirs. */
+int driver_compile_ex(const char *c_src, const char *out_path,
+                      int emit_c_only, int force_cc, char **links,
+                      size_t nlinks, char **include_dirs, size_t ninclude);
 
 #endif /* ZOV_DRIVER_H */

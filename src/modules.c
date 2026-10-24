@@ -28,6 +28,7 @@
 
 #include "modules.h"
 #include "parser.h"
+#include "pkg.h"
 
 #include <unistd.h>
 
@@ -35,6 +36,7 @@ typedef DA(char *) PathList;
 
 typedef struct Loader {
     Program *prog;
+    struct Pkg *pkg; /* [dependencies] mapping: use <dep>; -> dep src */
     DA(struct Decl *) staged; /* imported decls; prepended before sema */
     PathList visited; /* canonical paths already merged (diamond dedup) */
     PathList loading; /* in-flight imports: cycle detection */
@@ -183,10 +185,49 @@ static int list_has(PathList *l, const char *s)
 }
 
 /* depth-first merge: deps first, then the module's exported decls */
+/* dependency mapping: use <dep>; -> <dep>/src/lib.zov and
+ * use <dep>::sub; -> <dep>/src/sub.zov */
+static char *resolve_via_pkg(Loader *ld, const char *path,
+                             const char *srcdir)
+{
+    if (!ld->pkg)
+        return NULL;
+    char first[128];
+    size_t n = 0;
+    const char *sep = strstr(path, "::");
+    const char *rest = NULL;
+    if (sep) {
+        rest = sep + 2;
+        n = (size_t)(sep - path);
+    } else {
+        n = strlen(path);
+    }
+    if (n == 0 || n >= sizeof(first))
+        return NULL;
+    memcpy(first, path, n);
+    first[n] = '\0';
+    PkgDep *dep = pkg_find_dep(ld->pkg, first);
+    if (!dep || !dep->path[0])
+        return NULL;
+    char dep_dir[1024];
+    snprintf(dep_dir, sizeof(dep_dir), "%s/%s", ld->pkg->dir, dep->path);
+    char out[1536];
+    if (rest)
+        snprintf(out, sizeof(out), "%s/src/%s.zov", dep_dir, rest);
+    else
+        snprintf(out, sizeof(out), "%s/src/lib.zov", dep_dir);
+    if (access(out, F_OK) != 0)
+        snprintf(out, sizeof(out), "%s/%s.zov", dep_dir, first);
+    (void)srcdir;
+    return strdup(out);
+}
+
 static void load_module(Loader *ld, const char *path, const char *srcdir,
                         StrList *syms_out)
 {
-    char *file = resolve_module(path, srcdir);
+    char *file = resolve_via_pkg(ld, path, srcdir);
+    if (!file)
+        file = resolve_module(path, srcdir);
     if (list_has(&ld->loading, file))
         die("circular module import: '%s' is already being loaded", path);
     if (list_has(&ld->visited, file)) {
@@ -240,11 +281,11 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
     free(subdir);
 }
 
-void modules_load(Program *prog, const char *main_file, void *pkg_unused)
+void modules_load(Program *prog, const char *main_file, struct Pkg *pkg)
 {
-    (void)pkg_unused; /* package mapping arrives with the pkg milestone */
     Loader *ld = zalloc(sizeof(Loader));
     ld->prog = prog;
+    ld->pkg = pkg;
     char *srcdir = dirname_of(main_file);
     size_t n = prog->decls.len;
     for (size_t i = 0; i < n; i++) {
@@ -259,7 +300,9 @@ void modules_load(Program *prog, const char *main_file, void *pkg_unused)
         if (d->kind != DL_USE || d->u.use.is_c_header
             || d->u.use.zsyms.len > 0)
             continue;
-        char *file = resolve_module(d->u.use.path, srcdir);
+        char *file = resolve_via_pkg(ld, d->u.use.path, srcdir);
+        if (!file)
+            file = resolve_module(d->u.use.path, srcdir);
         char *src = read_file(file);
         if (!src)
             die("cannot open module '%s'", d->u.use.path);
