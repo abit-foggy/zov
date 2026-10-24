@@ -146,6 +146,10 @@ static uint32_t lex_escape(Lexer *lx)
     case '\\': lx->pos++; return '\\';
     case '"': lx->pos++; return '"';
     case '\'': lx->pos++; return '\'';
+    case '{':
+        // '\{' is a literal brace: private marker, rewritten on emission
+        lx->pos++;
+        return '\x01';
     case 'x': {
         lx->pos++;
         uint32_t v = 0;

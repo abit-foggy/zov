@@ -208,6 +208,67 @@ static Type *parse_type(Parser *p)
 /* ---- expressions ---- */
 
 static Expr *parse_expr(Parser *p);
+
+// "a{x}b" desugars to "a" + (x) + "b"; '\{' stays literal via marker 0x01
+static Expr *build_string_expr(Parser *p, const char *val, size_t len)
+{
+    Expr *chain = NULL;
+    size_t i = 0;
+    while (i < len) {
+        size_t start = i;
+        while (i < len && val[i] != '{')
+            i++;
+        if (i > start) {
+            Expr *seg = expr_new(EX_STR, p->lx.tok.span);
+            seg->u.slit.v = val + start;
+            seg->u.slit.len = i - start;
+            if (chain) {
+                Expr *add = expr_new(EX_BINARY, chain->span);
+                add->u.binary.op = TK_PLUS;
+                add->u.binary.lhs = chain;
+                add->u.binary.rhs = seg;
+                chain = add;
+            } else {
+                chain = seg;
+            }
+        }
+        if (i >= len)
+            break;
+        /* interpolation hole: reparse the inner source as an expression */
+        size_t inner_start = ++i;
+        while (i < len && val[i] != '}')
+            i++;
+        if (i >= len)
+            fatal_at(p->lx.tok.span, "unterminated '{' interpolation");
+        char *src = zalloc(i - inner_start + 1);
+        memcpy(src, val + inner_start, i - inner_start);
+        src[i - inner_start] = '\0';
+        Parser *sub = zalloc(sizeof(Parser));
+        lex_init(&sub->lx, src, p->lx.tok.span.file);
+        lex_next(&sub->lx);
+        Expr *hole = parse_expr(sub);
+        if (sub->lx.tok.kind != TK_EOF)
+            fatal_at(sub->lx.tok.span, "unexpected token in interpolation");
+        if (!chain) {
+            chain = hole;
+            i++;
+            continue;
+        }
+        Expr *add = expr_new(EX_BINARY, chain->span);
+        add->u.binary.op = TK_PLUS;
+        add->u.binary.lhs = chain;
+        add->u.binary.rhs = hole;
+        chain = add;
+        i++;
+    }
+    if (!chain) {
+        Expr *seg = expr_new(EX_STR, p->lx.tok.span);
+        seg->u.slit.v = val;
+        seg->u.slit.len = 0;
+        return seg;
+    }
+    return chain;
+}
 static Block *parse_block(Parser *p);
 static Stmt *parse_stmt(Parser *p);
 static Stmt *parse_arm_jump(Parser *p, Span sp)
@@ -305,9 +366,7 @@ static Expr *parse_primary(Parser *p)
         return e;
     }
     case TK_STR: {
-        Expr *e = expr_new(EX_STR, sp);
-        e->u.slit.v = tok(p)->str_val;
-        e->u.slit.len = tok(p)->str_len;
+        Expr *e = build_string_expr(p, tok(p)->str_val, tok(p)->str_len);
         advance(p);
         return e;
     }

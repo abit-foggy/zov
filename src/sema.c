@@ -119,6 +119,22 @@ static int is_ptrish(Type *t)
                  || t->kind == TY_MUTREF);
 }
 
+/* printable covers every intrinsic format a print segment can emit */
+static int is_printable(Type *t)
+{
+    if (!t)
+        return 0;
+    switch (t->kind) {
+    case TY_I8: case TY_I16: case TY_I32: case TY_I64: case TY_ISIZE:
+    case TY_U8: case TY_U16: case TY_U32: case TY_U64: case TY_USIZE:
+    case TY_F32: case TY_F64: case TY_BOOL: case TY_CHAR: case TY_STR:
+    case TY_PTR:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int union_has_error(Type *u)
 {
     for (size_t i = 0; i < u->members.len; i++)
@@ -810,6 +826,16 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Type *lt = check_expr(se, e->u.binary.lhs,
                              comparison ? NULL : hint);
         check_expr(se, e->u.binary.rhs, lt);
+        if (op == TK_PLUS && (lt->kind == TY_STR
+                              || e->u.binary.rhs->type->kind == TY_STR)) {
+            /* str + T scripting chain: any printable T, result is str */
+            if (!is_printable(lt) || !is_printable(e->u.binary.rhs->type))
+                fatal_at(e->span, "cannot concatenate %s with %s",
+                         type_spelling(lt),
+                         type_spelling(e->u.binary.rhs->type));
+            e->type = type_prim(TY_STR);
+            return e->type;
+        }
         require_same(e->u.binary.lhs, e->u.binary.rhs, "<binary>");
         if (comparison) {
             Type *t = e->u.binary.lhs->type;
@@ -869,9 +895,23 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (callee->kind == EX_IDENT) {
             Sym *fn = scope_find(se->scope, callee->u.ident);
-            if (!fn)
+            if (!fn) {
+                if (zstr_eq(callee->u.ident, "print")
+                    || zstr_eq(callee->u.ident, "println")) {
+                    for (size_t i = 0; i < e->u.call.args.len; i++) {
+                        Type *t = check_expr(se, e->u.call.args.items[i],
+                                             NULL);
+                        if (!is_printable(t))
+                            fatal_at(e->u.call.args.items[i]->span,
+                                     "cannot print %s", type_spelling(t));
+                    }
+                    e->builtin_io = 1;
+                    e->type = type_prim(TY_VOID);
+                    return e->type;
+                }
                 fatal_at(callee->span, "undefined function '%s'",
                          callee->u.ident);
+            }
             if (fn->kind != SYM_FN)
                 fatal_at(callee->span, "'%s' is not callable",
                          callee->u.ident);

@@ -149,6 +149,7 @@ typedef struct Expr {
     } u;
     int borrow_mut; /* &mut in EX_UNARY AMP */
     int via_ref;    /* EX_FIELD reached through a reference: emit '->' */
+    int builtin_io; /* EX_CALL to built-in print/println */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);

@@ -429,6 +429,8 @@ static void bx_assign(Borrow *b, Expr *e)
 
 static void bx_call(Borrow *b, Expr *e)
 {
+    /* print/println args are printable (hence Copy) per sema, so they
+     * can never move; inline consuming calls inside args still move */
     DA(TempLoan) temps = {0};
     for (size_t i = 0; i < e->u.call.args.len; i++) {
         Expr *arg = e->u.call.args.items[i];
