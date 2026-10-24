@@ -97,6 +97,7 @@ typedef struct CG {
     int needs_utf8; /* char formatting helper */
     int needs_string; /* memcmp emission for native str equality */
     int needs_slice; /* runtime slice bounds helper */
+    int needs_env;   /* std::env runtime helpers */
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
     int tmp_id;       /* unique temp/label counter */
@@ -889,6 +890,29 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    if (e->builtin_env_kind) {
+        cg->needs_env = 1;
+        switch (e->builtin_env_kind) {
+        case 1:
+            buf_puts(&*cg->cur, "zov_rt_args_count()");
+            return;
+        case 2:
+            buf_puts(&*cg->cur, "zov_rt_arg_at((size_t)(");
+            emit_expr(cg, e->u.call.args.items[0], 0);
+            buf_puts(&*cg->cur, "))");
+            return;
+        case 3:
+            buf_puts(&*cg->cur, "zov_rt_env_has((");
+            emit_expr(cg, e->u.call.args.items[0], 0);
+            buf_puts(&*cg->cur, "))");
+            return;
+        default:
+            buf_puts(&*cg->cur, "zov_rt_env_get_str((");
+            emit_expr(cg, e->u.call.args.items[0], 0);
+            buf_puts(&*cg->cur, "))");
+            return;
+        }
+    }
     if (e->builtin_assert) {
         emit_assert(cg, e, 0);
         return;
@@ -1600,22 +1624,32 @@ static void emit_params(CG *cg, Decl *d)
 
 static void emit_fn(CG *cg, Decl *d, int proto_only)
 {
+    int is_main = zstr_eq(d->u.fn.name, "main") && !d->u.fn.recv;
     if (proto_only) {
         cg->cur = &cg->protos;
         emit_var(&*cg->cur, cg, d->u.fn.ret,
                  mangle_fn(d->regname ? d->regname : d->u.fn.name));
-        buf_puts(&*cg->cur, "(");
-        emit_params(cg, d);
-        buf_puts(&*cg->cur, ");\n");
+        if (is_main)
+            buf_puts(&*cg->cur, "(int argc, char **argv);\n");
+        else {
+            buf_puts(&*cg->cur, "(");
+            emit_params(cg, d);
+            buf_puts(&*cg->cur, ");\n");
+        }
         return;
     }
 
     cg->cur = &cg->body;
     emit_var(&*cg->cur, cg, d->u.fn.ret,
              mangle_fn(d->regname ? d->regname : d->u.fn.name));
-    buf_puts(&*cg->cur, "(");
-    emit_params(cg, d);
-    buf_puts(&*cg->cur, ")\n{\n");
+    if (is_main)
+        buf_puts(&*cg->cur, "(int argc, char **argv)\n{\n"
+                            "zov_rt_argc = argc; zov_rt_argv = argv;\n");
+    else {
+        buf_puts(&*cg->cur, "(");
+        emit_params(cg, d);
+        buf_puts(&*cg->cur, ")\n{\n");
+    }
     cg->defers.len = 0;
     cg->fn_ret = d->u.fn.ret;
     cg->switch_depth = 0;
@@ -1642,7 +1676,9 @@ static void emit_test_main(CG *cg, Program *prog)
         n++;
     }
     cg->cur = &cg->body;
-    buf_puts(&cg->body, "int main(void)\n{\nint _zv_passed = 0;\n");
+    buf_puts(&cg->body, "int main(int argc, char **argv)\n{\n"
+                        "zov_rt_argc = argc; zov_rt_argv = argv;\n"
+                        "int _zv_passed = 0;\n");
     n = 0;
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
@@ -1672,7 +1708,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     buf_puts(&*cg->cur,
              "#include <stdint.h>\n"
              "#include <stddef.h>\n"
-             "#include <stdbool.h>\n");
+             "#include <stdbool.h>\n"
+             "static int zov_rt_argc; static char **zov_rt_argv;\n");
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
         if (d->kind == DL_USE && d->u.use.is_c_header)
@@ -1767,6 +1804,39 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         buf_puts(&out, "#include <stdlib.h>\n");
     if (cg->needs_string)
         buf_puts(&out, "#include <string.h>\n");
+    if (cg->needs_env) {
+        buf_puts(&out, "#include <stdio.h>\n#include <stdlib.h>\n"
+                       "#include <string.h>\n");
+        buf_puts(&out,
+                 "static size_t zov_rt_args_count(void) { "
+                 "return (size_t)zov_rt_argc; }\n"
+                 "static zov_str zov_rt_arg_at(size_t i) {\n"
+                 "    if (i >= (size_t)zov_rt_argc) {\n"
+                 "        fprintf(stderr, \"zov: arg index out of "
+                 "bounds\\n\"); abort();\n"
+                 "    }\n"
+                 "    zov_str s; s.data = (const uint8_t *)zov_rt_argv[i];\n"
+                 "    s.len = strlen(zov_rt_argv[i]); return s;\n"
+                 "}\n"
+                 "static int zov_rt_env_has(zov_str name) {\n"
+                 "    char buf[4096];\n"
+                 "    size_t n = name.len < sizeof buf - 1 ? name.len\n"
+                 "                                            : "
+                 "sizeof buf - 1;\n"
+                 "    memcpy(buf, name.data, n); buf[n] = 0;\n"
+                 "    return getenv(buf) != NULL;\n"
+                 "}\n"
+                 "static zov_str zov_rt_env_get_str(zov_str name) {\n"
+                 "    char buf[4096];\n"
+                 "    size_t n = name.len < sizeof buf - 1 ? name.len\n"
+                 "                                            : "
+                 "sizeof buf - 1;\n"
+                 "    memcpy(buf, name.data, n); buf[n] = 0;\n"
+                 "    const char *v = getenv(buf);\n"
+                 "    zov_str s; s.data = (const uint8_t *)v;\n"
+                 "    s.len = v ? strlen(v) : 0; return s;\n"
+                 "}\n");
+    }
     if (cg->needs_slice) {
         /* the helper precedes stdio: declare fprintf's dependency */
         buf_puts(&out, "#include <stdio.h>\n#include <string.h>\n");

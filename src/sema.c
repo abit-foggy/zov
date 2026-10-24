@@ -1237,6 +1237,51 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (callee->kind == EX_IDENT) {
             Sym *fn = scope_find(se->scope, callee->u.ident);
             if (!fn) {
+                /* runtime-env builtins backing std::env */
+                if (zstr_eq(callee->u.ident, "zov_env_args_count")) {
+                    if (e->u.call.args.len != 0)
+                        fatal_at(e->span, "zov_env_args_count takes no "
+                                          "arguments");
+                    e->builtin_env_kind = 1;
+                    e->type = type_prim(TY_USIZE);
+                    return e->type;
+                }
+                if (zstr_eq(callee->u.ident, "zov_env_arg_at")) {
+                    if (e->u.call.args.len != 1)
+                        fatal_at(e->span, "zov_env_arg_at takes one index");
+                    Type *t = check_expr(se, e->u.call.args.items[0],
+                                         type_prim(TY_USIZE));
+                    if (!is_unknown(t) && !ty_is_int(t->kind))
+                        fatal_at(e->u.call.args.items[0]->span,
+                                 "argument index must be an integer");
+                    e->builtin_env_kind = 2;
+                    e->type = type_prim(TY_STR);
+                    return e->type;
+                }
+                if (zstr_eq(callee->u.ident, "zov_env_has")) {
+                    if (e->u.call.args.len != 1)
+                        fatal_at(e->span, "zov_env_has takes one name");
+                    Type *t = check_expr(se, e->u.call.args.items[0],
+                                         type_prim(TY_STR));
+                    if (!is_unknown(t) && t->kind != TY_STR)
+                        fatal_at(e->u.call.args.items[0]->span,
+                                 "environment names must be str");
+                    e->builtin_env_kind = 3;
+                    e->type = type_prim(TY_BOOL);
+                    return e->type;
+                }
+                if (zstr_eq(callee->u.ident, "zov_env_get_str")) {
+                    if (e->u.call.args.len != 1)
+                        fatal_at(e->span, "zov_env_get_str takes one name");
+                    Type *t = check_expr(se, e->u.call.args.items[0],
+                                         type_prim(TY_STR));
+                    if (!is_unknown(t) && t->kind != TY_STR)
+                        fatal_at(e->u.call.args.items[0]->span,
+                                 "environment names must be str");
+                    e->builtin_env_kind = 4;
+                    e->type = type_prim(TY_STR);
+                    return e->type;
+                }
                 if (zstr_eq(callee->u.ident, "assert")
                     && !scope_find(se->scope, "assert")) {
                     if (e->u.call.args.len != 1)
