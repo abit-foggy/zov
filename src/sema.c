@@ -145,11 +145,22 @@ static int is_printable(Type *t)
     case TY_I8: case TY_I16: case TY_I32: case TY_I64: case TY_ISIZE:
     case TY_U8: case TY_U16: case TY_U32: case TY_U64: case TY_USIZE:
     case TY_F32: case TY_F64: case TY_BOOL: case TY_CHAR: case TY_STR:
-    case TY_PTR:
+    case TY_PTR: case TY_ENUM:
         return 1;
     default:
         return 0;
     }
+}
+
+static Decl *find_enum_decl(Sema *se, const char *name)
+{
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind == DL_TYPE && d->u.type.is_enum
+            && d->u.type.name == name)
+            return d;
+    }
+    return NULL;
 }
 
 static int union_has_error(Type *u)
@@ -914,6 +925,21 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Sym *ns = scope_find(se->scope, e->u.nident.ns);
         if (!ns)
             fatal_at(e->span, "unknown namespace '%s'", e->u.nident.ns);
+        /* enum variant: Color::Red resolves through the type registry */
+        if (ns->kind == SYM_TYPE && ns->type && ns->type->kind == TY_ENUM) {
+            Decl *ed = find_enum_decl(se, e->u.nident.ns);
+            for (size_t k = 0; ed && k < ed->u.type.variants.len; k++)
+                if (ed->u.type.variants.items[k].name == e->u.nident.name) {
+                    e->type = ns->type;
+                    char cbuf[256];
+                    snprintf(cbuf, sizeof(cbuf), "Zov_%s_%s",
+                             e->u.nident.ns, e->u.nident.name);
+                    e->variant_c = str_intern_c(cbuf);
+                    return e->type;
+                }
+            fatal_at(e->span, "enum '%s' has no variant '%s'",
+                     e->u.nident.ns, e->u.nident.name);
+        }
         if (ns->kind != SYM_NS || !ns->hdr)
             fatal_at(e->span, "'%s' is not a namespace", e->u.nident.ns);
         CMember *m = cimport_find(ns->hdr, e->u.nident.name);
@@ -1004,10 +1030,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         require_same(e->u.binary.lhs, e->u.binary.rhs, "<binary>");
         if (comparison) {
             Type *t = e->u.binary.lhs->type;
+            /* ==/!= generalize to str (memcmp) and enums; <,<= stay numeric */
+            int eq_ne = (op == TK_EQ || op == TK_NEQ);
             if (!is_unknown(t) && !ty_is_num(t->kind) && t->kind != TY_CHAR
-                && !is_ptrish(t))
-                fatal_at(e->span, "'%c%c' requires numeric operands",
-                         op == TK_ANDAND ? '&' : ' ', ' ');
+                && !is_ptrish(t) && !(eq_ne && (t->kind == TY_STR
+                                                 || t->kind == TY_ENUM
+                                                 || t->kind == TY_BOOL)))
+                fatal_at(e->span,
+                         "relational operators require numeric operands");
             e->type = type_prim(TY_BOOL);
         } else {
             Type *t = e->u.binary.lhs->type;
@@ -1466,6 +1496,123 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = mty ? mty : type_prim(TY_VOID);
             return e->type;
         }
+        if (st->kind == TY_ENUM) {
+            Decl *ed = find_enum_decl(se, st->name);
+            if (!ed)
+                fatal_at(e->span, "unknown enum '%s'", st->name);
+            /* exhaustiveness bitmask over variant indices */
+            size_t cover = 0;
+            int wild = 0;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                a->vidx = -1;
+                if (a->kind == PAT_WILDCARD) {
+                    wild = 1;
+                    continue;
+                }
+                if (a->kind != PAT_TYPE_VAL || !a->name)
+                    fatal_at(a->span,
+                             "enum match arms must be Enum::Variant or '_'");
+                const char *sep = strstr(a->name, "::");
+                size_t enlen = strlen(st->name);
+                if (!sep || (size_t)(sep - a->name) != enlen
+                    || strncmp(a->name, st->name, enlen) != 0)
+                    fatal_at(a->span, "'%s' is not a variant of %s",
+                             a->name, st->name);
+                int idx = -1;
+                for (size_t k = 0; k < ed->u.type.variants.len; k++)
+                    if (zstr_eq(ed->u.type.variants.items[k].name, sep + 2))
+                        idx = (int)k;
+                if (idx < 0)
+                    fatal_at(a->span, "enum '%s' has no variant '%s'",
+                             st->name, sep + 2);
+                if (cover & ((size_t)1 << idx))
+                    fatal_at(a->span, "duplicate match arm for %s::%s",
+                             st->name, sep + 2);
+                cover |= (size_t)1 << idx;
+                a->vidx = idx;
+            }
+            if (!wild && cover != ((size_t)1 << ed->u.type.variants.len) - 1)
+                for (size_t k = 0; k < ed->u.type.variants.len; k++)
+                    if (!(cover & ((size_t)1 << k)))
+                        fatal_at(e->span,
+                                 "non-exhaustive match: missing variant "
+                                 "%s::%s",
+                                 st->name, ed->u.type.variants.items[k].name);
+            e->type = type_prim(TY_VOID);
+            Type *mty = NULL;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                push_scope(se);
+                if (a->jump) {
+                    check_stmt(se, a->jump);
+                } else {
+                    Type *at = check_expr(se, a->val, mty ? mty : hint);
+                    if (!mty)
+                        mty = at;
+                    else if (!is_unknown(at) && !type_eq(mty, at))
+                        fatal_at(a->span, "match arm type %s differs from %s",
+                                 type_spelling(at), type_spelling(mty));
+                }
+                pop_scope(se);
+            }
+            e->type = mty ? mty : type_prim(TY_VOID);
+            return e->type;
+        }
+        if (st->kind == TY_BOOL || ty_is_int(st->kind) || st->kind == TY_CHAR
+            || st->kind == TY_STR) {
+            int wild = 0;
+            int has_t = 0, has_f = 0;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                if (a->kind == PAT_WILDCARD) {
+                    wild = 1;
+                    continue;
+                }
+                if (a->kind != PAT_LIT || !a->pat)
+                    fatal_at(a->span,
+                             "value match arms must be literals or '_'");
+                Type *pt = check_expr(se, a->pat, st);
+                if (!is_unknown(pt) && !type_eq(pt, st))
+                    fatal_at(a->span, "pattern %s does not match %s",
+                             type_spelling(pt), type_spelling(st));
+                if (st->kind == TY_BOOL && a->pat->kind == EX_BOOL) {
+                    if (a->pat->u.blit.v)
+                        has_t = 1;
+                    else
+                        has_f = 1;
+                }
+            }
+            if (st->kind == TY_BOOL) {
+                if (!wild && (!has_t || !has_f))
+                    fatal_at(e->span, "non-exhaustive bool match: cover "
+                                      "'true' and 'false' (or use '_')");
+            } else if (!wild) {
+                /* integers, char, and str have open domains: demand '_' */
+                fatal_at(e->span, "value match on %s requires a case _ => "
+                                  "arm for exhaustiveness",
+                         type_spelling(st));
+            }
+            e->type = type_prim(TY_VOID);
+            Type *mty = NULL;
+            for (size_t i = 0; i < e->u.match.arms.len; i++) {
+                MatchArm *a = &e->u.match.arms.items[i];
+                push_scope(se);
+                if (a->jump) {
+                    check_stmt(se, a->jump);
+                } else {
+                    Type *at = check_expr(se, a->val, mty ? mty : hint);
+                    if (!mty)
+                        mty = at;
+                    else if (!is_unknown(at) && !type_eq(mty, at))
+                        fatal_at(a->span, "match arm type %s differs from %s",
+                                 type_spelling(at), type_spelling(mty));
+                }
+                pop_scope(se);
+            }
+            e->type = mty ? mty : type_prim(TY_VOID);
+            return e->type;
+        }
         fatal_at(e->span, "match requires a tagged union or nullable "
                           "pointer, got %s", type_spelling(st));
         return NULL;
@@ -1763,6 +1910,12 @@ static void register_decl(Sema *se, Decl *d)
             } else {
                 sym.type = r;
             }
+        } else if (d->u.type.is_enum) {
+            /* enums are Copy scalars keyed by their declaration name */
+            Type *e = zalloc(sizeof(Type));
+            e->kind = TY_ENUM;
+            e->name = d->u.type.name;
+            sym.type = e;
         } else if (sym.is_template) {
             /* generic struct template: instantiated on first Type[T] use */
             sym.type = NULL;

@@ -49,6 +49,7 @@ typedef enum TypeKind {
     TY_UNION,   /* tagged union: deterministic tag = member index */
     TY_ERR,     /* !T error type; name gives variant identity */
     TY_INST,    /* generic instantiation Type[T,U]; members = type args */
+    TY_ENUM,    /* named scalar enum: variants live on the decl */
 } TypeKind;
 
 typedef DA(struct Type *) TypeList;
@@ -104,7 +105,8 @@ typedef enum PatKind {
     PAT_NULL,      /* case null => */
     PAT_WILDCARD,  /* case _ => */
     PAT_TYPE_BIND, /* case let x: T => */
-    PAT_TYPE_VAL,  /* case TypeName => */
+    PAT_TYPE_VAL, /* case TypeName or EnumName::Variant => */
+    PAT_LIT,       /* case 42 | 'a' | "s" | true => */
 } PatKind;
 
 typedef struct FieldInit {
@@ -118,6 +120,9 @@ typedef struct MatchArm {
     Span span;
     const char *name; /* binder or referenced type name */
     Type *ty;         /* PAT_TYPE_BIND target type */
+    int vidx;         /* enum match: resolved variant index */
+    const char *variant_c; /* enum arm: C variant constant */
+    struct Expr *pat;  /* PAT_LIT pattern expression */
     struct Expr *val;  /* expression body; NULL when jump is set */
     struct Stmt *jump; /* return/break/continue arm; NULL when val is set */
 } MatchArm;
@@ -156,6 +161,7 @@ typedef struct Expr {
     Type *szarg;    /* EX_CALL to sizeof[T](): the type argument */
     int coerce_tag; /* EX_COERCE: deterministic member index in target */
     int builtin_assert; /* EX_CALL to built-in assert(bool) */
+    const char *variant_c; /* EX_NS_IDENT enum variant: C spelling */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);
@@ -165,6 +171,12 @@ typedef struct Param {
     Type *ty;
     Span span;
 } Param;
+
+typedef struct EnumVariant {
+    const char *name;
+    long long value;
+    Span span;
+} EnumVariant;
 
 typedef struct Field {
     const char *name;
@@ -210,7 +222,8 @@ typedef struct Decl {
         struct { int is_c_header; const char *path; const char *alias;
                  StrList zsyms; } use;
         struct { const char *name; DA(struct Field) fields;
-                  Type *alias_ty; int is_resource;
+                  Type *alias_ty; int is_resource; int is_enum;
+                  DA(struct EnumVariant) variants;
                   StrList tparams; } type;
         struct { const char *name; DA(struct Param) params; Type *ret;
                   Block *body; StrList tparams; struct Param *recv;

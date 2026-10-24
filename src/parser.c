@@ -76,6 +76,15 @@ static int at(Parser *p, TokenKind k)
     return kind(p) == k;
 }
 
+/* raw-source lookahead: is '::' the next non-space text? (pattern only) */
+static int at_next_coloncolon(Parser *p)
+{
+    const char *q = tok(p)->end;
+    while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r')
+        q++;
+    return q[0] == ':' && q[1] == ':';
+}
+
 /* ---- types ---- */
 
 static Type *parse_type(Parser *p);
@@ -325,6 +334,40 @@ static Expr *parse_match(Parser *p)
             advance(p);
         } else if (at(p, TK_IDENT) && zstr_eq(tok(p)->name, "_")) {
             arm.kind = PAT_WILDCARD;
+            advance(p);
+        } else if (at(p, TK_INT) || at(p, TK_FLOAT) || at(p, TK_CHAR)
+                   || at(p, TK_STR) || at(p, TK_TRUE) || at(p, TK_FALSE)) {
+            arm.kind = PAT_LIT;
+            arm.pat = expr_new(EX_INT, tok(p)->span);
+            if (at(p, TK_INT)) {
+                arm.pat->kind = EX_INT;
+                arm.pat->u.ilit.v = tok(p)->int_val;
+                arm.pat->u.ilit.suffix = tok(p)->suffix;
+            } else if (at(p, TK_CHAR)) {
+                arm.pat->kind = EX_CHAR;
+                arm.pat->u.clit.v = tok(p)->char_val;
+            } else if (at(p, TK_STR)) {
+                /* patterns take raw literals: no interpolation */
+                arm.pat->kind = EX_STR;
+                arm.pat->u.slit.v = tok(p)->str_val;
+                arm.pat->u.slit.len = tok(p)->str_len;
+            } else {
+                arm.pat->kind = EX_BOOL;
+                arm.pat->u.blit.v = (kind(p) == TK_TRUE);
+            }
+            advance(p);
+        } else if (at(p, TK_IDENT) && at_next_coloncolon(p)) {
+            /* qualified enum variant: Color::Red */
+            arm.kind = PAT_TYPE_VAL;
+            char joined[256];
+            snprintf(joined, sizeof(joined), "%s", tok(p)->name);
+            advance(p);
+            advance(p);
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected variant name after '::'");
+            snprintf(joined + strlen(joined), sizeof(joined) - strlen(joined),
+                     "::%s", tok(p)->name);
+            arm.name = str_intern_c(joined);
             advance(p);
         } else if (at(p, TK_LET)) {
             arm.kind = PAT_TYPE_BIND;
@@ -949,6 +992,49 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
     if (at(p, TK_RESOURCE)) {
         d->u.type.is_resource = 1;
         advance(p);
+    }
+    if (at(p, TK_ENUM)) {
+        advance(p);
+        d->u.type.is_enum = 1;
+        expect(p, TK_LBRACE, "'{' after 'enum'");
+        long long next = 0;
+        while (!at(p, TK_RBRACE)) {
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected variant name");
+            EnumVariant v;
+            memset(&v, 0, sizeof(v));
+            v.name = tok(p)->name;
+            v.span = tok(p)->span;
+            advance(p);
+            if (at(p, TK_ASSIGN)) {
+                advance(p);
+                int neg = 0;
+                if (at(p, TK_MINUS)) {
+                    neg = 1;
+                    advance(p);
+                }
+                if (!at(p, TK_INT))
+                    fatal_at(tok(p)->span,
+                             "enum variant values must be integer literals");
+                v.value = (long long)tok(p)->int_val;
+                if (neg)
+                    v.value = -v.value;
+                advance(p);
+                next = v.value + 1;
+            } else {
+                v.value = next;
+                next = next + 1;
+            }
+            da_push(&d->u.type.variants, v);
+            if (at(p, TK_COMMA)) {
+                advance(p);
+                continue;
+            }
+            break;
+        }
+        expect(p, TK_RBRACE, "'}'");
+        eat_semi(p);
+        return d;
     }
     if (at(p, TK_STRUCT)) {
         advance(p);

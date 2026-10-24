@@ -392,6 +392,8 @@ const char *type_spelling(Type *t)
     }
     case TY_STRUCT:
         return t->name;
+    case TY_ENUM:
+        return t->name;
     case TY_ERR:
         return t->name ? t->name : type_spelling(t->base);
     case TY_UNION: {
