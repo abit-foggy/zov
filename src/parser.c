@@ -182,13 +182,23 @@ static Type *parse_type(Parser *p)
                 return type_struct(str_intern_c(joined));
             }
             if (at(p, TK_LBRACKET)) {
-                /* Type[T]: generic instantiation; arg kept for sema */
+                /* Name[T, U]: instantiation; resolved by sema */
+                Type *inst = zalloc(sizeof(Type));
+                inst->kind = TY_INST;
+                inst->name = name;
                 advance(p);
-                Type *arg = parse_type(p);
+                for (;;) {
+                    da_push(&inst->members, parse_type(p));
+                    if (at(p, TK_COMMA)) {
+                        advance(p);
+                        continue;
+                    }
+                    break;
+                }
                 expect(p, TK_RBRACKET, "']'");
-                (void)arg;
-                fatal_at(sp, "generic types are not supported in v0.1");
+                return inst;
             }
+            (void)sp;
             return type_struct(name);
         }
         return parse_primitive(p);
@@ -357,8 +367,8 @@ static Expr *parse_call_args(Parser *p, Expr *callee)
     return e;
 }
 
-/* '[' after an expression: generic arg when a type keyword follows, since
- * v0.1 has no type-vs-value ambiguity resolution for ident-led args. */
+/* '[' after an expression: type-keyword start means generic args;
+ * anything else is indexing. */
 static Expr *parse_postfix_bracket(Parser *p, Expr *base)
 {
     Span sp = tok(p)->span;
@@ -369,11 +379,17 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
     case TK_USIZE: case TK_F32: case TK_F64: case TK_BOOL:
     case TK_CHAR_KW: case TK_STR_KW: case TK_NULLABLE:
     case TK_STAR: case TK_AMP: case TK_LBRACKET: {
-        Type *arg = parse_type(p);
-        expect(p, TK_RBRACKET, "']'");
         Expr *e = expr_new(EX_GENERIC, sp);
         e->u.generic.base = base;
-        e->u.generic.arg = arg;
+        for (;;) {
+            da_push(&e->u.generic.targs, parse_type(p));
+            if (at(p, TK_COMMA)) {
+                advance(p);
+                continue;
+            }
+            break;
+        }
+        expect(p, TK_RBRACKET, "']'");
         return e;
     }
     default: {
@@ -387,6 +403,47 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
     }
 }
 
+/* Name{ f = e, ... } / Name[T]{ ... }: struct literal. */
+static Expr *parse_struct_lit(Parser *p, Expr *base)
+{
+    Expr *e = expr_new(EX_STRUCT_LIT, base->span);
+    if (base->kind == EX_GENERIC) {
+        Expr *gb = base->u.generic.base;
+        if (gb->kind != EX_IDENT)
+            fatal_at(base->span, "struct literal name must be an identifier");
+        e->u.stlit.name = gb->u.ident;
+        e->u.stlit.targs.items = base->u.generic.targs.items;
+        e->u.stlit.targs.len = base->u.generic.targs.len;
+        e->u.stlit.targs.cap = base->u.generic.targs.cap;
+    } else if (base->kind == EX_IDENT) {
+        e->u.stlit.name = base->u.ident;
+    } else {
+        fatal_at(base->span, "invalid struct literal");
+    }
+    expect(p, TK_LBRACE, "'{' in struct literal");
+    while (!at(p, TK_RBRACE)) {
+        if (at(p, TK_DOT))
+            advance(p); /* accept .field = e and field = e */
+        if (!at(p, TK_IDENT))
+            fatal_at(tok(p)->span, "expected field name in struct literal");
+        FieldInit fi;
+        memset(&fi, 0, sizeof(fi));
+        fi.name = tok(p)->name;
+        fi.span = tok(p)->span;
+        advance(p);
+        expect(p, TK_ASSIGN, "'=' in struct literal field");
+        fi.val = parse_expr(p);
+        da_push(&e->u.stlit.fields, fi);
+        if (at(p, TK_COMMA)) {
+            advance(p);
+            continue;
+        }
+        break;
+    }
+    expect(p, TK_RBRACE, "'}' after struct literal");
+    return e;
+}
+
 static Expr *parse_postfix(Parser *p)
 {
     Expr *e = parse_primary(p);
@@ -397,6 +454,21 @@ static Expr *parse_postfix(Parser *p)
             break;
         case TK_LBRACKET:
             e = parse_postfix_bracket(p, e);
+            break;
+        case TK_LBRACE:
+            e = parse_struct_lit(p, e);
+            break;
+        case TK_DOT:
+            advance(p);
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected field name after '.'");
+            {
+                Expr *f = expr_new(EX_FIELD, e->span);
+                f->u.field.base = e;
+                f->u.field.name = tok(p)->name;
+                advance(p);
+                e = f;
+            }
             break;
         case TK_COLONCOLON: {
             advance(p);
@@ -442,11 +514,21 @@ static Expr *parse_postfix(Parser *p)
 static Expr *parse_unary(Parser *p)
 {
     Span sp = tok(p)->span;
+    if (at(p, TK_STAR)) {
+        advance(p);
+        Expr *e = expr_new(EX_DEREF, sp);
+        e->u.deref = parse_unary(p);
+        return e;
+    }
     if (at(p, TK_MINUS) || at(p, TK_BANG) || at(p, TK_AMP)) {
         TokenKind op = kind(p);
         advance(p);
         Expr *e = expr_new(EX_UNARY, sp);
         e->u.unary.op = op;
+        if (op == TK_AMP && at(p, TK_MUT)) {
+            advance(p);
+            e->borrow_mut = 1;
+        }
         e->u.unary.e = parse_unary(p);
         return e;
     }
@@ -708,7 +790,26 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
     d->exported = exported;
     d->u.type.name = tok(p)->name;
     advance(p);
+    if (at(p, TK_LBRACKET)) {
+        advance(p);
+        for (;;) {
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected type parameter name");
+            da_push(&d->u.type.tparams, tok(p)->name);
+            advance(p);
+            if (at(p, TK_COMMA)) {
+                advance(p);
+                continue;
+            }
+            break;
+        }
+        expect(p, TK_RBRACKET, "']' after type parameters");
+    }
     expect(p, TK_ASSIGN, "'=' after type name");
+    if (at(p, TK_RESOURCE)) {
+        d->u.type.is_resource = 1;
+        advance(p);
+    }
     if (at(p, TK_STRUCT)) {
         advance(p);
         expect(p, TK_LBRACE, "'{'");
@@ -749,6 +850,21 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
     d->exported = exported;
     d->u.fn.name = tok(p)->name;
     advance(p);
+    if (at(p, TK_LBRACKET)) {
+        advance(p);
+        for (;;) {
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected type parameter name");
+            da_push(&d->u.fn.tparams, tok(p)->name);
+            advance(p);
+            if (at(p, TK_COMMA)) {
+                advance(p);
+                continue;
+            }
+            break;
+        }
+        expect(p, TK_RBRACKET, "']' after type parameters");
+    }
     expect(p, TK_LPAREN, "'(' after function name");
     if (!at(p, TK_RPAREN)) {
         for (;;) {

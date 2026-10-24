@@ -48,6 +48,7 @@ typedef enum TypeKind {
     TY_STRUCT,
     TY_UNION,   /* tagged union: deterministic tag = member index */
     TY_ERR,     /* !T error type; name gives variant identity */
+    TY_INST,    /* generic instantiation Type[T,U]; members = type args */
 } TypeKind;
 
 typedef DA(struct Type *) TypeList;
@@ -59,8 +60,10 @@ typedef struct Type {
     size_t count;     /* fixed array length */
     int nullable;     /* pointer nullability */
     int is_error;     /* TY_ERR marker; error-wrapping unions set this too */
+    int is_move;      /* linear types: resource structs and &mut T */
     const char *c_name; /* verbatim C spelling for imported types */
-    TypeList members;    /* TY_UNION payload members, tag == index */
+    TypeList members; /* TY_UNION payload members, tag == index;
+                         TY_INST stores concrete type arguments */
 } Type;
 
 Type *type_prim(TypeKind k);
@@ -90,6 +93,7 @@ typedef enum ExprKind {
     EX_ASSIGN, EX_BINARY, EX_UNARY,
     EX_CALL, EX_INDEX, EX_CAST, EX_GENERIC,
     EX_MATCH, EX_TRY, EX_UNWRAP, EX_COERCE,
+    EX_DEREF, EX_FIELD, EX_STRUCT_LIT,
 } ExprKind;
 
 typedef enum PatKind {
@@ -98,6 +102,12 @@ typedef enum PatKind {
     PAT_TYPE_BIND, /* case let x: T => */
     PAT_TYPE_VAL,  /* case TypeName => */
 } PatKind;
+
+typedef struct FieldInit {
+    const char *name;
+    Span span;
+    struct Expr *val;
+} FieldInit;
 
 typedef struct MatchArm {
     PatKind kind;
@@ -126,12 +136,17 @@ typedef struct Expr {
         struct { struct Expr *callee; DA(struct Expr *) args; } call;
         struct { struct Expr *base, *index; } index;
         struct { struct Expr *e; Type *t; } cast;
-        struct { struct Expr *base; Type *arg; } generic;
+        struct { struct Expr *base; DA(Type *) targs; } generic;
         struct { struct Expr *scrutinee; DA(MatchArm) arms; } match;
         struct Expr *tryy;    /* EX_TRY operand */
         struct Expr *unwrap;  /* EX_UNWRAP operand */
         struct { struct Expr *e; Type *target; } coerce; /* EX_COERCE */
+        struct Expr *deref;   /* EX_DEREF operand */
+        struct { struct Expr *base; const char *name; } field;
+        struct { const char *name; DA(FieldInit) fields;
+                 DA(Type *) targs; } stlit;
     } u;
+    int borrow_mut; /* &mut in EX_UNARY AMP */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);
@@ -183,9 +198,10 @@ typedef struct Decl {
     union {
         struct { int is_c_header; const char *path; const char *alias; } use;
         struct { const char *name; DA(struct Field) fields;
-                  Type *alias_ty; } type;
+                  Type *alias_ty; int is_resource;
+                  DA(const char *) tparams; } type;
         struct { const char *name; DA(struct Param) params; Type *ret;
-                  Block *body; } fn;
+                  Block *body; DA(const char *) tparams; } fn;
     } u;
 } Decl;
 

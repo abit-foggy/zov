@@ -38,6 +38,8 @@ typedef struct Sym {
     DA(Param) params; /* function signature */
     Type *ret;
     CHeader *hdr;     /* imported C namespace members */
+    int is_template;  /* generic decl, checked only via instantiation */
+    Decl *decl;       /* owning decl for templates */
 } Sym;
 
 typedef struct Scope {
@@ -50,6 +52,7 @@ typedef struct Sema {
     Type *fn_ret;
     int loop_depth;
     int has_main;
+    Program *prog;
 } Sema;
 
 static void push_scope(Sema *se)
@@ -84,6 +87,19 @@ static void scope_add(Sema *se, Sym sym)
 static Type *check_expr(Sema *se, Expr *e, Type *hint);
 static void check_stmt(Sema *se, Stmt *s);
 static void check_block(Sema *se, Block *b);
+
+/* Field lists live on the decl, not the Type, so literals and field
+ * access resolve through the owning DL_TYPE. */
+static Decl *find_struct_decl(Sema *se, const char *name)
+{
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind == DL_TYPE && d->u.type.name == name
+            && !d->u.type.alias_ty && d->u.type.tparams.len == 0)
+            return d;
+    }
+    return NULL;
+}
 
 static Type *unknown(void)
 {
@@ -181,6 +197,11 @@ static Type *resolve_type(Sema *se, Type *t)
     }
     case TY_ERR:
         return type_err(t->name, resolve_type(se, t->base));
+    case TY_INST: {
+        for (size_t i = 0; i < t->members.len; i++)
+            t->members.items[i] = resolve_type(se, t->members.items[i]);
+        return t;
+    }
     default:
         return t;
     }
@@ -431,6 +452,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             lt = sym->type;
         } else if (lhs->kind == EX_INDEX) {
             lt = check_expr(se, lhs, NULL);
+        } else if (lhs->kind == EX_DEREF) {
+            lt = check_expr(se, lhs, NULL);
+        } else if (lhs->kind == EX_FIELD) {
+            lt = check_expr(se, lhs, NULL);
         } else {
             fatal_at(lhs->span, "invalid assignment target");
             return NULL;
@@ -487,13 +512,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = type_prim(TY_BOOL);
             break;
         case TK_AMP:
-            /* shared borrow; &mut T on an immutable binding is rejected */
-            e->type = type_ref(t, 0);
-            if (e->u.unary.e->kind == EX_IDENT) {
-                Sym *sym = scope_find(se->scope, e->u.unary.e->u.ident);
-                if (sym && !sym->mut)
-                    break;
-            }
+            /* second-class: refs live in locals/params/returns only */
+            e->type = type_ref(t, e->borrow_mut);
             break;
         default:
             fatal_at(e->span, "unsupported unary operator");
@@ -546,8 +566,82 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         return e->type;
     }
     case EX_GENERIC:
-        fatal_at(e->span, "generic instantiation is not supported in v0.1");
+        /* call/literal sites handle their own instantiation */
+        fatal_at(e->span, "generic instantiation requires a call or struct "
+                          "literal");
         return NULL;
+    case EX_DEREF: {
+        Type *t = check_expr(se, e->u.deref, NULL);
+        if (t->kind == TY_PTR && t->nullable)
+            fatal_at(e->span,
+                     "cannot dereference nullable pointer; narrow it first");
+        if (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_MUTREF) {
+            e->type = t->base;
+            return e->type;
+        }
+        fatal_at(e->span, "cannot dereference %s", type_spelling(t));
+        return NULL;
+    }
+    case EX_FIELD: {
+        Type *t = check_expr(se, e->u.field.base, NULL);
+        if (is_unknown(t))
+            return unknown();
+        if (t->kind != TY_STRUCT || !t->name)
+            fatal_at(e->span, "%s has no fields", type_spelling(t));
+        Decl *d = find_struct_decl(se, t->name);
+        if (!d)
+            fatal_at(e->span, "unknown struct type '%s'", t->name);
+        for (size_t i = 0; i < d->u.type.fields.len; i++)
+            if (d->u.type.fields.items[i].name == e->u.field.name) {
+                e->type = d->u.type.fields.items[i].ty;
+                return e->type;
+            }
+        fatal_at(e->span, "struct '%s' has no field '%s'", t->name,
+                 e->u.field.name);
+        return NULL;
+    }
+    case EX_STRUCT_LIT: {
+        Type *st = NULL;
+        if (e->u.stlit.targs.len > 0)
+            fatal_at(e->span,
+                     "generic struct literals are not supported yet (v0.3 "
+                     "milestone 3)");
+        Sym *sym = scope_find(se->scope, e->u.stlit.name);
+        if (sym && sym->kind == SYM_TYPE && sym->type
+            && sym->type->kind == TY_STRUCT)
+            st = sym->type;
+        if (!st)
+            fatal_at(e->span, "'%s' is not a struct type", e->u.stlit.name);
+        Decl *d = find_struct_decl(se, st->name);
+        if (!d)
+            fatal_at(e->span, "unknown struct type '%s'", st->name);
+        for (size_t i = 0; i < e->u.stlit.fields.len; i++) {
+            FieldInit *fi = &e->u.stlit.fields.items[i];
+            Type *ft = NULL;
+            for (size_t j = 0; j < d->u.type.fields.len; j++)
+                if (d->u.type.fields.items[j].name == fi->name)
+                    ft = d->u.type.fields.items[j].ty;
+            if (!ft)
+                fatal_at(fi->span, "struct '%s' has no field '%s'",
+                         st->name, fi->name);
+            Type *it = check_expr(se, fi->val, ft);
+            if (!is_unknown(it) && !type_eq(it, ft))
+                fatal_at(fi->span, "field '%s' expects %s, got %s", fi->name,
+                         type_spelling(ft), type_spelling(it));
+        }
+        for (size_t j = 0; j < d->u.type.fields.len; j++) {
+            const char *fn = d->u.type.fields.items[j].name;
+            int found = 0;
+            for (size_t i = 0; i < e->u.stlit.fields.len; i++)
+                if (e->u.stlit.fields.items[i].name == fn)
+                    found = 1;
+            if (!found)
+                fatal_at(e->span, "missing field '%s' in '%s' literal", fn,
+                         st->name);
+        }
+        e->type = st;
+        return e->type;
+    }
     case EX_MATCH: {
         Type *st = check_expr(se, e->u.match.scrutinee, NULL);
         if (st->kind == TY_UNION) {
@@ -894,6 +988,8 @@ static void register_decl(Sema *se, Decl *d)
         sym.name = d->u.type.name;
         sym.kind = SYM_TYPE;
         sym.span = d->span;
+        sym.is_template = d->u.type.tparams.len > 0;
+        sym.decl = d;
         if (d->u.type.alias_ty) {
             Type *r = resolve_type(se, d->u.type.alias_ty);
             if (r->kind == TY_ERR) {
@@ -903,8 +999,23 @@ static void register_decl(Sema *se, Decl *d)
             } else {
                 sym.type = r;
             }
+        } else if (sym.is_template) {
+            /* generic struct template: instantiated on first Type[T] use */
+            sym.type = NULL;
         } else {
+            for (size_t i = 0; i < d->u.type.fields.len; i++)
+                d->u.type.fields.items[i].ty =
+                    resolve_type(se, d->u.type.fields.items[i].ty);
+            for (size_t i = 0; i < d->u.type.fields.len; i++) {
+                TypeKind fk = d->u.type.fields.items[i].ty->kind;
+                if (fk == TY_REF || fk == TY_MUTREF)
+                    fatal_at(d->u.type.fields.items[i].span,
+                             "borrowed reference cannot be stored in struct "
+                             "field; use an owned value or *T");
+            }
             sym.type = type_struct(d->u.type.name);
+            if (d->u.type.is_resource)
+                sym.type->is_move = 1;
         }
         scope_add(se, sym);
         break;
@@ -919,10 +1030,14 @@ static void register_decl(Sema *se, Decl *d)
         sym.name = d->u.fn.name;
         sym.kind = SYM_FN;
         sym.span = d->span;
-        sym.params.items = d->u.fn.params.items;
-        sym.params.len = d->u.fn.params.len;
-        sym.params.cap = d->u.fn.params.cap;
-        sym.ret = d->u.fn.ret;
+        sym.is_template = d->u.fn.tparams.len > 0;
+        sym.decl = d;
+        if (!sym.is_template) {
+            sym.params.items = d->u.fn.params.items;
+            sym.params.len = d->u.fn.params.len;
+            sym.params.cap = d->u.fn.params.cap;
+            sym.ret = d->u.fn.ret;
+        }
         scope_add(se, sym);
         if (zstr_eq(d->u.fn.name, "main")) {
             se->has_main = 1;
@@ -957,14 +1072,37 @@ static void check_fn(Sema *se, Decl *d)
 void sema_check(Program *prog)
 {
     Sema *se = zalloc(sizeof(Sema));
+    se->prog = prog;
     push_scope(se); /* global scope */
     for (size_t i = 0; i < prog->decls.len; i++)
         register_decl(se, prog->decls.items[i]);
     if (!se->has_main)
         fatal("no 'fn main' found in program");
+    /* is_move fixpoint: a struct is linear if it is a resource or has a
+     * linear field; iterate until the mark stops propagating */
+    for (int changed = 1; changed;) {
+        changed = 0;
+        for (size_t i = 0; i < prog->decls.len; i++) {
+            Decl *d = prog->decls.items[i];
+            if (d->kind != DL_TYPE || d->u.type.alias_ty
+                || d->u.type.tparams.len > 0)
+                continue;
+            for (size_t j = 0; j < d->u.type.fields.len; j++) {
+                Type *ft = d->u.type.fields.items[j].ty;
+                if (ft->kind == TY_MUTREF
+                    || (ft->kind == TY_STRUCT && ft->is_move)) {
+                    Type *st = type_struct(d->u.type.name);
+                    if (!st->is_move) {
+                        st->is_move = 1;
+                        changed = 1;
+                    }
+                }
+            }
+        }
+    }
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_FN)
+        if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
             check_fn(se, d);
     }
 }

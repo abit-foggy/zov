@@ -534,7 +534,28 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         buf_puts(b, "))");
         break;
     case EX_GENERIC:
-        fatal("generic instantiation is not supported in v0.1");
+        fatal("generic instantiation requires a call or struct literal");
+        break;
+    case EX_DEREF:
+        buf_puts(b, "(*");
+        emit_expr(cg, e->u.deref, 0);
+        buf_puts(b, ")");
+        break;
+    case EX_FIELD:
+        buf_puts(b, "(");
+        emit_expr(cg, e->u.field.base, 0);
+        buf_printf(b, ").%s", mangle_local(e->u.field.name));
+        break;
+    case EX_STRUCT_LIT:
+        buf_printf(b, "((%s){ ", c_type(cg, e->type));
+        for (size_t i = 0; i < e->u.stlit.fields.len; i++) {
+            if (i)
+                buf_puts(b, ", ");
+            buf_printf(b, ".%s = ",
+                       mangle_local(e->u.stlit.fields.items[i].name));
+            emit_expr(cg, e->u.stlit.fields.items[i].val, 0);
+        }
+        buf_puts(b, " })");
         break;
     case EX_MATCH:
         emit_match(cg, e, 1);

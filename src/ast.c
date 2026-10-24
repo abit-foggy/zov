@@ -308,6 +308,13 @@ int type_eq(const Type *a, const Type *b)
         return a->count == b->count && type_eq(a->base, b->base);
     case TY_STRUCT:
         return a->name == b->name;
+    case TY_INST:
+        if (a->name != b->name || a->members.len != b->members.len)
+            return 0;
+        for (size_t i = 0; i < a->members.len; i++)
+            if (!type_eq(a->members.items[i], b->members.items[i]))
+                return 0;
+        return 1;
     case TY_ERR:
         return a->name == b->name && type_eq(a->base, b->base);
     case TY_UNION: {
@@ -383,6 +390,17 @@ const char *type_spelling(Type *t)
                                     i ? " | " : "",
                                     type_spelling(t->members.items[i]));
         snprintf(s + off, 256 - off, ")");
+        return s;
+    }
+    case TY_INST: {
+        char *s = zalloc(256);
+        size_t off = 0;
+        off += (size_t)snprintf(s + off, 256 - off, "%s[", t->name);
+        for (size_t i = 0; i < t->members.len; i++)
+            off += (size_t)snprintf(s + off, 256 - off, "%s%s",
+                                    i ? ", " : "",
+                                    type_spelling(t->members.items[i]));
+        snprintf(s + off, 256 - off, "]");
         return s;
     }
     }
