@@ -1,6 +1,6 @@
 CC      ?= cc
 CFLAGS   = -std=c99 -Wall -Wextra -Werror -pedantic -O2 -Iinclude
-SRC      = src/lexer.c src/ast.c src/parser.c src/sema.c src/codegen.c src/driver.c src/main.c
+SRC      = src/lexer.c src/ast.c src/parser.c src/cimport.c src/sema.c src/codegen.c src/driver.c src/main.c
 OBJ      = $(SRC:.c=.o)
 USE_LIBTCC ?= 1
 
