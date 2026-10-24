@@ -1,0 +1,11 @@
+// MUST FAIL: v is freed while the returned slice still borrows it
+use std::vec as vec;
+
+export fn main() i32 = {
+    let mut v = vec::new[i32]();
+    v.push(42);
+    let s = v.as_slice();
+    v.free();
+    println("x=" + s[0usize]);
+    return 0;
+};

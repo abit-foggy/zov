@@ -36,6 +36,8 @@ export fn main() i32 = {
         total = total + x;
     };
     println("slice sum={total}");
+    // NLL: sl's last use is above, so the loan on v has expired here
+    v.push(6);
     v.free();
     return 0;
 };

@@ -106,6 +106,22 @@ static Loan *root_locked(Borrow *b, const char *root)
     return NULL;
 }
 
+static Loan *holder_loan(Borrow *b, const char *holder)
+{
+    for (size_t i = 0; i < b->loans.len; i++)
+        if (b->loans.items[i].active && b->loans.items[i].holder == holder)
+            return &b->loans.items[i];
+    return NULL;
+}
+
+static Loan *root_loan(Borrow *b, const char *root)
+{
+    for (size_t i = 0; i < b->loans.len; i++)
+        if (b->loans.items[i].active && b->loans.items[i].root == root)
+            return &b->loans.items[i];
+    return NULL;
+}
+
 /* Linear types: resource structs, composites over resource fields, unions
  * carrying them, and &mut T bindings. Depth cap guards cyclic placeholders. */
 static int ty_is_move(Borrow *b, Type *t, int depth);
@@ -409,9 +425,12 @@ static void check_root_read(Borrow *b, Expr *e, const char *root)
                root, lk->holder);
 }
 
+static int is_borrowed_view(Type *t);
+static Expr *peel_try_unwrap(Expr *e);
+static void transfer_call_loans(Borrow *b, const char *holder, Expr *rhs);
+
 static void bx_assign(Borrow *b, Expr *e)
-{
-    bx_expr(b, e->u.assign.rhs);
+{    bx_expr(b, e->u.assign.rhs);
     Expr *lhs = e->u.assign.lhs;
     if (lhs->kind == EX_IDENT) {
         BVar *bv = var_find(b, lhs->u.ident);
@@ -426,6 +445,31 @@ static void bx_assign(Borrow *b, Expr *e)
                    "cannot assign to '%s': shared borrow is active",
                    lhs->u.ident);
         bv->moved = 0; /* fresh value: MOVED -> OWNED reinitialization */
+        if (is_borrowed_view(bv->ty)) {
+            Expr *rhs = peel_try_unwrap(e->u.assign.rhs);
+            if (rhs && (rhs->kind == EX_CALL || rhs->kind == EX_SLICE)) {
+                if (rhs->kind == EX_SLICE) {
+                    /* re-slice: provenance follows the new base */
+                    for (size_t i = 0; i < b->loans.len; i++)
+                        if (b->loans.items[i].holder == lhs->u.ident)
+                            b->loans.items[i].active = 0;
+                    const char *root =
+                        resolve_root(b, rhs->u.slice.base);
+                    if (root && !root_locked(b, root)) {
+                        Loan l;
+                        memset(&l, 0, sizeof(l));
+                        l.holder = lhs->u.ident;
+                        l.root = root;
+                        l.exclusive = 0;
+                        l.active = 1;
+                        l.last_use = recorded_last_use(b, lhs->u.ident);
+                        da_push(&b->loans, l);
+                    }
+                } else {
+                    transfer_call_loans(b, lhs->u.ident, rhs);
+                }
+            }
+        }
         return;
     }
     if (lhs->kind == EX_DEREF) {
@@ -485,6 +529,104 @@ static void bx_call(Borrow *b, Expr *e)
     free(temps.items);
 }
 
+/* ---- return provenance: views returned by calls borrow their args ---- */
+
+typedef struct CallRoot {
+    const char *root;
+    int exclusive;
+} CallRoot;
+
+typedef DA(CallRoot) CallRootList;
+
+/* expr? / expr! wrappers keep the underlying call for provenance */
+static Expr *peel_try_unwrap(Expr *e)
+{
+    while (e && (e->kind == EX_TRY || e->kind == EX_UNWRAP))
+        e = e->kind == EX_TRY ? e->u.tryy : e->u.unwrap;
+    return e;
+}
+
+static void push_call_root(CallRootList *roots, const char *root,
+                          int exclusive)
+{
+    if (!root)
+        return;
+    for (size_t i = 0; i < roots->len; i++)
+        if (roots->items[i].root == root) {
+            if (exclusive)
+                roots->items[i].exclusive = 1;
+            return;
+        }
+    CallRoot cr;
+    cr.root = root;
+    cr.exclusive = exclusive;
+    da_push(roots, cr);
+}
+
+/* Roots a callee may have captured into its returned view: borrowed
+ * receiver (&v / &mut v), slice arguments, and reference/slice locals
+ * chained through their own holder loans. */
+static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
+{
+    for (size_t i = 0; i < call->u.call.args.len; i++) {
+        Expr *arg = call->u.call.args.items[i];
+        if (arg->kind == EX_UNARY && arg->u.unary.op == TK_AMP) {
+            push_call_root(roots, resolve_root(b, arg->u.unary.e),
+                           arg->borrow_mut);
+            continue;
+        }
+        if (arg->kind == EX_SLICE) {
+            push_call_root(roots, resolve_root(b, arg->u.slice.base), 0);
+            continue;
+        }
+        if (arg->kind == EX_IDENT) {
+            BVar *bv = var_find(b, arg->u.ident);
+            if (!bv || (bv->ty->kind != TY_REF
+                        && bv->ty->kind != TY_MUTREF
+                        && bv->ty->kind != TY_SLICE))
+                continue;
+            Loan *l = holder_loan(b, arg->u.ident);
+            if (l)
+                push_call_root(roots, l->root, l->exclusive);
+        }
+    }
+}
+
+static int is_borrowed_view(Type *t)
+{
+    /* raw pointers are owned; str stays exempt for ergonomics */
+    return t && (t->kind == TY_REF || t->kind == TY_MUTREF
+                 || t->kind == TY_SLICE);
+}
+
+/* Rebind a borrowed-view binding's loans onto roots borrowed by the
+ * call it is assigned from; earlier holder loans die with the rebind. */
+static void transfer_call_loans(Borrow *b, const char *holder,
+                                Expr *rhs)
+{
+    for (size_t i = 0; i < b->loans.len; i++)
+        if (b->loans.items[i].holder == holder)
+            b->loans.items[i].active = 0;
+    Expr *call = peel_try_unwrap(rhs);
+    if (!call || call->kind != EX_CALL)
+        return;
+    CallRootList roots = {0};
+    extract_call_roots(b, call, &roots);
+    for (size_t i = 0; i < roots.len; i++) {
+        if (root_locked(b, roots.items[i].root))
+            continue;
+        Loan l;
+        memset(&l, 0, sizeof(l));
+        l.holder = holder;
+        l.root = roots.items[i].root;
+        l.exclusive = roots.items[i].exclusive;
+        l.active = 1;
+        l.last_use = recorded_last_use(b, holder);
+        da_push(&b->loans, l);
+    }
+    free(roots.items);
+}
+
 static void bx_expr(Borrow *b, Expr *e)
 {
     if (!e)
@@ -503,6 +645,11 @@ static void bx_expr(Borrow *b, Expr *e)
                 bfatal(e->span,
                        "cannot move '%s': a deferred cleanup still uses it",
                        bv->name);
+            Loan *rl = root_loan(b, bv->name);
+            if (rl)
+                bfatal(e->span,
+                       "cannot move '%s': it is still borrowed by '%s'",
+                       bv->name, rl->holder);
             bv->moved = 1;
             return;
         }
@@ -862,6 +1009,14 @@ static int b_stmt(Borrow *b, Stmt *s)
                 l.last_use = recorded_last_use(b, s->u.let.name);
                 da_push(&b->loans, l);
             }
+        }
+        if (is_borrowed_view(s->u.let.ty)) {
+            /* v.as_slice() and friends: the returned view borrows every
+             * root the callee received, held until this binding's last
+             * lexical use */
+            Expr *call = peel_try_unwrap(init);
+            if (call && call->kind == EX_CALL)
+                transfer_call_loans(b, s->u.let.name, call);
         }
         return 0;
     }
