@@ -1,0 +1,8 @@
+// MUST FAIL: passing nullable *c::FILE into a non-null *T parameter
+use <stdio.h> as c;
+
+export fn main() i32 = {
+    let w: nullable *c::FILE = c::fopen("x.txt", "r");
+    c::fclose(w);
+    return 0;
+};

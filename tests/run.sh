@@ -40,6 +40,24 @@ run_stdout() { # name file expected_stdout_file
 run_exit  01_arith tests/01_arith.zov 42
 run_stdout 02_defer  tests/02_defer.zov  tests/02_defer.expected
 run_stdout 03_ffi    tests/03_ffi.zov    tests/03_ffi.expected
+run_stdout 04_union_try tests/04_union_try.zov tests/04_union_try.expected
+rm -f zov_c_nullable_file.txt
+run_stdout 05_c_nullable_file tests/05_c_nullable_file.zov tests/05_c_nullable_file.expected
+rm -f zov_c_nullable_file.txt
+
+run_neg() { # negative sema case: compilation MUST fail
+    file=$1
+    if $ZOV "$file" -o "$TMP/neg_out" 2> "$TMP/neg.err"; then
+        echo "FAIL: $file (compiled but must be rejected)"
+        fails=$((fails + 1))
+        return
+    fi
+    echo "PASS: $file"
+}
+
+for neg in tests/neg/*.zov; do
+    run_neg "$neg"
+done
 
 if [ "$fails" -ne 0 ]; then
     echo "$fails test(s) failed"

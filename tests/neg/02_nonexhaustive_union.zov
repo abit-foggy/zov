@@ -1,0 +1,11 @@
+// MUST FAIL: match covers only the i32 variant
+export type Eof = !void;
+
+export fn f(x: i32) (i32 | Eof) = { return x; };
+
+export fn main() i32 = {
+    let v: i32 = match (f(0)) {
+        case let n: i32 => n,
+    };
+    return 0;
+};

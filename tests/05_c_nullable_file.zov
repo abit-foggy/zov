@@ -1,0 +1,29 @@
+// nullable *c::FILE narrowing via match, defer-registered fclose
+use <stdio.h> as c;
+
+export fn write_all() i32 = {
+    let w: nullable *c::FILE = c::fopen("zov_c_nullable_file.txt", "w");
+    let wfp: *c::FILE = match (w) {
+        case null => return 1,
+        case let p: *c::FILE => p,
+    };
+    defer c::fclose(wfp);
+    c::fputs("zov", wfp);
+    c::fputc(65, wfp);
+    return 0;
+};
+
+export fn main() i32 = {
+    let rc = write_all();
+    if (rc != 0) { return rc; };
+    let r: nullable *c::FILE = c::fopen("zov_c_nullable_file.txt", "r");
+    let rfp: *c::FILE = match (r) {
+        case null => return 2,
+        case let q: *c::FILE => q,
+    };
+    defer c::fclose(rfp);
+    let b: i32 = c::fgetc(rfp);
+    if (b != 122) { return 3; };
+    c::printf("first byte = %d\n", b);
+    return 0;
+};

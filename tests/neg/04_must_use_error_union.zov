@@ -1,0 +1,9 @@
+// MUST FAIL: discarding an error-carrying union without let _ / ? / match
+export type MyErr = !void;
+
+export fn work(x: i32) (i32 | MyErr) = { return x; };
+
+export fn main() i32 = {
+    work(0);
+    return 0;
+};

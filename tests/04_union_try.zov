@@ -1,0 +1,42 @@
+// custom !void and !i32 error types, ? chaining, LIFO defers, exhaustive match
+use <stdio.h> as c;
+
+export type Eof = !void;
+export type Oops = !void;
+export type ParseFail = !i32;
+
+export fn read_num(flag: i32) (i32 | Eof | Oops) = {
+    defer c::puts("read-enter");
+    if (flag == 0) { return 42; };
+    if (flag == 1) { return Eof; };
+    return Oops;
+};
+
+export fn passthrough(flag: i32) (i32 | Eof | Oops) = {
+    let n = read_num(flag)?;
+    return n + 100;
+};
+
+export fn with_payload(flag: i32) (i32 | ParseFail | Eof | Oops) = {
+    let n = passthrough(flag)?;
+    return n;
+};
+
+export fn classify(v: (i32 | Eof | Oops)) i32 = {
+    let n: i32 = match (v) {
+        case let x: i32 => x,
+        case Eof => return -1,
+        case Oops => return -2,
+    };
+    return n;
+};
+
+export fn main() i32 = {
+    let va = classify(passthrough(0));
+    let vb = classify(passthrough(1));
+    let vc = classify(passthrough(2));
+    c::printf("va=%d vb=%d vc=%d\n", va, vb, vc);
+    let p = with_payload(0)!;
+    c::printf("p=%d\n", p);
+    return 0;
+};

@@ -1,0 +1,10 @@
+// MUST FAIL: nullable match without the null arm
+use <stdio.h> as c;
+
+export fn main() i32 = {
+    let w: nullable *c::FILE = c::fopen("x.txt", "r");
+    let p: *c::FILE = match (w) {
+        case let q: *c::FILE => q,
+    };
+    return 0;
+};
