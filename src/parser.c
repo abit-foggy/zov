@@ -198,8 +198,8 @@ static Type *parse_type(Parser *p)
 /* ---- expressions ---- */
 
 static Expr *parse_expr(Parser *p);
-
-/* Arm jump bodies never consume ';': the arm ends at ',' or '}'. */
+static Block *parse_block(Parser *p);
+static Stmt *parse_stmt(Parser *p);
 static Stmt *parse_arm_jump(Parser *p, Span sp)
 {
     if (at(p, TK_RETURN)) {
@@ -256,6 +256,10 @@ static Expr *parse_match(Parser *p)
         expect(p, TK_FATARROW, "'=>' in match arm");
         if (at(p, TK_RETURN) || at(p, TK_BREAK) || at(p, TK_CONTINUE)) {
             arm.jump = parse_arm_jump(p, tok(p)->span);
+        } else if (at(p, TK_LBRACE)) {
+            // block-bodied arm: legal in statement matches only
+            arm.jump = stmt_new(ST_BLOCK, tok(p)->span);
+            arm.jump->u.block = parse_block(p);
         } else {
             arm.val = parse_expr(p);
         }
@@ -620,10 +624,8 @@ static Stmt *parse_stmt(Parser *p)
     }
     case TK_FOR:
     case TK_ENUM:
-    case TK_MATCH:
-        fatal_at(sp, "'%s' is not supported in v0.1",
-                 kind(p) == TK_FOR ? "for" : kind(p) == TK_ENUM ? "enum"
-                                                               : "match");
+        fatal_at(sp, "'%s' is not supported in v0.2",
+                 kind(p) == TK_FOR ? "for" : "enum");
         return NULL;
     default: {
         Stmt *s = stmt_new(ST_EXPR, sp);

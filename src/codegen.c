@@ -79,14 +79,21 @@ typedef struct DeferEntry {
 } DeferEntry;
 
 typedef struct CG {
-    Buf head; /* includes, typedefs, prototypes */
+    Buf head; /* includes, struct typedefs */
+    Buf protos; /* function prototypes (after union typedefs) */
     Buf body; /* function definitions */
     Buf *cur; /* active emission target */
     DA(DeferEntry) defers;
-    DA(size_t) loop_marks;
+    DA(size_t) loop_marks; /* defer-stack base per active loop */
+    DA(int) loop_ids;      /* label id per active loop */
     int terminated; /* current block ended in an unconditional jump */
     DA(Type *) slices;
+    DA(Type *) unions;
     int needs_bounds;
+    int needs_abort;
+    Type *fn_ret;    /* enclosing function return type */
+    int switch_depth; /* lowered match switch nesting */
+    int tmp_id;       /* unique temp/label counter */
 } CG;
 
 /* ---- mangling ---- */
@@ -140,6 +147,35 @@ static const char *slice_name(CG *cg, Type *base)
     return s;
 }
 
+/* Tagged unions register deterministically: tag == member index. */
+static const char *union_name(CG *cg, Type *u)
+{
+    for (size_t i = 0; i < cg->unions.len; i++)
+        if (type_eq(cg->unions.items[i], u)) {
+            char *s = zalloc(32);
+            snprintf(s, 32, "zov_union_%lu", (unsigned long)i);
+            return s;
+        }
+    da_push(&cg->unions, u);
+    char *s = zalloc(32);
+    snprintf(s, 32, "zov_union_%lu", (unsigned long)(cg->unions.len - 1));
+    return s;
+}
+
+static int member_has_payload(Type *m)
+{
+    return m->kind != TY_VOID && !(m->kind == TY_ERR
+                                   && m->base->kind == TY_VOID);
+}
+
+static Type *union_ok_member(Type *u)
+{
+    for (size_t i = 0; i < u->members.len; i++)
+        if (!u->members.items[i]->is_error)
+            return u->members.items[i];
+    return NULL;
+}
+
 static const char *c_type(CG *cg, Type *t)
 {
     switch (t->kind) {
@@ -159,6 +195,11 @@ static const char *c_type(CG *cg, Type *t)
     case TY_BOOL: return "bool";
     case TY_CHAR: return "uint32_t";
     case TY_STR: return "zov_str";
+    case TY_ERR:
+        /* error payloads lower to their storage type */
+        return t->base->kind == TY_VOID ? "uint8_t" : c_type(cg, t->base);
+    case TY_UNION:
+        return union_name(cg, t);
     case TY_PTR:
     case TY_REF:
     case TY_MUTREF: {
@@ -172,6 +213,8 @@ static const char *c_type(CG *cg, Type *t)
     case TY_ARRAY:
         return c_type(cg, t->base);
     case TY_STRUCT:
+        if (t->c_name)
+            return t->c_name; /* imported C type: emit verbatim */
         return mangle_type(t->name);
     default:
         fatal("cannot emit type %s", type_spelling(t));
@@ -221,6 +264,138 @@ static void emit_zov_str(Buf *b, const char *s, size_t len)
 
 static void emit_expr(CG *cg, Expr *e, int cstr);
 
+static void emit_expr(CG *cg, Expr *e, int cstr);
+static int emit_block(CG *cg, Block *blk);
+static int emit_stmt(CG *cg, Stmt *s);
+static void emit_defers_down_to(CG *cg, size_t base);
+
+static int cg_union_idx(Type *u, Type *m)
+{
+    for (size_t i = 0; i < u->members.len; i++) {
+        Type *x = u->members.items[i];
+        if (x->kind == TY_ERR && m->kind == TY_ERR && x->name == m->name)
+            return (int)i;
+        if (type_eq(x, m))
+            return (int)i;
+    }
+    return -1;
+}
+
+/* Resolve a pattern arm to its union member; NULL for null/wildcards. */
+static Type *arm_member(Type *st, MatchArm *a)
+{
+    for (size_t k = 0; k < st->members.len; k++) {
+        Type *m = st->members.items[k];
+        if (a->kind == PAT_TYPE_VAL) {
+            if (m->kind == TY_ERR && m->name == a->name)
+                return m;
+            if (zstr_eq(type_spelling(m), a->name))
+                return m;
+        } else if (a->kind == PAT_TYPE_BIND && type_eq(m, a->ty)) {
+            return m;
+        }
+    }
+    return NULL;
+}
+
+static void emit_arm_body(CG *cg, MatchArm *a, const char *res)
+{
+    if (a->jump) {
+        emit_stmt(cg, a->jump);
+        return;
+    }
+    if (res)
+        buf_printf(&*cg->cur, "%s = ", res);
+    emit_expr(cg, a->val, 0);
+    buf_puts(&*cg->cur, ";\n");
+}
+
+static void emit_union_cases(CG *cg, Expr *e, int id, const char *res)
+{
+    Buf *b = &*cg->cur;
+    Type *st = e->u.match.scrutinee->type;
+    buf_printf(b, "%s _m%d = (", union_name(cg, st), id);
+    emit_expr(cg, e->u.match.scrutinee, 0);
+    buf_printf(b, "); switch (_m%d.tag) {\n", id);
+    for (size_t i = 0; i < e->u.match.arms.len; i++) {
+        MatchArm *a = &e->u.match.arms.items[i];
+        Type *m = arm_member(st, a);
+        if (a->kind == PAT_WILDCARD) {
+            buf_printf(b, "default: {\n");
+        } else {
+            int idx = cg_union_idx(st, m);
+            buf_printf(b, "case %du: {\n", idx);
+            if (a->kind == PAT_TYPE_BIND && a->name) {
+                emit_var(b, cg, a->ty, mangle_local(a->name));
+                buf_printf(b, " = _m%d.u.v%d;\n", id, idx);
+            }
+        }
+        emit_arm_body(cg, a, res);
+        buf_printf(b, "} break;\n");
+    }
+    buf_printf(b, "}\n");
+}
+
+static void emit_nullable_cases(CG *cg, Expr *e, int id, const char *res)
+{
+    Buf *b = &*cg->cur;
+    Type *st = e->u.match.scrutinee->type;
+    buf_printf(b, "%s *_m%d = (", c_type(cg, st->base), id);
+    emit_expr(cg, e->u.match.scrutinee, 0);
+    buf_printf(b, "); if (_m%d == NULL) {\n", id);
+    for (size_t i = 0; i < e->u.match.arms.len; i++) {
+        MatchArm *a = &e->u.match.arms.items[i];
+        if (a->kind == PAT_NULL) {
+            emit_arm_body(cg, a, res);
+            break;
+        }
+    }
+    buf_printf(b, "} else {\n");
+    for (size_t i = 0; i < e->u.match.arms.len; i++) {
+        MatchArm *a = &e->u.match.arms.items[i];
+        if (a->kind == PAT_TYPE_BIND && a->name) {
+            emit_var(b, cg, a->ty, mangle_local(a->name));
+            buf_printf(b, " = _m%d;\n", id);
+            emit_arm_body(cg, a, res);
+            break;
+        }
+    }
+    buf_printf(b, "}\n");
+}
+
+/* GNU statement-expressions keep every lowering expression-local; the
+ * match result rides through a block-local temp when used as a value. */
+static void emit_match(CG *cg, Expr *e, int want_value)
+{
+    Type *st = e->u.match.scrutinee->type;
+    int id = cg->tmp_id++;
+    Buf *b = &*cg->cur;
+    int as_value = want_value && e->type && e->type->kind != TY_VOID;
+    cg->switch_depth++;
+    if (as_value) {
+        char res[24];
+        snprintf(res, sizeof(res), "_zv_mres%d", id);
+        /* result temp lives inside the statement-expression so the whole
+         * match nests cleanly in any initializer or argument position */
+        buf_printf(b, "({\n");
+        emit_var(b, cg, e->type, res);
+        buf_puts(b, ";\n");
+        if (st->kind == TY_UNION)
+            emit_union_cases(cg, e, id, res);
+        else
+            emit_nullable_cases(cg, e, id, res);
+        buf_printf(b, "%s; })\n", res);
+    } else {
+        buf_puts(b, "{\n");
+        if (st->kind == TY_UNION)
+            emit_union_cases(cg, e, id, NULL);
+        else
+            emit_nullable_cases(cg, e, id, NULL);
+        buf_puts(b, "}\n");
+    }
+    cg->switch_depth--;
+}
+
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
@@ -234,7 +409,16 @@ static void emit_call(CG *cg, Expr *e)
     for (size_t i = 0; i < e->u.call.args.len; i++) {
         if (i)
             buf_puts(&*cg->cur, ", ");
-        emit_expr(cg, e->u.call.args.items[i], extern_cstr);
+        Expr *arg = e->u.call.args.items[i];
+        if (extern_cstr && arg->type && arg->type->kind == TY_STR
+            && arg->kind != EX_STR) {
+            // str value into a char* param: pass the fat pointer's data
+            buf_puts(&*cg->cur, "(");
+            emit_expr(cg, arg, 0);
+            buf_puts(&*cg->cur, ").data");
+        } else {
+            emit_expr(cg, arg, extern_cstr);
+        }
     }
     buf_puts(&*cg->cur, ")");
 }
@@ -353,11 +537,73 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         fatal("generic instantiation is not supported in v0.1");
         break;
     case EX_MATCH:
-    case EX_TRY:
-    case EX_UNWRAP:
-    case EX_COERCE:
-        fatal("match/?/ lowering not implemented yet (v0.2 milestone 5)");
+        emit_match(cg, e, 1);
         break;
+    case EX_TRY: {
+        Type *t = e->u.tryy->type;
+        int id = cg->tmp_id++;
+        if (t->kind == TY_UNION) {
+            const char *un = union_name(cg, t);
+            buf_printf(b, "({ %s _q%d = (", un, id);
+            emit_expr(cg, e->u.tryy, 0);
+            buf_printf(b, ");\n");
+            for (size_t i = 0; i < t->members.len; i++) {
+                Type *m = t->members.items[i];
+                if (!m->is_error)
+                    continue;
+                buf_printf(b, "if (_q%d.tag == %luu) {\n", id, (unsigned long)i);
+                // reuse the lexical defer stack: errors unroll LIFO
+                emit_defers_down_to(cg, 0);
+                Type *rt = cg->fn_ret;
+                int ridx = rt ? cg_union_idx(rt, m) : -1;
+                buf_printf(b, "return ((%s){ %du", union_name(cg, rt), ridx);
+                if (member_has_payload(m))
+                    buf_printf(b, ", _q%d.u.v%lu", id, (unsigned long)i);
+                buf_printf(b, " });\n}\n");
+            }
+            buf_printf(b, "_q%d.u.v%d; })", id,
+                       cg_union_idx(t, union_ok_member(t)));
+        } else {
+            buf_printf(b, "({ %s *_q%d = (", c_type(cg, t->base), id);
+            emit_expr(cg, e->u.tryy, 0);
+            buf_printf(b, "); if (_q%d == NULL) {\n", id);
+            emit_defers_down_to(cg, 0);
+            buf_printf(b, "return NULL;\n}\n_q%d; })", id);
+        }
+        break;
+    }
+    case EX_UNWRAP: {
+        cg->needs_abort = 1;
+        Type *t = e->u.unwrap->type;
+        int id = cg->tmp_id++;
+        if (t->kind == TY_UNION) {
+            const char *un = union_name(cg, t);
+            buf_printf(b, "({ %s _u%d = (", un, id);
+            emit_expr(cg, e->u.unwrap, 0);
+            buf_printf(b, "); if (_u%d.tag != %du) { abort(); }\n", id,
+                       cg_union_idx(t, union_ok_member(t)));
+            buf_printf(b, "_u%d.u.v%d; })", id,
+                       cg_union_idx(t, union_ok_member(t)));
+        } else {
+            buf_printf(b, "({ %s *_u%d = (", c_type(cg, t->base), id);
+            emit_expr(cg, e->u.unwrap, 0);
+            buf_printf(b, "); if (_u%d == NULL) { abort(); }\n", id);
+            buf_printf(b, "_u%d; })", id);
+        }
+        break;
+    }
+    case EX_COERCE: {
+        Type *u = e->u.coerce.target;
+        Type *m = e->u.coerce.e->type;
+        int idx = cg_union_idx(u, m);
+        buf_printf(b, "((%s){ %du", union_name(cg, u), idx);
+        if (member_has_payload(m)) {
+            buf_puts(b, ", ");
+            emit_expr(cg, e->u.coerce.e, 0);
+        }
+        buf_printf(b, " })");
+        break;
+    }
     }
 }
 
@@ -426,10 +672,16 @@ static int emit_stmt(CG *cg, Stmt *s)
         buf_puts(&*cg->cur, "while (");
         emit_expr(cg, s->u.whilee.cond, 0);
         buf_puts(&*cg->cur, ") {\n");
+        int id = cg->tmp_id++;
         da_push(&cg->loop_marks, cg->defers.len);
+        da_push(&cg->loop_ids, id);
         emit_block(cg, s->u.whilee.body);
         cg->loop_marks.len--;
+        cg->loop_ids.len--;
+        // labeled exits let break/continue jump out of lowered switches
+        buf_printf(&*cg->cur, "zov_cont_%d: ;\n", id);
         buf_puts(&*cg->cur, "}\n");
+        buf_printf(&*cg->cur, "zov_brk_%d: ;\n", id);
         return 0;
     }
     case ST_RETURN: {
@@ -443,17 +695,32 @@ static int emit_stmt(CG *cg, Stmt *s)
     }
     case ST_BREAK: {
         emit_defers_down_to(cg, cg->loop_marks.items[cg->loop_marks.len - 1]);
-        buf_puts(&*cg->cur, "break;\n");
+        if (cg->switch_depth > 0) {
+            // plain break would only exit the lowered match switch
+            buf_printf(&*cg->cur, "goto zov_brk_%d;\n",
+                       cg->loop_ids.items[cg->loop_ids.len - 1]);
+        } else {
+            buf_puts(&*cg->cur, "break;\n");
+        }
         cg->terminated = 1;
         return 1;
     }
     case ST_CONTINUE: {
         emit_defers_down_to(cg, cg->loop_marks.items[cg->loop_marks.len - 1]);
-        buf_puts(&*cg->cur, "continue;\n");
+        if (cg->switch_depth > 0)
+            buf_printf(&*cg->cur, "goto zov_cont_%d;\n",
+                       cg->loop_ids.items[cg->loop_ids.len - 1]);
+        else
+            buf_puts(&*cg->cur, "continue;\n");
         cg->terminated = 1;
         return 1;
     }
     case ST_EXPR:
+        if (s->u.expr->kind == EX_MATCH) {
+            // statement-position match: switch lowering without result
+            emit_match(cg, s->u.expr, 0);
+            return 0;
+        }
         emit_expr(cg, s->u.expr, 0);
         buf_puts(&*cg->cur, ";\n");
         return 0;
@@ -506,7 +773,7 @@ static void emit_params(CG *cg, Decl *d)
 static void emit_fn(CG *cg, Decl *d, int proto_only)
 {
     if (proto_only) {
-        cg->cur = &cg->head;
+        cg->cur = &cg->protos;
         emit_var(&*cg->cur, cg, d->u.fn.ret, mangle_fn(d->u.fn.name));
         buf_puts(&*cg->cur, "(");
         emit_params(cg, d);
@@ -520,7 +787,10 @@ static void emit_fn(CG *cg, Decl *d, int proto_only)
     emit_params(cg, d);
     buf_puts(&*cg->cur, ")\n{\n");
     cg->defers.len = 0;
+    cg->fn_ret = d->u.fn.ret;
+    cg->switch_depth = 0;
     int term = emit_block(cg, d->u.fn.body);
+    cg->fn_ret = NULL;
     if (d->u.fn.ret->kind != TY_VOID && !term)
         buf_puts(&*cg->cur, "return 0;\n");
     buf_puts(&*cg->cur, "}\n\n");
@@ -545,8 +815,8 @@ char *codegen_generate(Program *prog)
 
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind != DL_TYPE)
-            continue;
+        if (d->kind != DL_TYPE || d->u.type.alias_ty)
+            continue; /* alias/error decls lower to no C definition */
         cg->cur = &cg->head;
         buf_printf(&*cg->cur, "typedef struct {\n");
         for (size_t j = 0; j < d->u.type.fields.len; j++) {
@@ -590,6 +860,28 @@ char *codegen_generate(Program *prog)
         buf_printf(&out, "%lu", (unsigned long)i);
         buf_puts(&out, ";\n");
     }
+    if (cg->needs_abort)
+        buf_puts(&out, "#include <stdlib.h>\n");
+    for (size_t i = 0; i < cg->unions.len; i++) {
+        Type *u = cg->unions.items[i];
+        buf_printf(&out, "typedef struct { uint32_t tag;");
+        int any_field = 0;
+        for (size_t k = 0; k < u->members.len; k++)
+            if (member_has_payload(u->members.items[k]))
+                any_field = 1;
+        if (any_field) {
+            buf_puts(&out, " union {");
+            for (size_t k = 0; k < u->members.len; k++)
+                if (member_has_payload(u->members.items[k])) {
+                    buf_puts(&out, " ");
+                    emit_var(&out, cg, u->members.items[k], "");
+                    buf_printf(&out, "v%lu;", (unsigned long)k);
+                }
+            buf_puts(&out, " } u;");
+        }
+        buf_printf(&out, " } zov_union_%lu;\n", (unsigned long)i);
+    }
+    buf_puts(&out, cg->protos.data);
     buf_puts(&out, cg->body.data);
     char *result = malloc(out.len + 1);
     if (!result)
@@ -597,6 +889,7 @@ char *codegen_generate(Program *prog)
     memcpy(result, out.data, out.len + 1);
     free(out.data);
     free(cg->head.data);
+    free(cg->protos.data);
     free(cg->body.data);
     return result;
 }

@@ -150,12 +150,17 @@ static Type *resolve_type(Sema *se, Type *t)
         return t;
     switch (t->kind) {
     case TY_STRUCT: {
-        if (!strstr(t->name, "::"))
-            return t; /* local struct decls already carry their identity */
-        Type *r = resolve_ns_type(se, t->name);
-        if (!r)
-            fatal("unknown imported type '%s'", t->name);
-        return r;
+        if (strstr(t->name, "::")) {
+            Type *r = resolve_ns_type(se, t->name);
+            if (!r)
+                fatal("unknown imported type '%s'", t->name);
+            return r;
+        }
+        /* named aliases: !T error types and unions registered earlier */
+        Sym *sym = scope_find(se->scope, t->name);
+        if (sym && sym->kind == SYM_TYPE && sym->type && sym->type != t)
+            return sym->type;
+        return t;
     }
     case TY_PTR:
         return type_ptr(resolve_type(se, t->base), t->nullable);
@@ -206,6 +211,7 @@ static Expr *maybe_coerce(Expr *e, Type *target)
     Expr *c = expr_new(EX_COERCE, e->span);
     c->u.coerce.e = e;
     c->u.coerce.target = target;
+    c->type = target; /* already type-checked as a member above */
     return c;
 }
 
