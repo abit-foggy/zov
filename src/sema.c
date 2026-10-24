@@ -586,6 +586,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Type *t = check_expr(se, e->u.field.base, NULL);
         if (is_unknown(t))
             return unknown();
+        /* references auto-deref for field access */
+        while (t && (t->kind == TY_REF || t->kind == TY_MUTREF)) {
+            e->via_ref = 1;
+            t = t->base;
+        }
         if (t->kind != TY_STRUCT || !t->name)
             fatal_at(e->span, "%s has no fields", type_spelling(t));
         Decl *d = find_struct_decl(se, t->name);

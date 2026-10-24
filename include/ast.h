@@ -147,6 +147,7 @@ typedef struct Expr {
                  DA(Type *) targs; } stlit;
     } u;
     int borrow_mut; /* &mut in EX_UNARY AMP */
+    int via_ref;    /* EX_FIELD reached through a reference: emit '->' */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);

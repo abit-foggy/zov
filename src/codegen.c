@@ -544,7 +544,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     case EX_FIELD:
         buf_puts(b, "(");
         emit_expr(cg, e->u.field.base, 0);
-        buf_printf(b, ").%s", mangle_local(e->u.field.name));
+        buf_printf(b, ")%s%s", e->via_ref ? "->" : ".",
+                   mangle_local(e->u.field.name));
         break;
     case EX_STRUCT_LIT:
         buf_printf(b, "((%s){ ", c_type(cg, e->type));

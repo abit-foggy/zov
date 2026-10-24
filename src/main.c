@@ -27,6 +27,7 @@
 #include "driver.h"
 #include "parser.h"
 #include "sema.h"
+#include "borrow.h"
 #include "codegen.h"
 
 static char *read_file(const char *path)
@@ -113,6 +114,7 @@ int main(int argc, char **argv)
     Program prog = {0};
     parse_program(src, file, &prog);
     sema_check(&prog);
+    borrow_check(&prog);
     char *c_src = codegen_generate(&prog);
     int rc = driver_compile(c_src, out, emit_c, force_cc);
     free(c_src);
