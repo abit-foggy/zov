@@ -502,8 +502,18 @@ static void bx_expr(Borrow *b, Expr *e)
     }
     case EX_FIELD: {
         const char *root = resolve_root(b, e);
-        if (root)
+        if (root) {
+            /* reading a field is a use of the root, never a move of it */
             check_root_read(b, e, root);
+            Expr *base = e->u.field.base;
+            while (base && base->kind == EX_FIELD)
+                base = base->u.field.base;
+            if (base && base->kind == EX_DEREF)
+                base = base->u.deref;
+            if (base && base->kind != EX_IDENT)
+                bx_expr(b, base);
+            return;
+        }
         bx_expr(b, e->u.field.base);
         return;
     }

@@ -91,6 +91,8 @@ typedef struct CG {
     DA(Type *) unions;
     int needs_bounds;
     int needs_abort;
+    int needs_io;   /* print/println or str-concat emission */
+    int needs_utf8; /* char formatting helper */
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
     int tmp_id;       /* unique temp/label counter */
@@ -236,6 +238,8 @@ static void emit_str_lit(Buf *b, const char *s, size_t len)
     buf_puts(b, "\"");
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
+        if (c == '\x01')
+            c = '{'; /* '\{' marker from the lexer */
         switch (c) {
         case '\n': buf_puts(b, "\\n"); break;
         case '\t': buf_puts(b, "\\t"); break;
@@ -260,6 +264,22 @@ static void emit_zov_str(Buf *b, const char *s, size_t len)
     buf_printf(b, ", %luu }", (unsigned long)len);
 }
 
+/* '\{' marker from the lexer decodes back to a literal '{' in C text */
+
+/* str-concat flattening: left-assoc '+' chains over str collapse into an
+ * ordered segment list before any I/O is emitted */
+static void flatten_concat(CG *cg, Expr *e, ExprList *segs)
+{
+    (void)cg;
+    if (e->kind == EX_BINARY && e->u.binary.op == TK_PLUS && e->type
+        && e->type->kind == TY_STR) {
+        flatten_concat(cg, e->u.binary.lhs, segs);
+        flatten_concat(cg, e->u.binary.rhs, segs);
+        return;
+    }
+    da_push(segs, e);
+}
+
 /* ---- expressions ---- */
 
 static void emit_expr(CG *cg, Expr *e, int cstr);
@@ -268,6 +288,332 @@ static void emit_expr(CG *cg, Expr *e, int cstr);
 static int emit_block(CG *cg, Block *blk);
 static int emit_stmt(CG *cg, Stmt *s);
 static void emit_defers_down_to(CG *cg, size_t base);
+
+/* pure segment: safe to evaluate twice (nullable/char always hoist) */
+static int seg_is_trivial(Expr *e)
+{
+    switch (e->kind) {
+    case EX_STR: case EX_INT: case EX_FLOAT: case EX_BOOL: case EX_CHAR:
+    case EX_NULL: case EX_IDENT: case EX_NS_IDENT: case EX_FIELD:
+    case EX_DEREF:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void append_fmt_str(Buf *b, const char *s, size_t len)
+{
+    /* decoded bytes into printf format text: '%' doubles */
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (c == '%') {
+            buf_puts(b, "%%");
+            continue;
+        }
+        if (c == '\x01')
+            c = '{'; /* escaped '\{' marker */
+        switch (c) {
+        case '\n': buf_puts(b, "\\n"); break;
+        case '\t': buf_puts(b, "\\t"); break;
+        case '\r': buf_puts(b, "\\r"); break;
+        case '"': buf_puts(b, "\\\""); break;
+        case '\\': buf_puts(b, "\\\\"); break;
+        default:
+            if (c >= 32 && c < 127)
+                buf_printf(b, "%c", c);
+            else
+                buf_printf(b, "\\%03o", (unsigned char)c);
+        }
+    }
+}
+
+static const char *int_spec(TypeKind k)
+{
+    switch (k) {
+    case TY_I8: case TY_I16: case TY_I32: return "PRId32";
+    case TY_I64: case TY_ISIZE: return "PRId64";
+    case TY_U8: case TY_U16: case TY_U32: return "PRIu32";
+    default: return "PRIu64";
+    }
+}
+
+/* one prepared output unit: temps hoist side effects in order */
+typedef struct PSeg {
+    Expr *e;
+    int tmp;      /* value lives in _p<tmp> */
+    int char_tmp; /* utf8 bytes in _c<char_tmp>, length _cl<char_tmp> */
+    int nul_tmp;  /* nullable pointer lives in _p<nul_tmp> */
+} PSeg;
+
+static void prepare_seg(CG *cg, Expr *e, PSeg *ps, Buf *pre)
+{
+    memset(ps, 0, sizeof(*ps));
+    ps->e = e;
+    Type *t = e->type;
+    int hoist = !seg_is_trivial(e);
+    if (t->kind == TY_CHAR)
+        hoist = 1; /* encode order must precede all I/O calls */
+    if (t->kind == TY_PTR && t->nullable)
+        hoist = 1; /* the null check reads the value twice */
+    if (t->kind == TY_STR && e->kind != EX_STR)
+        hoist = 1; /* .len/.data would evaluate the expr twice */
+    if (!hoist)
+        return;
+    ps->tmp = ++cg->tmp_id;
+    Buf *saved = cg->cur; /* segment exprs stream into the pre buffer */
+    cg->cur = pre;
+    if (t->kind == TY_CHAR) {
+        cg->needs_utf8 = 1;
+        buf_printf(pre, "uint32_t _p%d = (uint32_t)(", ps->tmp);
+        emit_expr(cg, e, 0);
+        buf_printf(pre, ");\n");
+        ps->char_tmp = ps->tmp;
+        buf_printf(pre, "char _c%d[5]; int _cl%d = zov_utf8(_c%d, _p%d);\n",
+                   ps->tmp, ps->tmp, ps->tmp, ps->tmp);
+        cg->cur = saved;
+        return;
+    }
+    if (t->kind == TY_PTR && t->nullable) {
+        ps->nul_tmp = ps->tmp;
+        buf_printf(pre, "%s *_p%d = (", c_type(cg, t), ps->tmp);
+        emit_expr(cg, e, 0);
+        buf_printf(pre, ");\n");
+        cg->cur = saved;
+        return;
+    }
+    buf_printf(pre, "%s _p%d = (", c_type(cg, t), ps->tmp);
+    emit_expr(cg, e, 0);
+    buf_printf(pre, ");\n");
+    cg->cur = saved;
+}
+
+static void emit_prepared_out(CG *cg, PSeg *ps)
+{
+    Buf *b = &*cg->cur;
+    Expr *e = ps->e;
+    Type *t = e->type;
+    if (e->kind == EX_STR) {
+        buf_puts(b, "fwrite(");
+        emit_str_lit(b, e->u.slit.v, e->u.slit.len);
+        buf_printf(b, ", 1, %luu, stdout);\n",
+                   (unsigned long)e->u.slit.len);
+        return;
+    }
+    if (ty_is_num(t->kind)) {
+        if (ty_is_float(t->kind)) {
+            buf_puts(b, "fprintf(stdout, \"%g\", (double)(");
+        } else {
+            buf_printf(b, "fprintf(stdout, \"%%\" %s, (%s)(", int_spec(t->kind),
+                       c_type(cg, t));
+        }
+        if (ps->tmp)
+            buf_printf(b, "_p%d", ps->tmp);
+        else
+            emit_expr(cg, e, 0);
+        buf_puts(b, "));\n");
+        return;
+    }
+    if (t->kind == TY_BOOL) {
+        buf_puts(b, "fprintf(stdout, \"%s\", (");
+        if (ps->tmp)
+            buf_printf(b, "_p%d", ps->tmp);
+        else
+            emit_expr(cg, e, 0);
+        buf_puts(b, ") ? \"true\" : \"false\");\n");
+        return;
+    }
+    if (t->kind == TY_CHAR) {
+        buf_printf(b, "fprintf(stdout, \"%%.*s\", _cl%d, _c%d);\n",
+                   ps->char_tmp, ps->char_tmp);
+        return;
+    }
+    if (t->kind == TY_STR) {
+        buf_printf(b, "fprintf(stdout, \"%%.*s\", (int)_p%d.len, _p%d.data);\n",
+                   ps->tmp, ps->tmp);
+        return;
+    }
+    if (t->kind == TY_PTR && t->nullable) {
+        buf_printf(b, "if (_p%d == NULL) {\n", ps->nul_tmp);
+        buf_puts(b, "fprintf(stdout, \"null\");\n");
+        buf_printf(b, "} else {\n");
+        buf_printf(b, "fprintf(stdout, \"%%p\", (void *)_p%d);\n}\n",
+                   ps->nul_tmp);
+        return;
+    }
+    if (t->kind == TY_PTR) {
+        buf_puts(b, "fprintf(stdout, \"%p\", (void *)(");
+        if (ps->tmp)
+            buf_printf(b, "_p%d", ps->tmp);
+        else
+            emit_expr(cg, e, 0);
+        buf_puts(b, "));\n");
+        return;
+    }
+    fatal("internal: unprintable segment reached codegen");
+}
+
+/* Case A: stream flattening; temps hoisted so side effects run first */
+static void emit_print(CG *cg, Expr *e, int newline)
+{
+    cg->needs_io = 1;
+    Buf *b = &*cg->cur;
+    ExprList segs = {0};
+    for (size_t i = 0; i < e->u.call.args.len; i++)
+        flatten_concat(cg, e->u.call.args.items[i], &segs);
+    struct { PSeg *items; size_t len, cap; } ps = {0};
+    Buf pre = {0};
+    for (size_t i = 0; i < segs.len; i++) {
+        PSeg one;
+        prepare_seg(cg, segs.items[i], &one, &pre);
+        da_push(&ps, one);
+    }
+    buf_puts(b, "{\n");
+    if (pre.len)
+        buf_puts(b, pre.data);
+    for (size_t i = 0; i < ps.len; i++)
+        emit_prepared_out(cg, &ps.items[i]);
+    if (newline)
+        buf_puts(b, "fprintf(stdout, \"\\n\");\n");
+    buf_puts(b, "}\n");
+    free(segs.items);
+    free(ps.items);
+    free(pre.data);
+}
+
+/* Case B: standalone str value rides a frame-local scratch buffer */
+static void emit_str_value(CG *cg, Expr *e)
+{
+    cg->needs_io = 1;
+    Buf *b = &*cg->cur;
+    ExprList segs = {0};
+    flatten_concat(cg, e, &segs);
+    struct { PSeg *items; size_t len, cap; } ps = {0};
+    Buf pre = {0};
+    Buf txt = {0};   /* pending literal text */
+    Buf args = {0};
+    char texts[128][64]; /* text chunk per 'T' piece */
+    char macros[128][16]; /* macro name per 'S' piece */
+    char pieces[128];
+    size_t npieces = 0;
+    for (size_t i = 0; i < segs.len; i++) {
+        Expr *seg = segs.items[i];
+        PSeg one;
+        prepare_seg(cg, seg, &one, &pre);
+        da_push(&ps, one);
+        if (seg->kind == EX_STR) {
+            append_fmt_str(&txt, seg->u.slit.v, seg->u.slit.len);
+            continue;
+        }
+        Type *t = seg->type;
+        if (ty_is_num(t->kind)) {
+            if (ty_is_float(t->kind)) {
+                buf_puts(&txt, "%g");
+                buf_puts(&args, ", (double)(");
+            } else {
+                /* inttypes macros splice outside the literal: the '%' of
+                 * the conversion stays inside the preceding text chunk */
+                buf_puts(&txt, "%");
+                if (npieces < 128) {
+                    snprintf(texts[npieces], 64, "%s",
+                             txt.len ? txt.data : "");
+                    pieces[npieces++] = 'T';
+                }
+                if (npieces < 128) {
+                    snprintf(macros[npieces], 16, "%s", int_spec(t->kind));
+                    pieces[npieces++] = 'S';
+                }
+                txt.len = 0;
+                if (txt.data)
+                    txt.data[0] = '\0';
+                buf_printf(&args, ", (%s)(", c_type(cg, t));
+            }
+        } else if (t->kind == TY_BOOL) {
+            buf_puts(&txt, "%s");
+            buf_puts(&args, ", ((");
+        } else if (t->kind == TY_CHAR) {
+            buf_puts(&txt, "%.*s");
+            buf_printf(&args, ", _cl%d, _c%d", one.char_tmp, one.char_tmp);
+            continue;
+        } else if (t->kind == TY_STR) {
+            buf_puts(&txt, "%.*s");
+            buf_printf(&args, ", (int)_p%d.len, _p%d.data", one.tmp,
+                       one.tmp);
+            continue;
+        } else if (t->kind == TY_PTR && t->nullable) {
+            /* print "null" or the address without double evaluation */
+            buf_printf(&pre, "char _pb%d[32]; int _pn%d;\n", one.nul_tmp,
+                       one.nul_tmp);
+            buf_printf(&pre, "if (_p%d == NULL) { _pn%d = -1; }\n"
+                             "else { _pn%d = snprintf(_pb%d, sizeof(_pb%d), "
+                             "\"%%p\", (void *)_p%d); }\n",
+                       one.nul_tmp, one.nul_tmp, one.nul_tmp, one.nul_tmp,
+                       one.nul_tmp, one.nul_tmp);
+            buf_puts(&txt, "%.*s");
+            buf_printf(&args,
+                       ", (_pn%d < 0 ? 4 : _pn%d), (_pn%d < 0 ? \"null\" : "
+                       "_pb%d)", one.nul_tmp, one.nul_tmp, one.nul_tmp,
+                       one.nul_tmp);
+            continue;
+        } else if (t->kind == TY_PTR) {
+            buf_puts(&txt, "%p");
+            buf_puts(&args, ", (void *)(");
+        } else {
+            fatal("internal: unprintable concat segment");
+        }
+        if (one.tmp) {
+            buf_printf(&args, "_p%d", one.tmp);
+        } else {
+            Buf *saved = cg->cur; /* inline args stream into args buf */
+            cg->cur = &args;
+            emit_expr(cg, seg, 0);
+            cg->cur = saved;
+        }
+        if (t->kind == TY_BOOL)
+            buf_puts(&args, ") ? \"true\" : \"false\"");
+        buf_puts(&args, ")");
+    }
+    int id = cg->tmp_id++;
+    // 256-byte cap: snprintf truncation is the defined overflow policy
+    buf_printf(b, "({ char _sbuf%d[256];\n", id);
+    if (pre.len)
+        buf_puts(b, pre.data);
+    buf_printf(b, "int _slen%d = snprintf(_sbuf%d, sizeof(_sbuf%d), ", id,
+               id, id);
+    /* emit alternating quoted text and macro splices */
+    if (npieces == 0) {
+        buf_puts(b, "\"");
+        if (txt.len)
+            buf_puts(b, txt.data);
+        buf_puts(b, "\"");
+    } else {
+        for (size_t i = 0; i < npieces; i++) {
+            if (pieces[i] == 'T') {
+                buf_puts(b, "\"");
+                buf_puts(b, texts[i]);
+                buf_puts(b, "\" ");
+            } else {
+                buf_puts(b, macros[i]);
+                buf_puts(b, " ");
+            }
+        }
+        /* trailing literal text after the last splice */
+        buf_puts(b, "\"");
+        if (txt.len)
+            buf_puts(b, txt.data);
+        buf_puts(b, "\"");
+    }
+    buf_puts(b, " ");
+    if (args.len)
+        buf_puts(b, args.data);
+    buf_printf(b, ");\n(zov_str){ (const uint8_t *)_sbuf%d, "
+                  "(size_t)_slen%d }; })\n", id, id);
+    free(segs.items);
+    free(ps.items);
+    free(pre.data);
+    free(txt.data);
+    free(args.data);
+}
 
 static int cg_union_idx(Type *u, Type *m)
 {
@@ -399,6 +745,15 @@ static void emit_match(CG *cg, Expr *e, int want_value)
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    if (e->builtin_io) {
+        /* print/println in value position: void statement-expression */
+        int nl = zstr_eq(callee->u.ident, "println");
+        Buf *b = &*cg->cur;
+        buf_puts(b, "({ ");
+        emit_print(cg, e, nl);
+        buf_puts(b, "0; })");
+        return;
+    }
     int extern_cstr = (callee->kind == EX_NS_IDENT);
     if (callee->kind == EX_NS_IDENT) {
         /* extern C symbol: unmangled, and str literals pass as raw char* */
@@ -465,6 +820,11 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         break;
     case EX_BINARY: {
         const char *op = NULL;
+        if (e->type && e->type->kind == TY_STR) {
+            /* str + T scripting chain: scratch-buffer zov_str value */
+            emit_str_value(cg, e);
+            break;
+        }
         switch (e->u.binary.op) {
         case TK_PLUS: op = "+"; break;
         case TK_MINUS: op = "-"; break;
@@ -743,6 +1103,11 @@ static int emit_stmt(CG *cg, Stmt *s)
             emit_match(cg, s->u.expr, 0);
             return 0;
         }
+        if (s->u.expr->kind == EX_CALL && s->u.expr->builtin_io) {
+            int nl = zstr_eq(s->u.expr->u.call.callee->u.ident, "println");
+            emit_print(cg, s->u.expr, nl);
+            return 0;
+        }
         emit_expr(cg, s->u.expr, 0);
         buf_puts(&*cg->cur, ";\n");
         return 0;
@@ -885,6 +1250,31 @@ char *codegen_generate(Program *prog)
     }
     if (cg->needs_abort)
         buf_puts(&out, "#include <stdlib.h>\n");
+    if (cg->needs_io) {
+        buf_puts(&out, "#include <stdio.h>\n#include <inttypes.h>\n");
+        if (cg->needs_utf8) {
+            buf_puts(&out,
+                     "static int zov_utf8(char buf[5], uint32_t c) {\n"
+                     "    if (c < 0x80) { buf[0] = (char)c; return 1; }\n"
+                     "    if (c < 0x800) {\n"
+                     "        buf[0] = (char)(0xC0 | (c >> 6));\n"
+                     "        buf[1] = (char)(0x80 | (c & 0x3F));\n"
+                     "        return 2;\n"
+                     "    }\n"
+                     "    if (c < 0x10000) {\n"
+                     "        buf[0] = (char)(0xE0 | (c >> 12));\n"
+                     "        buf[1] = (char)(0x80 | ((c >> 6) & 0x3F));\n"
+                     "        buf[2] = (char)(0x80 | (c & 0x3F));\n"
+                     "        return 3;\n"
+                     "    }\n"
+                     "    buf[0] = (char)(0xF0 | (c >> 18));\n"
+                     "    buf[1] = (char)(0x80 | ((c >> 12) & 0x3F));\n"
+                     "    buf[2] = (char)(0x80 | ((c >> 6) & 0x3F));\n"
+                     "    buf[3] = (char)(0x80 | (c & 0x3F));\n"
+                     "    return 4;\n"
+                     "}\n");
+        }
+    }
     for (size_t i = 0; i < cg->unions.len; i++) {
         Type *u = cg->unions.items[i];
         buf_printf(&out, "typedef struct { uint32_t tag;");

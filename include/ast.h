@@ -53,6 +53,7 @@ typedef enum TypeKind {
 
 typedef DA(struct Type *) TypeList;
 typedef DA(const char *) StrList;
+typedef DA(struct Expr *) ExprList;
 
 typedef struct Type {
     TypeKind kind;
