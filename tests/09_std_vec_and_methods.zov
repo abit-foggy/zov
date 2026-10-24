@@ -1,0 +1,34 @@
+// std::vec via methods, range-for pushing, consuming free -- all std-only
+use std::vec as vec;
+
+export fn main() i32 = {
+    let mut v = vec::new[i32]();
+    for (let i in 0..10) {
+        v.push(i * 10);
+    };
+    println("len={v.len()}");
+    let mut sum = 0;
+    for (let i in 0..10) {
+        sum = sum + v.get(i as usize);
+    };
+    println("sum={sum}");
+    for (let i in 0..3) {
+        println("v[{i}]={v.get(i as usize)}");
+    };
+    v.set(0usize, 99);
+    println("first={v.get(0usize)}");
+
+    let mut d = vec::new[f64]();
+    for (let i in 0..4) {
+        d.push(i as f64 * 0.5);
+    };
+    println("dlen={d.len()} d3={d.get(3usize)}");
+    d.free();
+
+    let mut s = vec::new[i32]();
+    s.push(7);
+    let before = s.len();
+    s.free();
+    if (before != 1) { return 1; };
+    return 0;
+};

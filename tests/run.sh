@@ -48,6 +48,11 @@ rm -f zov_c_nullable_file.txt
 run_exit  06_borrow tests/06_borrow_and_moves.zov 0
 run_exit  07_generics tests/07_generics.zov 0
 run_stdout 08_println tests/08_println_chain.zov tests/08_println_chain.expected
+rm -f zov_std_vec_elems.txt
+run_exit  09_std_vec tests/09_std_vec_and_methods.zov 0
+rm -f zov_std_fs_test.txt
+run_exit  10_std_fs tests/10_std_fs.zov 0
+rm -f zov_std_fs_test.txt
 
 run_neg() { # negative sema case: compilation MUST fail
     file=$1

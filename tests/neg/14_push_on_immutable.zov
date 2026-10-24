@@ -1,0 +1,9 @@
+// MUST FAIL: &mut self method on an immutable binding
+use std::vec as vec;
+
+export fn main() i32 = {
+    let v = vec::new[i32]();
+    v.push(1);
+    v.free();
+    return 0;
+};

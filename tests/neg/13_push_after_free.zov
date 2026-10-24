@@ -1,0 +1,10 @@
+// MUST FAIL: .free() consumes the Vec resource by value
+use std::vec as vec;
+
+export fn main() i32 = {
+    let mut v = vec::new[i32]();
+    v.push(1);
+    v.free();
+    v.push(2);
+    return 0;
+};

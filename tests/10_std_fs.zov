@@ -1,0 +1,22 @@
+// std::fs write/read round-trip with ? propagation and FsError match
+use std::fs as fs;
+
+export fn save(path: str) (i32 | FsError) = {
+    fs::write_str(path, "hello from std::fs\n")?;
+    return 0;
+};
+
+export fn main() i32 = {
+    let rc = save("zov_std_fs_test.txt");
+    let code: i32 = match (rc) {
+        case let n: i32 => n,
+        case FsError => -1,
+    };
+    if (code != 0) { return code; };
+    let ok = fs::exists("zov_std_fs_test.txt");
+    let gone = fs::exists("zov_definitely_missing_file.txt");
+    println("exists={ok} gone={gone}");
+    if (!ok) { return 1; };
+    if (gone) { return 2; };
+    return 0;
+};
