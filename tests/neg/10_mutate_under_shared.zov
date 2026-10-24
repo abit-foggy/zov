@@ -1,0 +1,10 @@
+// MUST FAIL: mutating x while the shared borrow r is still live
+use <stdio.h> as c;
+
+export fn main() i32 = {
+    let mut x = 1;
+    let r = &x;
+    x = 2;
+    c::printf("%d\n", *r);
+    return 0;
+};

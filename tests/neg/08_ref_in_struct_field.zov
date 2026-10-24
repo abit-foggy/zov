@@ -1,0 +1,4 @@
+// MUST FAIL: second-class references cannot be stored in struct fields
+export type Bad = struct { r: &i32 };
+
+export fn main() i32 = { return 0; };

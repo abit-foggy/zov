@@ -1,0 +1,50 @@
+// resource moves, reinitialization, NLL borrows, and shared aliasing
+use <stdio.h> as c;
+
+export type Handle = resource struct { fd: i32 };
+
+export fn consume(h: Handle) i32 = {
+    return h.fd;
+};
+
+export fn sum(a: &i32, b: &i32) i32 = {
+    return *a + *b;
+};
+
+export fn bump(r: &mut i32) void = {
+    *r = *r + 1;
+};
+
+export fn main() i32 = {
+    let h = Handle{ fd = 3 };
+    let v = consume(h);
+
+    // move into consume() invalidates h; a fresh value reinitializes it
+    let mut h2 = Handle{ fd = 9 };
+    let w = consume(h2);
+    h2 = Handle{ fd = 10 };
+    let w2 = consume(h2);
+
+    // sequential non-overlapping &mut borrows (last-use loan release)
+    let mut x = 0;
+    let r1: &mut i32 = &mut x;
+    *r1 = 5;
+    let r2: &mut i32 = &mut x;
+    *r2 = 7;
+
+    // multiple simultaneous shared borrows are legal
+    let s1 = &x;
+    let s2 = &x;
+    let t = sum(s1, s2);
+
+    // call-site temporary borrows release immediately
+    bump(&mut x);
+
+    c::printf("v=%d w=%d w2=%d x=%d t=%d\n", v, w, w2, x, t);
+    if (v != 3) { return 1; };
+    if (w != 9) { return 2; };
+    if (w2 != 10) { return 3; };
+    if (x != 8) { return 4; };
+    if (t != 14) { return 5; };
+    return 0;
+};

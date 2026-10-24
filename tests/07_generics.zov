@@ -1,0 +1,63 @@
+// monomorphized generics: Pair[T, U], swap[T], union-returning find[T]
+use <stdio.h> as c;
+
+export type NotFound = !void;
+
+export type Pair[T, U] = struct {
+    first: T,
+    second: U,
+};
+
+export fn id[T](val: T) T = {
+    return val;
+};
+
+export fn swap[T](a: &mut T, b: &mut T) void = {
+    let tmp: T = *a;
+    *a = *b;
+    *b = tmp;
+};
+
+export fn find[T](haystack: T, found: bool) (T | NotFound) = {
+    if (found) { return haystack; };
+    return NotFound;
+};
+
+export fn main() i32 = {
+    let p = Pair[i32, f64]{ first = 1, second = 2.5 };
+    let q = Pair[f64, i32]{ first = 9.5, second = 8 };
+    if (p.first != 1) { return 1; };
+    if (p.second != 2.5) { return 2; };
+    if (q.first != 9.5) { return 3; };
+    if (q.second != 8) { return 4; };
+
+    let mut x = 1;
+    let mut y = 2;
+    swap[i32](&mut x, &mut y);
+    let mut a = 1.5;
+    let mut b = 2.5;
+    swap[f64](&mut a, &mut b);
+    if (x != 2) { return 5; };
+    if (y != 1) { return 6; };
+    if (a != 2.5) { return 7; };
+    if (b != 1.5) { return 8; };
+
+    let n = id[i32](7);
+    if (n != 7) { return 9; };
+
+    let r1 = find[i32](42, true);
+    let v1: i32 = match (r1) {
+        case let v: i32 => v,
+        case NotFound => -1,
+    };
+    let r2 = find[i32](42, false);
+    let v2: i32 = match (r2) {
+        case let v: i32 => v,
+        case NotFound => -2,
+    };
+    if (v1 != 42) { return 10; };
+    if (v2 != -2) { return 11; };
+
+    c::printf("generics ok: %d %d %d %d\n", p.first, q.second, v1, v2);
+    return 0;
+};

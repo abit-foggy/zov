@@ -1,0 +1,12 @@
+// MUST FAIL: swap[T](&mut x, &mut x) aliases the same root
+export fn swap[T](a: &mut T, b: &mut T) void = {
+    let tmp: T = *a;
+    *a = *b;
+    *b = tmp;
+};
+
+export fn main() i32 = {
+    let mut x = 1;
+    swap[i32](&mut x, &mut x);
+    return 0;
+};

@@ -1,0 +1,13 @@
+// MUST FAIL: move in one branch, use after the join
+export type Res = resource struct { fd: i32 };
+
+export fn take(r: Res) void = { };
+
+export fn main() i32 = {
+    let r = Res{ fd = 1 };
+    if (true) {
+        take(r);
+    };
+    take(r);
+    return 0;
+};

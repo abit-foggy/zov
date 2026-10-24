@@ -1,0 +1,7 @@
+// MUST FAIL: returning a reference to a stack local
+export fn leak() &i32 = {
+    let x = 3;
+    return &x;
+};
+
+export fn main() i32 = { return 0; };

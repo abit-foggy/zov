@@ -45,6 +45,9 @@ rm -f zov_c_nullable_file.txt
 run_stdout 05_c_nullable_file tests/05_c_nullable_file.zov tests/05_c_nullable_file.expected
 rm -f zov_c_nullable_file.txt
 
+run_exit  06_borrow tests/06_borrow_and_moves.zov 0
+run_exit  07_generics tests/07_generics.zov 0
+
 run_neg() { # negative sema case: compilation MUST fail
     file=$1
     if $ZOV "$file" -o "$TMP/neg_out" 2> "$TMP/neg.err"; then
