@@ -52,6 +52,7 @@ typedef enum TypeKind {
 } TypeKind;
 
 typedef DA(struct Type *) TypeList;
+typedef DA(const char *) StrList;
 
 typedef struct Type {
     TypeKind kind;
@@ -200,9 +201,9 @@ typedef struct Decl {
         struct { int is_c_header; const char *path; const char *alias; } use;
         struct { const char *name; DA(struct Field) fields;
                   Type *alias_ty; int is_resource;
-                  DA(const char *) tparams; } type;
+                  StrList tparams; } type;
         struct { const char *name; DA(struct Param) params; Type *ret;
-                  Block *body; DA(const char *) tparams; } fn;
+                  Block *body; StrList tparams; } fn;
     } u;
 } Decl;
 

@@ -27,6 +27,8 @@
 #include "sema.h"
 #include "cimport.h"
 
+#include <ctype.h>
+
 typedef enum SymKind { SYM_VAR, SYM_FN, SYM_NS, SYM_TYPE } SymKind;
 
 typedef struct Sym {
@@ -140,6 +142,8 @@ static Type *union_payload(Type *u)
 /* Resolve parser placeholders: ns::Type from C imports, local named
  * aliases/error types, and structural recursion into composites. */
 static Type *resolve_type(Sema *se, Type *t);
+static Type *instantiate_struct(Sema *se, const char *tname,
+                                 TypeList *args);
 
 static Type *resolve_ns_type(Sema *se, const char *qual)
 {
@@ -200,7 +204,9 @@ static Type *resolve_type(Sema *se, Type *t)
     case TY_INST: {
         for (size_t i = 0; i < t->members.len; i++)
             t->members.items[i] = resolve_type(se, t->members.items[i]);
-        return t;
+        if (!t->name)
+            return t;
+        return instantiate_struct(se, t->name, &t->members);
     }
     default:
         return t;
@@ -234,6 +240,327 @@ static Expr *maybe_coerce(Expr *e, Type *target)
     c->u.coerce.target = target;
     c->type = target; /* already type-checked as a member above */
     return c;
+}
+
+/* ---- generic monomorphization ---- */
+
+static void register_decl(Sema *se, Decl *d);
+static void check_fn(Sema *se, Decl *d);
+
+/* cache key component: sanitize a type spelling into [A-Za-z0-9_.] */
+static char *mangle_spelling(const char *s)
+{
+    char *out = zalloc(strlen(s) + 1);
+    size_t n = 0;
+    for (const char *p = s; *p; p++)
+        out[n++] = (isalnum((unsigned char)*p) || *p == '_') ? *p : '_';
+    out[n] = '\0';
+    return out;
+}
+
+static Decl *find_decl_by_name(Sema *se, const char *name)
+{
+    for (size_t i = 0; i < se->prog->decls.len; i++)
+        if (se->prog->decls.items[i]->kind == DL_TYPE
+                ? se->prog->decls.items[i]->u.type.name == name
+                : se->prog->decls.items[i]->u.fn.name == name)
+            return se->prog->decls.items[i];
+    return NULL;
+}
+
+static int tparam_index(StrList *tps, const char *name)
+{
+    for (size_t i = 0; i < tps->len; i++)
+        if (tps->items[i] == name)
+            return (int)i;
+    return -1;
+}
+
+static Type *subst_type(Sema *se, Type *t, StrList *tps,
+                        TypeList *args)
+{
+    if (!t)
+        return t;
+    switch (t->kind) {
+    case TY_STRUCT: {
+        int idx = tparam_index(tps, t->name);
+        if (idx >= 0)
+            return args->items[idx];
+        return t;
+    }
+    case TY_PTR:
+        return type_ptr(subst_type(se, t->base, tps, args), t->nullable);
+    case TY_REF:
+    case TY_MUTREF:
+        return type_ref(subst_type(se, t->base, tps, args),
+                        t->kind == TY_MUTREF);
+    case TY_SLICE:
+        return type_slice(subst_type(se, t->base, tps, args));
+    case TY_ARRAY:
+        return type_array(subst_type(se, t->base, tps, args), t->count);
+    case TY_UNION: {
+        TypeList ms = {0};
+        for (size_t i = 0; i < t->members.len; i++)
+            da_push(&ms, subst_type(se, t->members.items[i], tps, args));
+        Type *u = type_union(&ms);
+        u->is_error = t->is_error;
+        return u;
+    }
+    case TY_ERR:
+        return type_err(t->name, subst_type(se, t->base, tps, args));
+    case TY_INST: {
+        Type *inst = zalloc(sizeof(Type));
+        inst->kind = TY_INST;
+        inst->name = t->name;
+        for (size_t i = 0; i < t->members.len; i++)
+            da_push(&inst->members,
+                    subst_type(se, t->members.items[i], tps, args));
+        return resolve_type(se, inst);
+    }
+    default:
+        return t;
+    }
+}
+
+/* canonical key: <template>__<arg1>_<arg2>...; dedupes instantiations */
+static char *inst_key(const char *base, TypeList *args)
+{
+    size_t cap = strlen(base) + 4;
+    for (size_t i = 0; i < args->len; i++)
+        cap += strlen(type_spelling(args->items[i])) + 2;
+    char *key = zalloc(cap);
+    size_t off = 0;
+    off += (size_t)sprintf(key + off, "%s", base);
+    for (size_t i = 0; i < args->len; i++)
+        off += (size_t)sprintf(key + off, "__%s",
+                               mangle_spelling(type_spelling(
+                                   args->items[i])));
+    return key;
+}
+
+static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
+{
+    Sym *sym = scope_find(se->scope, tname);
+    if (!sym || sym->kind != SYM_TYPE || !sym->is_template || !sym->decl)
+        fatal("'%s' is not a generic type", tname);
+    StrList *tps = &sym->decl->u.type.tparams;
+    if (tps->len != args->len)
+        fatal("'%s' expects %lu type argument(s), got %lu", tname,
+              (unsigned long)tps->len, (unsigned long)args->len);
+    char *key = inst_key(tname, args);
+    Decl *existing = find_decl_by_name(se, str_intern_c(key));
+    if (existing)
+        return type_struct(existing->u.type.name);
+    Decl *d = decl_new(DL_TYPE, sym->decl->span);
+    d->u.type.name = str_intern_c(key);
+    for (size_t i = 0; i < sym->decl->u.type.fields.len; i++) {
+        Field *f = &sym->decl->u.type.fields.items[i];
+        Field nf;
+        nf.name = f->name;
+        nf.span = f->span;
+        nf.ty = subst_type(se, f->ty, tps, args);
+        da_push(&d->u.type.fields, nf);
+    }
+    if (sym->decl->u.type.is_resource)
+        d->u.type.is_resource = 1;
+    da_push(&se->prog->decls, d);
+    register_decl(se, d);
+    return type_struct(d->u.type.name);
+}
+
+/* deep AST clone with tparam substitution; types are re-checked */
+static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
+                        TypeList *args);
+static Stmt *clone_stmt(Sema *se, Stmt *s, StrList *tps,
+                        TypeList *args);
+
+static Block *clone_block(Sema *se, Block *b, StrList *tps,
+                          TypeList *args)
+{
+    if (!b)
+        return NULL;
+    Block *nb = block_new();
+    for (size_t i = 0; i < b->stmts.len; i++)
+        da_push(&nb->stmts, clone_stmt(se, b->stmts.items[i], tps, args));
+    return nb;
+}
+
+static Stmt *clone_stmt(Sema *se, Stmt *s, StrList *tps,
+                       TypeList *args)
+{
+    Stmt *n = stmt_new(s->kind, s->span);
+    switch (s->kind) {
+    case ST_LET:
+        n->u.let.name = s->u.let.name;
+        n->u.let.mut = s->u.let.mut;
+        n->u.let.ty = s->u.let.ty
+                          ? subst_type(se, s->u.let.ty, tps, args) : NULL;
+        n->u.let.init = clone_expr(se, s->u.let.init, tps, args);
+        break;
+    case ST_DEFER:
+        n->u.defer = clone_stmt(se, s->u.defer, tps, args);
+        break;
+    case ST_IF:
+        n->u.iff.cond = clone_expr(se, s->u.iff.cond, tps, args);
+        n->u.iff.then_blk = clone_block(se, s->u.iff.then_blk, tps, args);
+        if (s->u.iff.else_stmt)
+            n->u.iff.else_stmt = clone_stmt(se, s->u.iff.else_stmt, tps,
+                                            args);
+        break;
+    case ST_WHILE:
+        n->u.whilee.cond = clone_expr(se, s->u.whilee.cond, tps, args);
+        n->u.whilee.body = clone_block(se, s->u.whilee.body, tps, args);
+        break;
+    case ST_RETURN:
+        n->u.ret = clone_expr(se, s->u.ret, tps, args);
+        break;
+    case ST_EXPR:
+        n->u.expr = clone_expr(se, s->u.expr, tps, args);
+        break;
+    case ST_BLOCK:
+        n->u.block = clone_block(se, s->u.block, tps, args);
+        break;
+    default:
+        break;
+    }
+    return n;
+}
+
+static MatchArm clone_arm(Sema *se, MatchArm *a, StrList *tps,
+                          TypeList *args)
+{
+    MatchArm n;
+    memset(&n, 0, sizeof(n));
+    n.kind = a->kind;
+    n.span = a->span;
+    n.name = a->name;
+    n.ty = a->ty ? subst_type(se, a->ty, tps, args) : NULL;
+    n.val = clone_expr(se, a->val, tps, args);
+    n.jump = a->jump ? clone_stmt(se, a->jump, tps, args) : NULL;
+    return n;
+}
+
+static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
+                        TypeList *args)
+{
+    if (!e)
+        return NULL;
+    Expr *n = expr_new(e->kind, e->span);
+    n->borrow_mut = e->borrow_mut;
+    switch (e->kind) {
+    case EX_INT: n->u.ilit = e->u.ilit; break;
+    case EX_FLOAT: n->u.flit = e->u.flit; break;
+    case EX_STR: n->u.slit = e->u.slit; break;
+    case EX_CHAR: n->u.clit = e->u.clit; break;
+    case EX_BOOL: n->u.blit = e->u.blit; break;
+    case EX_IDENT: n->u.ident = e->u.ident; break;
+    case EX_NS_IDENT: n->u.nident = e->u.nident; break;
+    case EX_ASSIGN:
+        n->u.assign.lhs = clone_expr(se, e->u.assign.lhs, tps, args);
+        n->u.assign.rhs = clone_expr(se, e->u.assign.rhs, tps, args);
+        break;
+    case EX_BINARY:
+        n->u.binary.op = e->u.binary.op;
+        n->u.binary.lhs = clone_expr(se, e->u.binary.lhs, tps, args);
+        n->u.binary.rhs = clone_expr(se, e->u.binary.rhs, tps, args);
+        break;
+    case EX_UNARY:
+        n->u.unary.op = e->u.unary.op;
+        n->u.unary.e = clone_expr(se, e->u.unary.e, tps, args);
+        break;
+    case EX_CALL:
+        n->u.call.callee = clone_expr(se, e->u.call.callee, tps, args);
+        for (size_t i = 0; i < e->u.call.args.len; i++)
+            da_push(&n->u.call.args,
+                    clone_expr(se, e->u.call.args.items[i], tps, args));
+        break;
+    case EX_INDEX:
+        n->u.index.base = clone_expr(se, e->u.index.base, tps, args);
+        n->u.index.index = clone_expr(se, e->u.index.index, tps, args);
+        break;
+    case EX_CAST:
+        n->u.cast.e = clone_expr(se, e->u.cast.e, tps, args);
+        n->u.cast.t = subst_type(se, e->u.cast.t, tps, args);
+        break;
+    case EX_MATCH:
+        n->u.match.scrutinee =
+            clone_expr(se, e->u.match.scrutinee, tps, args);
+        for (size_t i = 0; i < e->u.match.arms.len; i++) {
+            MatchArm a = clone_arm(se, &e->u.match.arms.items[i], tps,
+                                   args);
+            da_push(&n->u.match.arms, a);
+        }
+        break;
+    case EX_TRY: n->u.tryy = clone_expr(se, e->u.tryy, tps, args); break;
+    case EX_UNWRAP:
+        n->u.unwrap = clone_expr(se, e->u.unwrap, tps, args);
+        break;
+    case EX_COERCE:
+        n->u.coerce.e = clone_expr(se, e->u.coerce.e, tps, args);
+        n->u.coerce.target = subst_type(se, e->u.coerce.target, tps, args);
+        break;
+    case EX_GENERIC:
+        n->u.generic.base = clone_expr(se, e->u.generic.base, tps, args);
+        for (size_t i = 0; i < e->u.generic.targs.len; i++)
+            da_push(&n->u.generic.targs,
+                    subst_type(se, e->u.generic.targs.items[i], tps, args));
+        break;
+    case EX_DEREF: n->u.deref = clone_expr(se, e->u.deref, tps, args); break;
+    case EX_FIELD:
+        n->u.field.base = clone_expr(se, e->u.field.base, tps, args);
+        n->u.field.name = e->u.field.name;
+        break;
+    case EX_STRUCT_LIT:
+        n->u.stlit.name = e->u.stlit.name;
+        for (size_t i = 0; i < e->u.stlit.targs.len; i++)
+            da_push(&n->u.stlit.targs,
+                    subst_type(se, e->u.stlit.targs.items[i], tps, args));
+        for (size_t i = 0; i < e->u.stlit.fields.len; i++) {
+            FieldInit fi;
+            fi.name = e->u.stlit.fields.items[i].name;
+            fi.span = e->u.stlit.fields.items[i].span;
+            fi.val = clone_expr(se, e->u.stlit.fields.items[i].val, tps,
+                                args);
+            da_push(&n->u.stlit.fields, fi);
+        }
+        break;
+    default:
+        break;
+    }
+    return n;
+}
+
+static Sym *instantiate_fn(Sema *se, const char *fname, TypeList *args,
+                           Span span)
+{
+    Sym *sym = scope_find(se->scope, fname);
+    if (!sym || sym->kind != SYM_FN || !sym->is_template || !sym->decl)
+        fatal_at(span, "'%s' is not a generic function", fname);
+    StrList *tps = &sym->decl->u.fn.tparams;
+    if (tps->len != args->len)
+        fatal_at(span, "'%s' expects %lu type argument(s), got %lu", fname,
+                 (unsigned long)tps->len, (unsigned long)args->len);
+    char *key = inst_key(fname, args);
+    const char *keyi = str_intern_c(key);
+    Decl *existing = find_decl_by_name(se, keyi);
+    if (existing)
+        return scope_find(se->scope, keyi);
+    Decl *d = decl_new(DL_FN, sym->decl->span);
+    d->u.fn.name = keyi;
+    for (size_t i = 0; i < sym->decl->u.fn.params.len; i++) {
+        Param *pm = &sym->decl->u.fn.params.items[i];
+        Param np;
+        np.name = pm->name;
+        np.span = pm->span;
+        np.ty = subst_type(se, pm->ty, tps, args);
+        da_push(&d->u.fn.params, np);
+    }
+    d->u.fn.ret = subst_type(se, sym->decl->u.fn.ret, tps, args);
+    d->u.fn.body = clone_block(se, sym->decl->u.fn.body, tps, args);
+    da_push(&se->prog->decls, d);
+    register_decl(se, d);
+    check_fn(se, d);
+    return scope_find(se->scope, keyi);
 }
 
 static void require_bool(Expr *cond)
@@ -522,6 +849,24 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
+        if (callee->kind == EX_GENERIC) {
+            /* swap in the specialized ident, then re-enter as a plain
+             * user-fn call against the instantiated signature */
+            if (callee->u.generic.base->kind != EX_IDENT)
+                fatal_at(callee->span,
+                         "generic callee must be a plain identifier");
+            TypeList targs = {0};
+            for (size_t i = 0; i < callee->u.generic.targs.len; i++)
+                da_push(&targs,
+                        resolve_type(se, callee->u.generic.targs.items[i]));
+            Sym *inst = instantiate_fn(se, callee->u.generic.base->u.ident,
+                                       &targs, callee->span);
+            Expr *id = expr_new(EX_IDENT, callee->span);
+            id->u.ident = inst->name;
+            e->u.call.callee = id;
+            e->type = check_call_user(se, e, inst);
+            return e->type;
+        }
         if (callee->kind == EX_IDENT) {
             Sym *fn = scope_find(se->scope, callee->u.ident);
             if (!fn)
@@ -530,6 +875,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (fn->kind != SYM_FN)
                 fatal_at(callee->span, "'%s' is not callable",
                          callee->u.ident);
+            if (fn->is_template)
+                fatal_at(callee->span,
+                         "generic function '%s' requires explicit type "
+                         "arguments, e.g. %s[T](...)",
+                         callee->u.ident, callee->u.ident);
             e->type = check_call_user(se, e, fn);
             return e->type;
         }
@@ -607,14 +957,18 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_STRUCT_LIT: {
         Type *st = NULL;
-        if (e->u.stlit.targs.len > 0)
-            fatal_at(e->span,
-                     "generic struct literals are not supported yet (v0.3 "
-                     "milestone 3)");
-        Sym *sym = scope_find(se->scope, e->u.stlit.name);
-        if (sym && sym->kind == SYM_TYPE && sym->type
-            && sym->type->kind == TY_STRUCT)
-            st = sym->type;
+        if (e->u.stlit.targs.len > 0) {
+            TypeList targs = {0};
+            for (size_t i = 0; i < e->u.stlit.targs.len; i++)
+                da_push(&targs,
+                        resolve_type(se, e->u.stlit.targs.items[i]));
+            st = instantiate_struct(se, e->u.stlit.name, &targs);
+        } else {
+            Sym *sym = scope_find(se->scope, e->u.stlit.name);
+            if (sym && sym->kind == SYM_TYPE && sym->type
+                && sym->type->kind == TY_STRUCT && !sym->is_template)
+                st = sym->type;
+        }
         if (!st)
             fatal_at(e->span, "'%s' is not a struct type", e->u.stlit.name);
         Decl *d = find_struct_decl(se, st->name);
@@ -1068,9 +1422,14 @@ static void check_fn(Sema *se, Decl *d)
         sym.mut = 0; /* parameters are immutable in v0.1 */
         scope_add(se, sym);
     }
+    /* instantiation can nest check_fn while an outer body is mid-check */
+    Type *prev_ret = se->fn_ret;
+    int prev_loop = se->loop_depth;
+    se->loop_depth = 0;
     se->fn_ret = d->u.fn.ret;
     check_block(se, d->u.fn.body);
-    se->fn_ret = NULL;
+    se->fn_ret = prev_ret;
+    se->loop_depth = prev_loop;
     pop_scope(se);
 }
 

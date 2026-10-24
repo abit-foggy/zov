@@ -837,8 +837,9 @@ char *codegen_generate(Program *prog)
 
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind != DL_TYPE || d->u.type.alias_ty)
-            continue; /* alias/error decls lower to no C definition */
+        if (d->kind != DL_TYPE || d->u.type.alias_ty
+            || d->u.type.tparams.len > 0)
+            continue; /* aliases and templates emit no C definition */
         cg->cur = &cg->head;
         buf_printf(&*cg->cur, "typedef struct {\n");
         for (size_t j = 0; j < d->u.type.fields.len; j++) {
@@ -852,12 +853,12 @@ char *codegen_generate(Program *prog)
 
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_FN)
+        if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
             emit_fn(cg, d, 1);
     }
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_FN)
+        if (d->kind == DL_FN && d->u.fn.tparams.len == 0)
             emit_fn(cg, d, 0);
     }
 
