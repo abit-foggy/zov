@@ -996,6 +996,22 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             return NULL;
         }
         Type *rt = check_expr(se, e->u.assign.rhs, lt);
+        if (e->comp_op) {
+            /* compound forms: the operation must type-check on lt */
+            int bit = (e->comp_op == TK_AMP_EQ || e->comp_op == TK_PIPE_EQ
+                       || e->comp_op == TK_CARET_EQ
+                       || e->comp_op == TK_SHL_EQ
+                       || e->comp_op == TK_SHR_EQ);
+            if (!is_unknown(lt) && !ty_is_int(lt->kind))
+                fatal_at(e->span, "compound assignment requires an "
+                         "integer lvalue, got %s", type_spelling(lt));
+            if (!bit && !is_unknown(lt) && !ty_is_num(lt->kind))
+                fatal_at(e->span, "compound assignment requires a "
+                         "numeric lvalue, got %s", type_spelling(lt));
+            (void)rt;
+            e->type = lt;
+            return e->type;
+        }
         if (!is_unknown(rt) && !is_unknown(lt) && !type_eq(lt, rt)
             && !ptr_widens(rt, lt))
             fatal_at(e->span, "cannot assign %s to %s", type_spelling(rt),
@@ -1016,9 +1032,26 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         int comparison = (op == TK_EQ || op == TK_NEQ || op == TK_LT
                           || op == TK_GT || op == TK_LE || op == TK_GE);
+        int bitwise = (op == TK_AMP || op == TK_PIPE || op == TK_CARET
+                       || op == TK_SHL || op == TK_SHR);
         Type *lt = check_expr(se, e->u.binary.lhs,
-                             comparison ? NULL : hint);
+                             (comparison || bitwise) ? NULL : hint);
         Type *rt = check_expr(se, e->u.binary.rhs, lt);
+        if (bitwise) {
+            if (!is_unknown(lt) && !ty_is_int(lt->kind))
+                fatal_at(e->span, "'%s' requires integer operands, got %s",
+                         op == TK_AMP ? "&" : op == TK_PIPE ? "|"
+                         : op == TK_CARET ? "^" : op == TK_SHL ? "<<"
+                                                             : ">>",
+                         type_spelling(lt));
+            if (!is_unknown(rt) && !ty_is_int(rt->kind))
+                fatal_at(e->u.binary.rhs->span,
+                         "shift/bit operands must be integers, got %s",
+                         type_spelling(rt));
+            require_same(e->u.binary.lhs, e->u.binary.rhs, "<bitwise>");
+            e->type = is_unknown(lt) ? unknown() : lt;
+            return e->type;
+        }
         if (comparison) {
             /* null compares against any nullable pointer */
             int null_cmp = 0;
@@ -1069,6 +1102,13 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         case TK_MINUS:
             if (!is_unknown(t) && !ty_is_num(t->kind))
                 fatal_at(e->span, "unary '-' requires a numeric operand");
+            e->type = t;
+            break;
+        case TK_TILDE:
+            if (!is_unknown(t) && !ty_is_int(t->kind))
+                fatal_at(e->span,
+                         "unary '~' requires an integer operand, got %s",
+                         type_spelling(t));
             e->type = t;
             break;
         case TK_BANG:

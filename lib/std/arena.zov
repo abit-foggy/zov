@@ -37,9 +37,8 @@ export fn new(cap: usize) Arena = {
 };
 
 export fn (self: &mut Arena) alloc_bytes(size: usize) *u8 = {
-    // 8-byte alignment via pure arithmetic: the language has no bitwise ops
-    let pad: usize = (8usize - (self.offset % 8usize)) % 8usize;
-    let start: usize = self.offset + pad;
+    // proper 8-byte alignment: round the end up past the request
+    let start: usize = (self.offset + 7usize) & (~7usize);
     let end: usize = start + size;
     if (end > self.cap) { c::abort(); };
     self.offset = end;

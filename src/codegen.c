@@ -969,11 +969,35 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         }
         buf_puts(b, e->u.nident.name);
         break;
-    case EX_ASSIGN:
+    case EX_ASSIGN: {
+        /* C compound forms evaluate the lvalue exactly once */
+        const char *cop = NULL;
+        switch (e->comp_op) {
+        case TK_PLUS_EQ: cop = "+="; break;
+        case TK_MINUS_EQ: cop = "-="; break;
+        case TK_STAR_EQ: cop = "*="; break;
+        case TK_SLASH_EQ: cop = "/="; break;
+        case TK_PERCENT_EQ: cop = "%="; break;
+        case TK_AMP_EQ: cop = "&="; break;
+        case TK_PIPE_EQ: cop = "|="; break;
+        case TK_CARET_EQ: cop = "^="; break;
+        case TK_SHL_EQ: cop = "<<="; break;
+        case TK_SHR_EQ: cop = ">>="; break;
+        default: cop = NULL; break;
+        }
+        if (cop) {
+            buf_puts(b, "(");
+            emit_expr(cg, e->u.assign.lhs, 0);
+            buf_printf(b, " %s ", cop);
+            emit_expr(cg, e->u.assign.rhs, 0);
+            buf_puts(b, ")");
+            break;
+        }
         emit_expr(cg, e->u.assign.lhs, 0);
         buf_puts(b, " = ");
         emit_expr(cg, e->u.assign.rhs, 0);
         break;
+    }
     case EX_BINARY: {
         const char *op = NULL;
         if (e->type && e->type->kind == TY_STR
@@ -1014,6 +1038,11 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         case TK_NEQ: op = "!="; break;
         case TK_ANDAND: op = "&&"; break;
         case TK_OROR: op = "||"; break;
+        case TK_AMP: op = "&"; break;
+        case TK_PIPE: op = "|"; break;
+        case TK_CARET: op = "^"; break;
+        case TK_SHL: op = "<<"; break;
+        case TK_SHR: op = ">>"; break;
         default: fatal("unsupported binary operator"); break;
         }
         buf_puts(b, "(");
@@ -1031,6 +1060,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_puts(b, "!");
         else if (e->u.unary.op == TK_AMP)
             buf_puts(b, "&");
+        else if (e->u.unary.op == TK_TILDE)
+            buf_puts(b, "~");
         else
             fatal("unsupported unary operator");
         emit_expr(cg, e->u.unary.e, 0);

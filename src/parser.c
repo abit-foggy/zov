@@ -724,7 +724,8 @@ static Expr *parse_unary(Parser *p)
         e->u.deref = parse_unary(p);
         return e;
     }
-    if (at(p, TK_MINUS) || at(p, TK_BANG) || at(p, TK_AMP)) {
+    if (at(p, TK_MINUS) || at(p, TK_BANG) || at(p, TK_AMP)
+        || at(p, TK_TILDE)) {
         TokenKind op = kind(p);
         advance(p);
         Expr *e = expr_new(EX_UNARY, sp);
@@ -739,22 +740,28 @@ static Expr *parse_unary(Parser *p)
     return parse_postfix(p);
 }
 
+// Pratt tiers mirror C: bitwise ops sit between == and relational
 static int bin_prec(TokenKind k)
 {
     switch (k) {
     case TK_OROR: return 1;
     case TK_ANDAND: return 2;
+    case TK_PIPE: return 3;
+    case TK_CARET: return 4;
+    case TK_AMP: return 5;
     case TK_EQ:
-    case TK_NEQ: return 3;
+    case TK_NEQ: return 6;
     case TK_LT:
     case TK_GT:
     case TK_LE:
-    case TK_GE: return 4;
+    case TK_GE: return 7;
+    case TK_SHL:
+    case TK_SHR: return 8;
     case TK_PLUS:
-    case TK_MINUS: return 5;
+    case TK_MINUS: return 9;
     case TK_STAR:
     case TK_SLASH:
-    case TK_PERCENT: return 6;
+    case TK_PERCENT: return 10;
     default: return 0;
     }
 }
@@ -791,7 +798,21 @@ static Expr *parse_expr(Parser *p)
         e->u.assign.rhs = parse_expr(p);
         return e;
     }
-    return lhs;
+    switch (kind(p)) {
+    case TK_PLUS_EQ: case TK_MINUS_EQ: case TK_STAR_EQ: case TK_SLASH_EQ:
+    case TK_PERCENT_EQ: case TK_AMP_EQ: case TK_PIPE_EQ: case TK_CARET_EQ:
+    case TK_SHL_EQ: case TK_SHR_EQ: {
+        /* compound forms evaluate the lvalue exactly once in C */
+        Expr *e = expr_new(EX_ASSIGN, lhs->span);
+        e->comp_op = kind(p);
+        e->u.assign.lhs = lhs;
+        advance(p);
+        e->u.assign.rhs = parse_expr(p);
+        return e;
+    }
+    default:
+        return lhs;
+    }
 }
 
 /* ---- statements ---- */

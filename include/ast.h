@@ -164,6 +164,8 @@ typedef struct Expr {
     int coerce_tag; /* EX_COERCE: deterministic member index in target */
     int builtin_assert; /* EX_CALL to built-in assert(bool) */
     const char *variant_c; /* EX_NS_IDENT enum variant: C spelling */
+    TokenKind comp_op;     /* EX_ASSIGN: compound operator, 0 when plain = */
+    Type *hash_ty;         /* EX_CALL to hash_val[T](): the key type */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);

@@ -344,6 +344,14 @@ void lex_next(Lexer *lx)
         lx->pos++;
         if (peek(lx) == '=') { lx->pos++; t->kind = TK_EQ; }
         else if (peek(lx) == '>') { lx->pos++; t->kind = TK_FATARROW; }
+        else if (peek(lx) == '+') { lx->pos++; t->kind = TK_PLUS_EQ; }
+        else if (peek(lx) == '-') { lx->pos++; t->kind = TK_MINUS_EQ; }
+        else if (peek(lx) == '*') { lx->pos++; t->kind = TK_STAR_EQ; }
+        else if (peek(lx) == '/') { lx->pos++; t->kind = TK_SLASH_EQ; }
+        else if (peek(lx) == '%') { lx->pos++; t->kind = TK_PERCENT_EQ; }
+        else if (peek(lx) == '&') { lx->pos++; t->kind = TK_AMP_EQ; }
+        else if (peek(lx) == '|') { lx->pos++; t->kind = TK_PIPE_EQ; }
+        else if (peek(lx) == '^') { lx->pos++; t->kind = TK_CARET_EQ; }
         else t->kind = TK_ASSIGN;
         break;
     case '.':
@@ -358,29 +366,68 @@ void lex_next(Lexer *lx)
         break;
     case '<':
         lx->pos++;
-        if (peek(lx) == '=') { lx->pos++; t->kind = TK_LE; }
+        if (peek(lx) == '<') {
+            lx->pos++;
+            if (peek(lx) == '=') { lx->pos++; t->kind = TK_SHL_EQ; }
+            else t->kind = TK_SHL;
+        } else if (peek(lx) == '=') { lx->pos++; t->kind = TK_LE; }
         else t->kind = TK_LT;
         break;
     case '>':
         lx->pos++;
-        if (peek(lx) == '=') { lx->pos++; t->kind = TK_GE; }
+        if (peek(lx) == '>') {
+            lx->pos++;
+            if (peek(lx) == '=') { lx->pos++; t->kind = TK_SHR_EQ; }
+            else t->kind = TK_SHR;
+        } else if (peek(lx) == '=') { lx->pos++; t->kind = TK_GE; }
         else t->kind = TK_GT;
         break;
     case '&':
         lx->pos++;
         if (peek(lx) == '&') { lx->pos++; t->kind = TK_ANDAND; }
+        else if (peek(lx) == '=') { lx->pos++; t->kind = TK_AMP_EQ; }
         else t->kind = TK_AMP;
         break;
     case '|':
         lx->pos++;
         if (peek(lx) == '|') { lx->pos++; t->kind = TK_OROR; }
+        else if (peek(lx) == '=') { lx->pos++; t->kind = TK_PIPE_EQ; }
         else t->kind = TK_PIPE; /* union separator in type position */
         break;
-    case '+': t->kind = TK_PLUS; lx->pos++; break;
-    case '-': t->kind = TK_MINUS; lx->pos++; break;
-    case '*': t->kind = TK_STAR; lx->pos++; break;
-    case '/': t->kind = TK_SLASH; lx->pos++; break;
-    case '%': t->kind = TK_PERCENT; lx->pos++; break;
+    case '^':
+        lx->pos++;
+        if (peek(lx) == '=') { lx->pos++; t->kind = TK_CARET_EQ; }
+        else t->kind = TK_CARET;
+        break;
+    case '~':
+        lx->pos++;
+        t->kind = TK_TILDE;
+        break;
+    case '+':
+        lx->pos++;
+        if (peek(lx) == '=') { lx->pos++; t->kind = TK_PLUS_EQ; }
+        else t->kind = TK_PLUS;
+        break;
+    case '-':
+        lx->pos++;
+        if (peek(lx) == '=') { lx->pos++; t->kind = TK_MINUS_EQ; }
+        else t->kind = TK_MINUS;
+        break;
+    case '*':
+        lx->pos++;
+        if (peek(lx) == '=') { lx->pos++; t->kind = TK_STAR_EQ; }
+        else t->kind = TK_STAR;
+        break;
+    case '/':
+        lx->pos++;
+        if (peek(lx) == '=') { lx->pos++; t->kind = TK_SLASH_EQ; }
+        else t->kind = TK_SLASH;
+        break;
+    case '%':
+        lx->pos++;
+        if (peek(lx) == '=') { lx->pos++; t->kind = TK_PERCENT_EQ; }
+        else t->kind = TK_PERCENT;
+        break;
     case '?': t->kind = TK_QUESTION; lx->pos++; break;
     case '(': t->kind = TK_LPAREN; lx->pos++; break;
     case ')': t->kind = TK_RPAREN; lx->pos++; break;
