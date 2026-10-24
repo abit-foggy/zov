@@ -88,6 +88,7 @@ static int at_type_start(Parser *p)
     case TK_USIZE: case TK_F32: case TK_F64: case TK_BOOL:
     case TK_CHAR_KW: case TK_STR_KW: case TK_NULLABLE:
     case TK_STAR: case TK_AMP: case TK_LBRACKET: case TK_IDENT:
+    case TK_BANG: case TK_LPAREN:
         return 1;
     default:
         return 0;
@@ -116,6 +117,26 @@ static Type *parse_primitive(Parser *p)
 static Type *parse_type(Parser *p)
 {
     switch (kind(p)) {
+    case TK_BANG: {
+        // '!T' error type; named at the type declaration site by sema
+        advance(p);
+        return type_err(NULL, parse_type(p));
+    }
+    case TK_LPAREN: {
+        advance(p);
+        Type *first = parse_type(p);
+        if (!at(p, TK_PIPE)) {
+            expect(p, TK_RPAREN, "')'");
+            return first;
+        }
+        TypeList members = {0};        da_push(&members, first);
+        while (at(p, TK_PIPE)) {
+            advance(p);
+            da_push(&members, parse_type(p));
+        }
+        expect(p, TK_RPAREN, "')'");
+        return type_union(&members);
+    }
     case TK_NULLABLE:
         advance(p);
         expect(p, TK_STAR, "'*' after 'nullable'");
@@ -149,6 +170,17 @@ static Type *parse_type(Parser *p)
             const char *name = tok(p)->name;
             Span sp = tok(p)->span;
             advance(p);
+            if (at(p, TK_COLONCOLON)) {
+                // qualified C type: ns::Name resolves in sema via cimport
+                advance(p);
+                if (!at(p, TK_IDENT))
+                    fatal_at(tok(p)->span, "expected type name after '::'");
+                char joined[256];
+                snprintf(joined, sizeof(joined), "%s::%s", name,
+                         tok(p)->name);
+                advance(p);
+                return type_struct(str_intern_c(joined));
+            }
             if (at(p, TK_LBRACKET)) {
                 /* Type[T]: generic instantiation; arg kept for sema */
                 advance(p);
@@ -167,10 +199,83 @@ static Type *parse_type(Parser *p)
 
 static Expr *parse_expr(Parser *p);
 
+/* Arm jump bodies never consume ';': the arm ends at ',' or '}'. */
+static Stmt *parse_arm_jump(Parser *p, Span sp)
+{
+    if (at(p, TK_RETURN)) {
+        advance(p);
+        Stmt *s = stmt_new(ST_RETURN, sp);
+        if (!at(p, TK_COMMA) && !at(p, TK_RBRACE))
+            s->u.ret = parse_expr(p);
+        return s;
+    }
+    if (at(p, TK_BREAK)) {
+        advance(p);
+        return stmt_new(ST_BREAK, sp);
+    }
+    advance(p);
+    return stmt_new(ST_CONTINUE, sp);
+}
+
+static Expr *parse_match(Parser *p)
+{
+    Span sp = tok(p)->span;
+    advance(p); /* 'match' */
+    expect(p, TK_LPAREN, "'(' after 'match'");
+    Expr *e = expr_new(EX_MATCH, sp);
+    e->u.match.scrutinee = parse_expr(p);
+    expect(p, TK_RPAREN, "')' after match scrutinee");
+    expect(p, TK_LBRACE, "'{' in match");
+    while (!at(p, TK_RBRACE) && !at(p, TK_EOF)) {
+        expect(p, TK_CASE, "'case'");
+        MatchArm arm;
+        memset(&arm, 0, sizeof(arm));
+        arm.span = tok(p)->span;
+        if (at(p, TK_NULL)) {
+            arm.kind = PAT_NULL;
+            advance(p);
+        } else if (at(p, TK_IDENT) && zstr_eq(tok(p)->name, "_")) {
+            arm.kind = PAT_WILDCARD;
+            advance(p);
+        } else if (at(p, TK_LET)) {
+            arm.kind = PAT_TYPE_BIND;
+            advance(p);
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected binder name in case let");
+            arm.name = tok(p)->name;
+            advance(p);
+            expect(p, TK_COLON, "':' in case let pattern");
+            arm.ty = parse_type(p);
+        } else if (at(p, TK_IDENT)) {
+            arm.kind = PAT_TYPE_VAL;
+            arm.name = tok(p)->name;
+            advance(p);
+        } else {
+            fatal_at(tok(p)->span, "expected match pattern");
+        }
+        expect(p, TK_FATARROW, "'=>' in match arm");
+        if (at(p, TK_RETURN) || at(p, TK_BREAK) || at(p, TK_CONTINUE)) {
+            arm.jump = parse_arm_jump(p, tok(p)->span);
+        } else {
+            arm.val = parse_expr(p);
+        }
+        da_push(&e->u.match.arms, arm);
+        if (at(p, TK_COMMA)) {
+            advance(p);
+            continue;
+        }
+        break;
+    }
+    expect(p, TK_RBRACE, "'}' after match arms");
+    return e;
+}
+
 static Expr *parse_primary(Parser *p)
 {
     Span sp = tok(p)->span;
     switch (kind(p)) {
+    case TK_MATCH:
+        return parse_match(p);
     case TK_INT: {
         Expr *e = expr_new(EX_INT, sp);
         e->u.ilit.v = tok(p)->int_val;
@@ -308,6 +413,20 @@ static Expr *parse_postfix(Parser *p)
             c->u.cast.e = e;
             c->u.cast.t = parse_type(p);
             e = c;
+            break;
+        }
+        case TK_QUESTION: {
+            advance(p);
+            Expr *t = expr_new(EX_TRY, e->span);
+            t->u.tryy = e;
+            e = t;
+            break;
+        }
+        case TK_BANG: {
+            advance(p);
+            Expr *u = expr_new(EX_UNWRAP, e->span);
+            u->u.unwrap = e;
+            e = u;
             break;
         }
         default:
@@ -588,26 +707,34 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
     d->u.type.name = tok(p)->name;
     advance(p);
     expect(p, TK_ASSIGN, "'=' after type name");
-    expect(p, TK_STRUCT, "'struct'");
-    expect(p, TK_LBRACE, "'{'");
-    while (!at(p, TK_RBRACE)) {
-        if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected field name");
-        Field f;
-        f.name = tok(p)->name;
-        f.span = tok(p)->span;
+    if (at(p, TK_STRUCT)) {
         advance(p);
-        expect(p, TK_COLON, "':' after field name");
-        f.ty = parse_type(p);
-        da_push(&d->u.type.fields, f);
-        if (at(p, TK_COMMA)) {
+        expect(p, TK_LBRACE, "'{'");
+        while (!at(p, TK_RBRACE)) {
+            if (!at(p, TK_IDENT))
+                fatal_at(tok(p)->span, "expected field name");
+            Field f;
+            f.name = tok(p)->name;
+            f.span = tok(p)->span;
             advance(p);
-            continue;
+            expect(p, TK_COLON, "':' after field name");
+            f.ty = parse_type(p);
+            da_push(&d->u.type.fields, f);
+            if (at(p, TK_COMMA)) {
+                advance(p);
+                continue;
+            }
+            break;
         }
-        break;
+        expect(p, TK_RBRACE, "'}'");
+        eat_semi(p);
+        return d;
     }
-    expect(p, TK_RBRACE, "'}'");
-    eat_semi(p);
+    /* alias form: type Name = T; (primitives, unions, !T error types) */
+    d->u.type.fields.len = 0; /* no fields; alias target rides on ret? */
+    Type *alias = parse_type(p);
+    d->u.type.alias_ty = alias;
+    expect(p, TK_SEMI, "';' after type alias");
     return d;
 }
 

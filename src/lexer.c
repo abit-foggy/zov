@@ -364,8 +364,7 @@ void lex_next(Lexer *lx)
     case '|':
         lx->pos++;
         if (peek(lx) == '|') { lx->pos++; t->kind = TK_OROR; }
-        else
-            fatal_at(t->span, "unexpected '|'"); /* no bitwise ops in v0.1 */
+        else t->kind = TK_PIPE; /* union separator in type position */
         break;
     case '+': t->kind = TK_PLUS; lx->pos++; break;
     case '-': t->kind = TK_MINUS; lx->pos++; break;

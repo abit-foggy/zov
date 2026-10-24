@@ -52,7 +52,7 @@ typedef enum TokenKind {
     TK_LT, TK_GT, TK_ASSIGN,
     TK_LPAREN, TK_RPAREN, TK_LBRACE, TK_RBRACE,
     TK_LBRACKET, TK_RBRACKET,
-    TK_COMMA, TK_SEMI, TK_COLON, TK_AMP, TK_DOT,
+    TK_COMMA, TK_SEMI, TK_COLON, TK_AMP, TK_DOT, TK_PIPE,
 } TokenKind;
 
 typedef struct Token {

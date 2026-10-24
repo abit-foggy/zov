@@ -173,18 +173,17 @@ void fatal_at(Span span, const char *fmt, ...)
 
 /* ---- types ---- */
 
+/* Designated init keeps this extensible under -Wmissing-field-initializers. */
 static Type g_prims[] = {
-    {TY_NONE, NULL, NULL, 0, 0}, {TY_UNKNOWN, NULL, NULL, 0, 0},
-    {TY_VOID, NULL, NULL, 0, 0},
-    {TY_I8, NULL, NULL, 0, 0}, {TY_I16, NULL, NULL, 0, 0},
-    {TY_I32, NULL, NULL, 0, 0}, {TY_I64, NULL, NULL, 0, 0},
-    {TY_ISIZE, NULL, NULL, 0, 0},
-    {TY_U8, NULL, NULL, 0, 0}, {TY_U16, NULL, NULL, 0, 0},
-    {TY_U32, NULL, NULL, 0, 0}, {TY_U64, NULL, NULL, 0, 0},
-    {TY_USIZE, NULL, NULL, 0, 0},
-    {TY_F32, NULL, NULL, 0, 0}, {TY_F64, NULL, NULL, 0, 0},
-    {TY_BOOL, NULL, NULL, 0, 0}, {TY_CHAR, NULL, NULL, 0, 0},
-    {TY_STR, NULL, NULL, 0, 0},
+    [TY_NONE] = { .kind = TY_NONE }, [TY_UNKNOWN] = { .kind = TY_UNKNOWN },
+    [TY_VOID] = { .kind = TY_VOID }, [TY_I8] = { .kind = TY_I8 },
+    [TY_I16] = { .kind = TY_I16 }, [TY_I32] = { .kind = TY_I32 },
+    [TY_I64] = { .kind = TY_I64 }, [TY_ISIZE] = { .kind = TY_ISIZE },
+    [TY_U8] = { .kind = TY_U8 }, [TY_U16] = { .kind = TY_U16 },
+    [TY_U32] = { .kind = TY_U32 }, [TY_U64] = { .kind = TY_U64 },
+    [TY_USIZE] = { .kind = TY_USIZE }, [TY_F32] = { .kind = TY_F32 },
+    [TY_F64] = { .kind = TY_F64 }, [TY_BOOL] = { .kind = TY_BOOL },
+    [TY_CHAR] = { .kind = TY_CHAR }, [TY_STR] = { .kind = TY_STR },
 };
 
 Type *type_prim(TypeKind k)
@@ -250,6 +249,48 @@ Type *type_struct(const char *name)
     return type_comp(TY_STRUCT, NULL, 0, 0, name);
 }
 
+/* Union member identity: error variants key by name, payload types by
+ * structure; identical members are dropped on flatten. */
+static int member_eq(Type *a, Type *b)
+{
+    if (a->kind == TY_ERR && b->kind == TY_ERR)
+        return a->name == b->name;
+    return type_eq(a, b);
+}
+
+static void union_flatten(Type *m, TypeList *out)
+{
+    if (m->kind == TY_UNION) {
+        for (size_t i = 0; i < m->members.len; i++)
+            union_flatten(m->members.items[i], out);
+        return;
+    }
+    for (size_t i = 0; i < out->len; i++)
+        if (member_eq(out->items[i], m))
+            return;
+    da_push(out, m);
+}
+
+Type *type_union(TypeList *members)
+{
+    Type *t = zalloc(sizeof(Type));
+    t->kind = TY_UNION;
+    for (size_t i = 0; i < members->len; i++)
+        union_flatten(members->items[i], &t->members);
+    return t;
+}
+
+/* Named error types are never cached: distinct names must stay distinct. */
+Type *type_err(const char *name, Type *payload)
+{
+    Type *t = zalloc(sizeof(Type));
+    t->kind = TY_ERR;
+    t->name = name;
+    t->base = payload;
+    t->is_error = 1;
+    return t;
+}
+
 int type_eq(const Type *a, const Type *b)
 {
     if (a == b)
@@ -267,6 +308,16 @@ int type_eq(const Type *a, const Type *b)
         return a->count == b->count && type_eq(a->base, b->base);
     case TY_STRUCT:
         return a->name == b->name;
+    case TY_ERR:
+        return a->name == b->name && type_eq(a->base, b->base);
+    case TY_UNION: {
+        if (a->members.len != b->members.len)
+            return 0;
+        for (size_t i = 0; i < a->members.len; i++)
+            if (!type_eq(a->members.items[i], b->members.items[i]))
+                return 0;
+        return 1;
+    }
     default:
         return 1;
     }
@@ -321,6 +372,19 @@ const char *type_spelling(Type *t)
     }
     case TY_STRUCT:
         return t->name;
+    case TY_ERR:
+        return t->name ? t->name : type_spelling(t->base);
+    case TY_UNION: {
+        char *s = zalloc(256);
+        size_t off = 0;
+        off += (size_t)snprintf(s + off, 256 - off, "(");
+        for (size_t i = 0; i < t->members.len; i++)
+            off += (size_t)snprintf(s + off, 256 - off, "%s%s",
+                                    i ? " | " : "",
+                                    type_spelling(t->members.items[i]));
+        snprintf(s + off, 256 - off, ")");
+        return s;
+    }
     }
     return "<invalid>";
 }

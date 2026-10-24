@@ -332,6 +332,12 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     case EX_GENERIC:
         fatal_at(e->span, "generic instantiation is not supported in v0.1");
         return NULL;
+    case EX_MATCH:
+    case EX_TRY:
+    case EX_UNWRAP:
+    case EX_COERCE:
+        fatal_at(e->span, "match/?/! are not type-checked yet (v0.2 milestone 4)");
+        return NULL;
     }
     fatal_at(e->span, "invalid expression");
     return NULL;

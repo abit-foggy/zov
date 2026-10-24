@@ -352,6 +352,12 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     case EX_GENERIC:
         fatal("generic instantiation is not supported in v0.1");
         break;
+    case EX_MATCH:
+    case EX_TRY:
+    case EX_UNWRAP:
+    case EX_COERCE:
+        fatal("match/?/ lowering not implemented yet (v0.2 milestone 5)");
+        break;
     }
 }
 
