@@ -1,0 +1,27 @@
+// first-class test blocks: assert math, Vec[i32], and resource discipline
+use std::vec as vec;
+
+test "assert arithmetic" {
+    let mut x: i32 = 20;
+    x = x + 22;
+    assert(x == 42);
+};
+
+test "vector push and read" {
+    let mut v = vec::new[i32]();
+    for (let i in 0..5) {
+        v.push(i * 100);
+    };
+    assert(v.len() == 5);
+    assert(v.get(0usize) == 0);
+    assert(v.get(4usize) == 400);
+    v.free();
+};
+
+test "borrow-checked resource lifecycle" {
+    let mut s = vec::new[i32]();
+    s.push(9);
+    let before = s.len();
+    s.free();
+    assert(before == 1);
+};

@@ -1,0 +1,4 @@
+[PASS] assert arithmetic
+[PASS] vector push and read
+[PASS] borrow-checked resource lifecycle
+3 passed, 0 failed

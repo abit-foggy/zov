@@ -1,0 +1,12 @@
+// MUST FAIL: borrow violations inside test blocks are compile errors
+export type Res = resource struct { fd: i32 };
+
+export fn take(r: Res) void = { };
+
+export fn main() i32 = { return 0; };
+
+test "move twice" {
+    let r = Res{ fd = 1 };
+    take(r);
+    take(r);
+};

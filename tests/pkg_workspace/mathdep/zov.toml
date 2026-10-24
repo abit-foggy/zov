@@ -1,0 +1,4 @@
+[package]
+name = "mathdep"
+version = "0.2.0"
+entry = "src/lib.zov"

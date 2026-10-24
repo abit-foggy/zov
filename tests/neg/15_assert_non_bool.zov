@@ -1,0 +1,8 @@
+// MUST FAIL: assert requires a bool condition
+export fn main() i32 = {
+    return 0;
+};
+
+test "bad assert type" {
+    assert(123);
+};

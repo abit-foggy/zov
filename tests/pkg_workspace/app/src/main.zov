@@ -1,0 +1,16 @@
+use mathdep;
+use <math.h> as cmath;
+
+export fn main() i32 = {
+    println("triple(7)={mathdep::triple(7)}");
+    println("sqrt(4)={cmath::sqrt(4.0)}");
+    return 0;
+};
+
+test "dependency math" {
+    assert(mathdep::triple(5) == 15);
+};
+
+test "c library math" {
+    assert(cmath::sqrt(9.0) == 3.0);
+};

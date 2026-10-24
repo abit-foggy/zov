@@ -1,0 +1,10 @@
+[package]
+name = "app"
+version = "0.1.0"
+entry = "src/main.zov"
+
+[dependencies]
+mathdep = { path = "../mathdep" }
+
+[c-libraries]
+links = ["m"]

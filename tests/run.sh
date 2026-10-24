@@ -54,6 +54,51 @@ rm -f zov_std_fs_test.txt
 run_exit  10_std_fs tests/10_std_fs.zov 0
 rm -f zov_std_fs_test.txt
 
+# test-block runner: zovc test <file>
+if $ZOV test tests/11_test_blocks.zov > "$TMP/11.out" 2>&1; then
+    if cmp -s "$TMP/11.out" tests/11_test_blocks.expected; then
+        echo "PASS: 11_test_blocks"
+    else
+        echo "FAIL: 11_test_blocks (output mismatch)"
+        diff tests/11_test_blocks.expected "$TMP/11.out" | sed 's/^/    /'
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL: 11_test_blocks (zovc test exited nonzero)"
+    fails=$((fails + 1))
+fi
+
+# workspace package flow: build, run, and test via zov.toml
+WSAPP=tests/pkg_workspace/app
+rm -rf "$WSAPP/target" "$WSAPP/zov.lock"
+if $ZOV build -C "$WSAPP" > "$TMP/ws.out" 2>&1 \
+   && test -f "$WSAPP/zov.lock" \
+   && test -f "$WSAPP/target/app"; then
+    echo "PASS: pkg build + zov.lock + target/app"
+else
+    echo "FAIL: pkg build"
+    cat "$TMP/ws.out" | sed 's/^/    /'
+    fails=$((fails + 1))
+fi
+if $ZOV run -C "$WSAPP" > "$TMP/wsrun.out" 2>&1 \
+   && grep -q "triple(7)=21" "$TMP/wsrun.out" \
+   && grep -q "sqrt(4)=2" "$TMP/wsrun.out"; then
+    echo "PASS: pkg run output"
+else
+    echo "FAIL: pkg run output"
+    cat "$TMP/wsrun.out" | sed 's/^/    /'
+    fails=$((fails + 1))
+fi
+if $ZOV test -C "$WSAPP" > "$TMP/wstest.out" 2>&1 \
+   && grep -q "2 passed, 0 failed" "$TMP/wstest.out"; then
+    echo "PASS: pkg test harness"
+else
+    echo "FAIL: pkg test harness"
+    cat "$TMP/wstest.out" | sed 's/^/    /'
+    fails=$((fails + 1))
+fi
+rm -rf "$WSAPP/target" "$WSAPP/zov.lock"
+
 run_neg() { # negative sema case: compilation MUST fail
     file=$1
     if $ZOV "$file" -o "$TMP/neg_out" 2> "$TMP/neg.err"; then

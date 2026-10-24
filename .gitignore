@@ -7,3 +7,6 @@ vendor/tinycc/.zov-built
 vendor/tinycc/config.mak
 vendor/tinycc/config.h
 vendor/tinycc/tcc
+tests/pkg_workspace/app/zov.lock
+tests/pkg_workspace/app/target/
+.zov-test-bin
