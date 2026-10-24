@@ -962,8 +962,12 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                     buf_printf(b, ", _q%d.u.v%lu", id, (unsigned long)i);
                 buf_printf(b, " });\n}\n");
             }
-            buf_printf(b, "_q%d.u.v%d; })", id,
-                       cg_union_idx(t, union_ok_member(t)));
+            Type *ok = union_ok_member(t);
+            if (member_has_payload(ok))
+                buf_printf(b, "_q%d.u.v%d; })", id, cg_union_idx(t, ok));
+            else
+                /* void payload: the try itself yields nothing */
+                buf_printf(b, "})");
         } else {
             buf_printf(b, "({ %s *_q%d = (", c_type(cg, t->base), id);
             emit_expr(cg, e->u.tryy, 0);
@@ -995,10 +999,9 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     }
     case EX_COERCE: {
         Type *u = e->u.coerce.target;
-        Type *m = e->u.coerce.e->type;
-        int idx = cg_union_idx(u, m);
-        buf_printf(b, "((%s){ %du", union_name(cg, u), idx);
-        if (member_has_payload(m)) {
+        Type *m = u->members.items[e->coerce_tag];
+        buf_printf(b, "((%s){ %du", union_name(cg, u), e->coerce_tag);
+        if (e->u.coerce.e && member_has_payload(m)) {
             buf_puts(b, ", ");
             emit_expr(cg, e->u.coerce.e, 0);
         }

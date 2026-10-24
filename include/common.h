@@ -41,9 +41,13 @@ typedef struct Span {
 } Span;
 
 typedef struct Arena {
-    char *base;
+    char *base; /* current block */
     size_t cap;
     size_t off;
+    /* chained blocks: growth must never move prior allocations */
+    char **blocks;
+    size_t nblocks;
+    size_t blockscap;
 } Arena;
 
 void arena_init(Arena *a, size_t cap);

@@ -425,8 +425,17 @@ static void bx_assign(Borrow *b, Expr *e)
     }
     if (lhs->kind == EX_FIELD || lhs->kind == EX_INDEX) {
         const char *root = resolve_root(b, lhs);
-        if (root)
+        if (root) {
+            BVar *bv = var_find(b, root);
+            /* writing through a raw pointer mutates the pointee, not
+             * the binding: no mutability requirement on the pointer */
+            if (bv && bv->ty->kind == TY_PTR) {
+                if (bv->moved)
+                    bfatal(lhs->span, "use of moved value '%s'", root);
+                return;
+            }
             check_root_write(b, lhs, root);
+        }
         return;
     }
 }

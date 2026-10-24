@@ -31,31 +31,44 @@ static Arena g_intern_arena;
 
 void arena_init(Arena *a, size_t cap)
 {
-    a->base = malloc(cap);
-    if (!a->base)
-        fatal("out of memory");
-    a->cap = cap;
-    a->off = 0;
+    memset(a, 0, sizeof(*a));
+    (void)cap;
 }
 
 void arena_destroy(Arena *a)
 {
-    free(a->base);
-    a->base = NULL;
-    a->cap = 0;
-    a->off = 0;
+    for (size_t i = 0; i < a->nblocks; i++)
+        free(a->blocks[i]);
+    free(a->blocks);
+    memset(a, 0, sizeof(*a));
 }
 
-/* Align `off` up to `align` (power of two); grow geometrically on overflow. */
+/* Block-chained bump allocator: overflow opens a fresh block instead of
+ * moving the base, so every previously returned pointer stays valid. */
+#define ZOV_ARENA_BLOCK (1u << 20)
+
 void *arena_alloc(Arena *a, size_t size, size_t align)
 {
     size_t off = (a->off + align - 1) & ~(align - 1);
     if (off + size > a->cap) {
-        while (off + size > a->cap)
-            a->cap = a->cap ? a->cap * 2 : (1 << 16);
-        a->base = realloc(a->base, a->cap);
+        size_t bcap = ZOV_ARENA_BLOCK;
+        if (size > bcap)
+            bcap = size;
+        a->base = malloc(bcap);
         if (!a->base)
             fatal("out of memory");
+        if (a->nblocks >= a->blockscap) {
+            size_t nc = a->blockscap ? a->blockscap * 2 : 16;
+            char **nb = realloc(a->blocks, nc * sizeof(*nb));
+            if (!nb)
+                fatal("out of memory");
+            a->blocks = nb;
+            a->blockscap = nc;
+        }
+        a->blocks[a->nblocks++] = a->base;
+        a->cap = bcap;
+        a->off = 0;
+        off = 0;
     }
     a->off = off + size;
     return a->base + off;

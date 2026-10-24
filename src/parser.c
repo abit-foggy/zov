@@ -445,6 +445,7 @@ static Expr *parse_call_args(Parser *p, Expr *callee)
 }
 
 static Expr *parse_binary_after(Parser *p, Expr *lhs, int min_prec);
+static Expr *parse_postfix_after(Parser *p, Expr *e);
 
 /* '[' after an expression: generic args vs indexing. A bare-ident arg
  * is ambiguous (Foo[T] vs arr[i]); the token AFTER ']' disambiguates. */
@@ -452,7 +453,8 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
 {
     Span sp = tok(p)->span;
     advance(p); /* '[' */
-    if (at(p, TK_IDENT) && base->kind == EX_IDENT) {
+    if (at(p, TK_IDENT)
+        && (base->kind == EX_IDENT || base->kind == EX_NS_IDENT)) {
         const char *nm = tok(p)->name;
         Span nsp = tok(p)->span;
         advance(p);
@@ -475,7 +477,7 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
         /* not a lone ident: it opens a general index expression */
         Expr *idx0 = expr_new(EX_IDENT, nsp);
         idx0->u.ident = nm;
-        Expr *idx = parse_binary_after(p, idx0, 1);
+        Expr *idx = parse_binary_after(p, parse_postfix_after(p, idx0), 1);
         expect(p, TK_RBRACKET, "']'");
         Expr *e = expr_new(EX_INDEX, sp);
         e->u.index.base = base;
@@ -553,9 +555,8 @@ static Expr *parse_struct_lit(Parser *p, Expr *base)
     return e;
 }
 
-static Expr *parse_postfix(Parser *p)
+static Expr *parse_postfix_after(Parser *p, Expr *e)
 {
-    Expr *e = parse_primary(p);
     for (;;) {
         switch (kind(p)) {
         case TK_LPAREN:
@@ -618,6 +619,11 @@ static Expr *parse_postfix(Parser *p)
             return e;
         }
     }
+}
+
+static Expr *parse_postfix(Parser *p)
+{
+    return parse_postfix_after(p, parse_primary(p));
 }
 
 static Expr *parse_unary(Parser *p)

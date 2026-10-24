@@ -63,7 +63,7 @@ typedef struct Sema {
 typedef struct Meth {
     const char *sname; /* struct template name: Vec, Point */
     const char *mname; /* method name as written: push */
-    Sym *sym;
+    Sym sym; /* stored by value: the scope array reallocs */
 } Meth;
 
 static void push_scope(Sema *se)
@@ -126,6 +126,14 @@ static int is_ptrish(Type *t)
 {
     return t && (t->kind == TY_PTR || t->kind == TY_REF
                  || t->kind == TY_MUTREF);
+}
+
+/* *T widens to nullable *T: always safe, never loses nullability */
+static int ptr_widens(Type *from, Type *to)
+{
+    return from && to && from->kind == TY_PTR && to->kind == TY_PTR
+        && !from->nullable && to->nullable
+        && type_eq(from->base, to->base);
 }
 
 /* printable covers every intrinsic format a print segment can emit */
@@ -271,19 +279,32 @@ static int union_member_index(Type *u, Type *t)
     return -1;
 }
 
-/* Wrap e in EX_COERCE when target is a union and e holds a member type. */
+/* Wrap e in EX_COERCE when target is a union and e holds a member type
+ * (directly, or as an error variant's payload). */
 static Expr *maybe_coerce(Expr *e, Type *target)
 {
     if (!target || target->kind != TY_UNION || !e->type)
         return e;
     if (e->type->kind == TY_UNION || e->type->kind == TY_UNKNOWN)
         return e;
-    if (union_member_index(target, e->type) < 0)
+    int tag = union_member_index(target, e->type);
+    if (tag < 0) {
+        /* error-payload wrap: return 1 builds FsError from its i32 */
+        for (size_t i = 0; i < target->members.len; i++) {
+            Type *m = target->members.items[i];
+            if (m->is_error && type_eq(m->base, e->type)) {
+                tag = (int)i;
+                break;
+            }
+        }
+    }
+    if (tag < 0)
         return e;
     Expr *c = expr_new(EX_COERCE, e->span);
     c->u.coerce.e = e;
     c->u.coerce.target = target;
-    c->type = target; /* already type-checked as a member above */
+    c->coerce_tag = tag;
+    c->type = target;
     return c;
 }
 
@@ -297,7 +318,7 @@ static Sym *find_method(Sema *se, const char *sname, const char *mname)
     for (size_t i = 0; i < se->methods.len; i++)
         if (se->methods.items[i].sname == sname
             && se->methods.items[i].mname == mname)
-            return se->methods.items[i].sym;
+            return &se->methods.items[i].sym;
     return NULL;
 }
 
@@ -932,7 +953,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             return NULL;
         }
         Type *rt = check_expr(se, e->u.assign.rhs, lt);
-        if (!is_unknown(rt) && !is_unknown(lt) && !type_eq(lt, rt))
+        if (!is_unknown(rt) && !is_unknown(lt) && !type_eq(lt, rt)
+            && !ptr_widens(rt, lt))
             fatal_at(e->span, "cannot assign %s to %s", type_spelling(rt),
                      type_spelling(lt));
         e->type = lt;
@@ -953,7 +975,21 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                           || op == TK_GT || op == TK_LE || op == TK_GE);
         Type *lt = check_expr(se, e->u.binary.lhs,
                              comparison ? NULL : hint);
-        check_expr(se, e->u.binary.rhs, lt);
+        Type *rt = check_expr(se, e->u.binary.rhs, lt);
+        if (comparison) {
+            /* null compares against any nullable pointer */
+            int null_cmp = 0;
+            if (e->u.binary.lhs->kind == EX_NULL && rt->kind == TY_PTR
+                && rt->nullable)
+                null_cmp = 1;
+            if (e->u.binary.rhs->kind == EX_NULL && lt->kind == TY_PTR
+                && lt->nullable)
+                null_cmp = 1;
+            if (null_cmp) {
+                e->type = type_prim(TY_BOOL);
+                return e->type;
+            }
+        }
         if (op == TK_PLUS && (lt->kind == TY_STR
                               || e->u.binary.rhs->type->kind == TY_STR)) {
             /* str + T scripting chain: any printable T, result is str */
@@ -1258,6 +1294,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(fi->span, "struct '%s' has no field '%s'",
                          st->name, fi->name);
             Type *it = check_expr(se, fi->val, ft);
+            if (fi->val->kind == EX_NULL && ft->kind == TY_PTR && ft->nullable)
+                continue; /* null widens to any nullable pointer */
             if (!is_unknown(it) && !type_eq(it, ft))
                 fatal_at(fi->span, "field '%s' expects %s, got %s", fi->name,
                          type_spelling(ft), type_spelling(it));
@@ -1470,7 +1508,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         return NULL;
     }
     case EX_COERCE:
-        check_expr(se, e->u.coerce.e, NULL);
+        if (e->u.coerce.e)
+            check_expr(se, e->u.coerce.e, NULL);
         e->type = e->u.coerce.target;
         return e->type;
     }
@@ -1497,7 +1536,8 @@ static void check_let(Sema *se, Stmt *s)
                      "add an explicit type annotation");
         declared = it;
     } else {
-        if (!is_unknown(it) && !type_eq(declared, it))
+        if (!is_unknown(it) && !type_eq(declared, it)
+            && !ptr_widens(it, declared))
             fatal_at(s->span, "cannot bind %s to %s", type_spelling(it),
                      type_spelling(declared));
     }
@@ -1587,7 +1627,23 @@ static void check_stmt(Sema *se, Stmt *s)
                 fatal_at(s->span, "returning %s from a %s function",
                          type_spelling(t), type_spelling(ret));
         } else if (ret->kind != TY_VOID) {
-            fatal_at(s->span, "missing return value");
+            /* bare return may build a void-payload union member */
+            if (ret->kind == TY_UNION) {
+                int idx = -1;
+                for (size_t i = 0; i < ret->members.len; i++)
+                    if (!ret->members.items[i]->is_error
+                        && ret->members.items[i]->kind == TY_VOID)
+                        idx = (int)i;
+                if (idx >= 0) {
+                    Expr *c = expr_new(EX_COERCE, s->span);
+                    c->u.coerce.e = NULL;
+                    c->u.coerce.target = ret;
+                    c->coerce_tag = idx;
+                    s->u.ret = c;
+                }
+            }
+            if (!s->u.ret)
+                fatal_at(s->span, "missing return value");
         }
         break;
     }
@@ -1623,10 +1679,18 @@ static void check_block(Sema *se, Block *b)
 
 static void register_decl(Sema *se, Decl *d)
 {
+    /* instantiations register while a body check holds a local scope;
+     * all decls must land in the global scope */
+    Scope *saved = se->scope;
+    while (se->scope->parent)
+        se->scope = se->scope->parent;
     switch (d->kind) {
     case DL_USE: {
         if (d->u.use.zsyms.len > 0) {
             /* loaded .zov module: members resolve to global symbols */
+            Sym *prior = scope_find(se->scope, d->u.use.alias);
+            if (prior && prior->kind == SYM_NS)
+                break; /* diamond import: namespace already registered */
             Sym sym;
             memset(&sym, 0, sizeof(sym));
             sym.name = d->u.use.alias;
@@ -1639,11 +1703,23 @@ static void register_decl(Sema *se, Decl *d)
         }
         if (!d->u.use.is_c_header)
             return; /* std module paths carry no symbols */
+        Sym *prior = scope_find(se->scope, d->u.use.alias);
         CHeader *h = cimport_header(d->u.use.path, 1);
         if (!h)
             h = cimport_header(d->u.use.path, 0);
         if (!h)
             fatal_at(d->span, "cannot import C header '%s'", d->u.use.path);
+        if (prior && prior->kind == SYM_NS && prior->hdr) {
+            /* same alias over different headers: merge member tables */
+            for (size_t i = 0; i < h->members.len; i++) {
+                CMember *m = &h->members.items[i];
+                if (!cimport_find(prior->hdr, m->name)) {
+                    CMember copy = *m;
+                    da_push(&prior->hdr->members, copy);
+                }
+            }
+            break;
+        }
         Sym sym;
         memset(&sym, 0, sizeof(sym));
         sym.name = d->u.use.alias;
@@ -1752,11 +1828,11 @@ static void register_decl(Sema *se, Decl *d)
         }
         scope_add(se, sym);
         Sym *reg = scope_find(se->scope, sym.name);
-        if (is_method) {
+        if (is_method && reg) {
             Meth m;
             m.sname = d->u.fn.sname;
             m.mname = d->u.fn.mname;
-            m.sym = reg;
+            m.sym = *reg; /* copy: scope storage reallocs */
             da_push(&se->methods, m);
         }
         if (zstr_eq(d->u.fn.name, "main")) {
@@ -1767,6 +1843,7 @@ static void register_decl(Sema *se, Decl *d)
         break;
     }
     }
+    se->scope = saved;
 }
 
 static void check_fn(Sema *se, Decl *d)

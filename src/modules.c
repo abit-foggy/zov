@@ -35,6 +35,7 @@ typedef DA(char *) PathList;
 
 typedef struct Loader {
     Program *prog;
+    DA(struct Decl *) staged; /* imported decls; prepended before sema */
     PathList visited; /* canonical paths already merged (diamond dedup) */
     PathList loading; /* in-flight imports: cycle detection */
 } Loader;
@@ -213,9 +214,13 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
     }
     for (size_t i = 0; i < sub.decls.len; i++) {
         Decl *d = sub.decls.items[i];
-        if (d->kind == DL_USE || !d->exported)
+        if (d->kind == DL_USE && !d->u.use.is_c_header
+            && d->u.use.zsyms.len == 0)
+            continue; /* module deps were resolved by recursion */
+        if (d->kind != DL_USE && !d->exported)
             continue;
-        da_push(&ld->prog->decls, d);
+        /* staged ahead of importers: registration order is topological */
+        da_push(&ld->staged, d);
         const char *nm = NULL;
         if (d->kind == DL_FN && !d->u.fn.recv)
             nm = d->u.fn.name;
@@ -275,4 +280,19 @@ void modules_load(Program *prog, const char *main_file)
         free(file);
     }
     free(srcdir);
+    /* imports precede importers so pass-1 type resolution is topological */
+    if (ld->staged.len > 0) {
+        size_t total = ld->staged.len + prog->decls.len;
+        Decl **merged = malloc(total * sizeof(Decl *));
+        if (!merged)
+            die("out of memory");
+        size_t k = 0;
+        for (size_t i = 0; i < ld->staged.len; i++)
+            merged[k++] = ld->staged.items[i];
+        for (size_t i = 0; i < prog->decls.len; i++)
+            merged[k++] = prog->decls.items[i];
+        prog->decls.items = merged;
+        prog->decls.len = total;
+        prog->decls.cap = total;
+    }
 }

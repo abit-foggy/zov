@@ -458,6 +458,8 @@ static void parse_typedef(CHeader *h, CTokList * t, size_t i, size_t end)
         m.kind = CM_TYPE;
         if (base->kind == TY_STRUCT && base->c_name)
             m.ret = c_opaque(alias); /* emit the alias itself */
+        else if (zstr_eq(alias, "size_t"))
+            m.ret = type_prim(TY_USIZE); /* spec: size_t is Zov usize */
         else
             m.ret = base;
         header_add(h, m);

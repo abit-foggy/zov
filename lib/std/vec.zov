@@ -1,0 +1,76 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+use std::mem as mem;
+use <stdlib.h> as c;
+
+// resource: Vec moves are tracked by the Phase 3 borrow checker, which
+// prevents double-frees and use-after-move at compile time
+export type Vec[T] = resource struct {
+    data: nullable *T,
+    length: usize,
+    cap: usize,
+};
+
+export fn new[T]() Vec[T] = {
+    return Vec[T]{ data = null, length = 0usize, cap = 0usize };
+};
+
+export fn (self: &mut Vec[T]) push(val: T) void = {
+    if (self.length == self.cap) {
+        let new_cap: usize = (self.cap * 2usize) + 1usize;
+        if (self.data == null) {
+            self.data = mem::alloc[T](new_cap);
+        } else {
+            let p: *T = self.data!;
+            self.data = mem::realloc_buf[T](p, new_cap);
+        };
+        self.cap = new_cap;
+    };
+    let d: *T = self.data!;
+    d[self.length] = val;
+    self.length = self.length + 1usize;
+};
+
+export fn (self: &Vec[T]) get(idx: usize) T = {
+    if (idx >= self.length) { c::abort(); };
+    let d: *T = self.data!;
+    return d[idx];
+};
+
+export fn (self: &mut Vec[T]) set(idx: usize, val: T) void = {
+    if (idx >= self.length) { c::abort(); };
+    let d: *T = self.data!;
+    d[idx] = val;
+};
+
+export fn (self: &Vec[T]) len() usize = {
+    return self.length;
+};
+
+export fn (self: Vec[T]) free() void = {
+    if (self.data == null) { return; };
+    let d: *T = self.data!;
+    mem::free_ptr[T](d);
+};
