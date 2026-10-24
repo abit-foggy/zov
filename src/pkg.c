@@ -251,6 +251,9 @@ int pkg_load(Pkg *p, const char *toml_path)
             }
             memset(&cur_dep, 0, sizeof(cur_dep));
             copy_clamped(cur_dep.name, sizeof(cur_dep.name), ks);
+            char *v0 = v;
+            trim(&v0, end);
+            v = v0;
             if (*v == '{') {
                 parse_dep_table(v + 1, end, &cur_dep);
             } else {

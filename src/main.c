@@ -25,6 +25,8 @@
  */
 
 #include "driver.h"
+#include "cimport.h"
+#include "pkg.h"
 #include "parser.h"
 #include "modules.h"
 #include "sema.h"
@@ -32,6 +34,8 @@
 #include "codegen.h"
 
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static char *read_file(const char *path)
 {
@@ -64,6 +68,143 @@ static char *read_file(const char *path)
     return buf;
 }
 
+/* ---- workspace subcommands ---- */
+
+static int cmd_init(const char *dir);
+static int cmd_project(const char *dir, int release, int test_mode,
+                       const char *run_args);
+
+static void mkdirs(const char *path)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
+static void write_file_if_absent(const char *path, const char *text)
+{
+    if (access(path, F_OK) == 0)
+        return;
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        fprintf(stderr, "zovc: cannot write '%s'\n", path);
+        exit(1);
+    }
+    fputs(text, f);
+    fclose(f);
+}
+
+static int cmd_init(const char *dir)
+{
+    char sub[600];
+    mkdirs(dir);
+    snprintf(sub, sizeof(sub), "%s/src", dir);
+    mkdirs(sub);
+    char name[128];
+    const char *base = strrchr(dir, '/');
+    base = base ? base + 1 : dir;
+    snprintf(name, sizeof(name), "%s", base);
+    char toml[1024];
+    snprintf(toml, sizeof(toml),
+             "[package]\nname = \"%s\"\nversion = \"0.1.0\"\n"
+             "entry = \"src/main.zov\"\n\n[dependencies]\n\n"
+             "[c-libraries]\nlinks = [\"m\"]\n",
+             name);
+    snprintf(sub, sizeof(sub), "%s/zov.toml", dir);
+    write_file_if_absent(sub, toml);
+    snprintf(sub, sizeof(sub), "%s/src/main.zov", dir);
+    {
+        char starter[512];
+        snprintf(starter, sizeof(starter),
+                 "export fn main() i32 = {\n"
+                 "    println(\"hello from %s\");\n"
+                 "    return 0;\n"
+                 "};\n"
+                 "\n"
+                 "test \"sanity\" {\n"
+                 "    assert(1 + 1 == 2);\n"
+                 "};\n",
+                 name);
+        write_file_if_absent(sub, starter);
+    }
+    snprintf(sub, sizeof(sub), "%s/.gitignore", dir);
+    write_file_if_absent(sub, "/target/\n.zov-cache/\n");
+    printf("initialized zov package '%s'\n", name);
+    return 0;
+}
+
+/* build (and optionally run) a zov.toml project */
+static int cmd_project(const char *dir, int release, int test_mode,
+                       const char *run_args)
+{
+    char toml[600];
+    snprintf(toml, sizeof(toml), "%s/zov.toml", dir);
+    Pkg pkg;
+    if (pkg_load(&pkg, toml) != 0) {
+        fprintf(stderr, "zovc: cannot load '%s'\n", toml);
+        return 1;
+    }
+    for (size_t i = 0; i < pkg.include_dirs.len; i++)
+        cimport_add_include_dir(pkg.include_dirs.items[i]);
+    char entry[1024];
+    snprintf(entry, sizeof(entry), "%s/%s", pkg.dir, pkg.entry);
+    char *src = read_file(entry);
+    if (!src) {
+        fprintf(stderr, "zovc: cannot open entry '%s'\n", entry);
+        return 1;
+    }
+    char target[600];
+    snprintf(target, sizeof(target), "%s/target", pkg.dir);
+    mkdirs(target);
+    char out[900];
+    if (test_mode)
+        snprintf(out, sizeof(out), "%s/%s_tests", target, pkg.name);
+    else
+        snprintf(out, sizeof(out), "%s/%s", target, pkg.name);
+    Program prog = {0};
+    parse_program(src, entry, &prog);
+    modules_load(&prog, entry, &pkg);
+    sema_check(&prog, test_mode);
+    borrow_check(&prog);
+    char *c_src = codegen_generate_mode(&prog, test_mode);
+    int rc = driver_compile_ex(c_src, out, 0, release, pkg.links.items,
+                               pkg.links.len, pkg.include_dirs.items,
+                               pkg.include_dirs.len);
+    free(c_src);
+    free(src);
+    if (rc != 0)
+        return rc;
+    if (test_mode) {
+        if (pkg_write_lock(&pkg) != 0)
+            return 1;
+        char cmd[1200];
+        snprintf(cmd, sizeof(cmd), "'%s'%s", out,
+                 run_args ? run_args : "");
+        int st = system(cmd);
+        pkg_free(&pkg);
+        return WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    }
+    if (pkg_write_lock(&pkg) != 0)
+        return 1;
+    printf("built %s\n", out);
+    if (run_args != NULL) {
+        char cmd[1200];
+        snprintf(cmd, sizeof(cmd), "'%s'%s", out, run_args);
+        int st = system(cmd);
+        pkg_free(&pkg);
+        return WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    }
+    pkg_free(&pkg);
+    return 0;
+}
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -83,17 +224,66 @@ int main(int argc, char **argv)
     int force_cc = 0;
     int test_mode = 0;
 
-    /* minimal dispatch: full subcommands arrive with the CLI milestone */
-    if (argc >= 3 && strcmp(argv[1], "test") == 0
-        && strstr(argv[2], ".zov")) {
-        test_mode = 1;
-        out = ".zov-test-bin";
-        argv[1] = argv[2];
-        argv++;
-        argc--;
+    if (argc >= 2 && strcmp(argv[1], "init") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: zovc init <dir>\n");
+            return 1;
+        }
+        return cmd_init(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "build") == 0) {
+        const char *dir = ".";
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "-C") == 0 && i + 1 < argc)
+                dir = argv[++i];
+        }
+        int release = 0;
+        for (int i = 2; i < argc; i++)
+            if (strcmp(argv[i], "--release") == 0)
+                release = 1;
+        return cmd_project(dir, release, 0, NULL);
+    }
+    if (argc >= 2 && strcmp(argv[1], "run") == 0) {
+        const char *dir = ".";
+        int ai = 2;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "-C") == 0 && i + 1 < argc) {
+                dir = argv[++i];
+                ai = i + 1;
+            }
+        }
+        int release = 0;
+        for (int i = ai; i < argc; i++)
+            if (strcmp(argv[i], "--release") == 0)
+                release = 1;
+        char runargs[1024] = "";
+        for (int i = ai; i < argc; i++) {
+            if (strcmp(argv[i], "--release") == 0)
+                continue;
+            size_t len = strlen(runargs);
+            snprintf(runargs + len, sizeof(runargs) - len, " %s",
+                     argv[i]);
+        }
+        return cmd_project(dir, release, 0, runargs);
+    }
+    if (argc >= 2 && strcmp(argv[1], "test") == 0) {
+        if (argc >= 3 && strstr(argv[2], ".zov")) {
+            /* single-file test: flow through the direct pipeline */
+            file = argv[2];
+            out = ".zov-test-bin";
+            test_mode = 1;
+        } else {
+        const char *dir = ".";
+            for (int i = 2; i < argc; i++) {
+                if (strcmp(argv[i], "-C") == 0 && i + 1 < argc)
+                    dir = argv[++i];
+            }
+            return cmd_project(dir, 0, 1, NULL);
+        }
     }
 
-    for (int i = 1; i < argc; i++) {
+
+    for (int i = file ? 2 : 1; i < argc; i++) {
         if (strcmp(argv[i], "--emit-c") == 0) {
             emit_c = 1;
         } else if (strcmp(argv[i], "--test") == 0) {
@@ -116,7 +306,7 @@ int main(int argc, char **argv)
             return 1;
         } else if (!file) {
             file = argv[i];
-        } else {
+        } else if (strcmp(argv[i], file) != 0) {
             fprintf(stderr, "zovc: multiple input files are unsupported\n");
             return 1;
         }

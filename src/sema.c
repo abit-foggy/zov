@@ -855,6 +855,7 @@ static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
                          type_spelling(at));
         }
     }
+    e->type = fn->ret; /* callers read e->type for concat/arg typing */
     return fn->ret;
 }
 
