@@ -40,6 +40,7 @@ typedef struct Pkg {
     char name[128];
     char version[64];
     char entry[256];
+    int freestanding;  /* [package] freestanding = true: bare-metal build */
     DA(PkgDep) deps;
     DA(char *) links;        /* [c-libraries] links, malloc'd strings */
     DA(char *) include_dirs;  /* malloc'd strings */

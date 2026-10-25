@@ -109,13 +109,50 @@ static int compile_via_tcc_ex(const char *c_src, const char *out_path,
 
 #endif /* USE_LIBTCC */
 
+/* Freestanding backend flags; -c emits a linkable kernel object. */
+static int compile_via_cc_fs(const char *c_src, const char *out_path)
+{
+    int to_object = strlen(out_path) > 2
+                    && strcmp(out_path + strlen(out_path) - 2, ".o") == 0;
+    char cmd[2048];
+    size_t off = (size_t)snprintf(cmd, sizeof(cmd),
+                                  "cc -x c -std=c99 -O2 -ffreestanding "
+                                  "-nostdlib -mno-red-zone -fno-pie");
+    if (to_object)
+        off += (size_t)snprintf(cmd + off, sizeof(cmd) - off, " -c");
+    off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                            " -o '%s' -", out_path);
+    if (off >= sizeof(cmd)) {
+        fatal("freestanding link command too long");
+        return 1;
+    }
+    FILE *cc = popen(cmd, "w");
+    if (!cc) {
+        fatal("failed to spawn cc");
+        return 1;
+    }
+    fputs(c_src, cc);
+    int st = pclose(cc);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        fatal("cc failed with status %d", st);
+        return 1;
+    }
+    return 0;
+}
+
 int driver_compile_ex(const char *c_src, const char *out_path,
                       int emit_c_only, int force_cc, char **links,
-                      size_t nlinks, char **include_dirs, size_t ninclude)
+                      size_t nlinks, char **include_dirs, size_t ninclude,
+                      int freestanding)
 {
     if (emit_c_only) {
         fputs(c_src, stdout);
         return 0;
+    }
+    if (freestanding) {
+        /* bare-metal targets always take the portable cc pipe: libtcc's
+         * hosted crt + libc wiring has no freestanding equivalent */
+        return compile_via_cc_fs(c_src, out_path);
     }
 #ifdef USE_LIBTCC
     if (!force_cc) {
@@ -136,5 +173,5 @@ int driver_compile(const char *c_src, const char *out_path,
                    int emit_c_only, int force_cc)
 {
     return driver_compile_ex(c_src, out_path, emit_c_only, force_cc, NULL,
-                             0, NULL, 0);
+                             0, NULL, 0, 0);
 }

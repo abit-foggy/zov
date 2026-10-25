@@ -36,6 +36,7 @@ int driver_compile(const char *c_src, const char *out_path,
 /* Extended form carrying [c-libraries] links and include dirs. */
 int driver_compile_ex(const char *c_src, const char *out_path,
                       int emit_c_only, int force_cc, char **links,
-                      size_t nlinks, char **include_dirs, size_t ninclude);
+                      size_t nlinks, char **include_dirs, size_t ninclude,
+                      int freestanding);
 
 #endif /* ZOV_DRIVER_H */

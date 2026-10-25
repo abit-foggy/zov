@@ -236,14 +236,25 @@ int pkg_load(Pkg *p, const char *toml_path)
         char *v = eq + 1;
         if (sec == SEC_PACKAGE) {
             char tmp[512];
-            if (!parse_quoted(&v, end, tmp, sizeof(tmp)))
-                pkg_die("package.%s must be a string", ks);
-            if (strcmp(ks, "name") == 0)
-                copy_clamped(p->name, sizeof(p->name), tmp);
-            if (strcmp(ks, "version") == 0)
-                copy_clamped(p->version, sizeof(p->version), tmp);
-            if (strcmp(ks, "entry") == 0)
-                copy_clamped(p->entry, sizeof(p->entry), tmp);
+            if (strcmp(ks, "freestanding") == 0) {
+                /* bare boolean: true/false (quoted spelling also fine) */
+                if (!parse_quoted(&v, end, tmp, sizeof(tmp))) {
+                    char *vs = v;
+                    trim(&vs, end);
+                    copy_clamped(tmp, sizeof(tmp), vs);
+                }
+                p->freestanding = (strcmp(tmp, "true") == 0
+                                   || strcmp(tmp, "1") == 0);
+            } else {
+                if (!parse_quoted(&v, end, tmp, sizeof(tmp)))
+                    pkg_die("package.%s must be a string", ks);
+                if (strcmp(ks, "name") == 0)
+                    copy_clamped(p->name, sizeof(p->name), tmp);
+                if (strcmp(ks, "version") == 0)
+                    copy_clamped(p->version, sizeof(p->version), tmp);
+                if (strcmp(ks, "entry") == 0)
+                    copy_clamped(p->entry, sizeof(p->entry), tmp);
+            }
         } else if (sec == SEC_DEPS) {
             if (have_cur_dep) {
                 da_push(&p->deps, cur_dep);

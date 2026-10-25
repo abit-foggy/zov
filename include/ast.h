@@ -251,6 +251,7 @@ Decl *decl_new(DeclKind kind, Span span);
 
 typedef struct Program {
     DA(struct Decl *) decls;
+    int freestanding; /* bare-metal build: hosted prelude omitted */
 } Program;
 
 #endif /* ZOV_AST_H */

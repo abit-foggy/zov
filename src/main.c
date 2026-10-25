@@ -161,6 +161,7 @@ static int cmd_project(const char *dir, int release, int test_mode,
         return 1;
     }
     Program prog = {0};
+    prog.freestanding = pkg.freestanding;
     parse_program(src, entry, &prog);
     modules_load(&prog, entry, &pkg);
     sema_check(&prog, test_mode);
@@ -177,12 +178,15 @@ static int cmd_project(const char *dir, int release, int test_mode,
     char out[900];
     if (test_mode)
         snprintf(out, sizeof(out), "%s/%s_tests", target, pkg.name);
+    else if (pkg.freestanding)
+        /* kernel objects link via the platform's own linker scripts */
+        snprintf(out, sizeof(out), "%s/%s.o", target, pkg.name);
     else
         snprintf(out, sizeof(out), "%s/%s", target, pkg.name);
     char *c_src = codegen_generate_mode(&prog, test_mode);
     int rc = driver_compile_ex(c_src, out, 0, release, pkg.links.items,
                                pkg.links.len, pkg.include_dirs.items,
-                               pkg.include_dirs.len);
+                               pkg.include_dirs.len, pkg.freestanding);
     free(c_src);
     free(src);
     if (rc != 0)
@@ -219,6 +223,8 @@ static void usage(const char *prog)
             "  --emit-c     print generated ISO C99 to stdout\n"
             "  --check      run the frontend only, exit 0/1 with "
             "diagnostics\n"
+            "  --freestanding  bare-metal build: no hosted libc, kernel "
+            "entry\n"
             "  --release    use the system cc pipe even with libtcc\n"
             "  --version    print the compiler version\n"
             "  -o <path>    output executable path (default a.out)\n",
@@ -233,6 +239,7 @@ int main(int argc, char **argv)
     int force_cc = 0;
     int test_mode = 0;
     int check_only = 0;
+    int freestanding = 0;
 
     if (argc >= 2 && strcmp(argv[1], "init") == 0) {
         if (argc < 3) {
@@ -319,6 +326,8 @@ int main(int argc, char **argv)
             test_mode = 1;
         } else if (strcmp(argv[i], "--check") == 0) {
             check_only = 1;
+        } else if (strcmp(argv[i], "--freestanding") == 0) {
+            freestanding = 1;
         } else if (strcmp(argv[i], "--release") == 0) {
             force_cc = 1;
         } else if (strcmp(argv[i], "-o") == 0) {
@@ -349,6 +358,7 @@ int main(int argc, char **argv)
 
     char *src = read_file(file);
     Program prog = {0};
+    prog.freestanding = freestanding;
     parse_program(src, file, &prog);
     modules_load(&prog, file, NULL);
     sema_check(&prog, test_mode);
@@ -359,7 +369,8 @@ int main(int argc, char **argv)
         return 0;
     }
     char *c_src = codegen_generate_mode(&prog, test_mode);
-    int rc = driver_compile(c_src, out, emit_c, force_cc);
+    int rc = driver_compile_ex(c_src, out, emit_c, force_cc, NULL, 0,
+                               NULL, 0, freestanding);
     free(c_src);
     free(src);
     if (rc == 0 && test_mode) {
