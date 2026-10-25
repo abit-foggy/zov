@@ -13,7 +13,13 @@ LDLIBS   += $(TCC_LIB) -ldl -lm -lpthread
 CFLAGS   += -DUSE_LIBTCC -I$(TCC_DIR)
 endif
 
-all: zovc
+all: zovc zov-lsp
+
+# dogfood: zovc compiles its own language server
+zov-lsp: zovc tools/zov-lsp/main.zov
+	./zovc tools/zov-lsp/main.zov -o zov-lsp
+
+lsp: zov-lsp
 
 # Upstream tcc builds with relaxed flags; zovc's strict flags do not apply.
 $(TCC_STAMP):
