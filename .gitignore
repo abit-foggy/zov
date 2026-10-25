@@ -16,3 +16,8 @@ tests/pkg_workspace/app/target/
 /editors/zed/extension.wasm
 /editors/zed/target/
 /editors/zed/tree-sitter-zov/src/
+
+# editor extension build outputs
+editors/vscode/node_modules/
+editors/vscode/*.vsix
+.idea/
