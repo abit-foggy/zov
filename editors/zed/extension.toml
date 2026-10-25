@@ -29,7 +29,7 @@ schema_version = 1
 
 [grammars.zov]
 repository = "file://tree-sitter-zov"
-rev = "dev"
+rev = "f8c892dfc485d5c385cea3aecf84b5328f40b6d4"
 
 [language_servers.zov-lsp]
 name = "Zov LSP"
