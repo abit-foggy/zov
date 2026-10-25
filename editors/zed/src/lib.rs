@@ -34,13 +34,16 @@ impl zed::Extension for ZovExtension {
     fn language_server_command(
         &mut self,
         _language_server_id: &zed::LanguageServerId,
-        _worktree: &zed::Worktree,
+        worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
-        // zov-lsp resolves from $PATH or the workspace root; Zed launches
-        // it over stdio, matching the server's fd 0/1 JSON-RPC transport.
-        let lsp = which_zov_lsp().unwrap_or_else(|| "zov-lsp".to_string());
+        // std::env is unreliable inside the wasm sandbox; Worktree::which
+        // resolves zov-lsp against the host's real $PATH (system-wide
+        // installs land in /usr/local/bin)
+        let command = worktree
+            .which("zov-lsp")
+            .unwrap_or_else(|| "zov-lsp".to_string());
         Ok(zed::Command {
-            command: lsp,
+            command,
             args: vec![],
             env: vec![],
         })
@@ -61,23 +64,6 @@ impl zed::Extension for ZovExtension {
     ) -> Result<Option<zed::serde_json::Value>> {
         Ok(None)
     }
-}
-
-fn which_zov_lsp() -> Option<String> {
-    // PATH lookup first; fall back to the workspace-local binary produced
-    // by `make zov-lsp` at the zov repository root.
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            if dir.is_empty() {
-                continue;
-            }
-            let candidate = std::path::Path::new(dir).join("zov-lsp");
-            if candidate.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
 }
 
 zed::register_extension!(ZovExtension);
