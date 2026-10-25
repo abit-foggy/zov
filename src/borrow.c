@@ -284,6 +284,12 @@ static void note_use(Borrow *b, Expr *e)
         note_use(b, e->u.slice.start);
         note_use(b, e->u.slice.end);
         return;
+    case EX_ORELSE:
+        note_use(b, e->u.orelse.lhs);
+        note_use(b, e->u.orelse.val);
+        if (e->u.orelse.jump && e->u.orelse.jump->kind == ST_RETURN)
+            note_use(b, e->u.orelse.jump->u.ret);
+        return;
     case EX_ARR_LIT:
         for (size_t i = 0; i < e->u.elems.len; i++)
             note_use(b, e->u.elems.items[i]);
@@ -708,6 +714,12 @@ static void bx_expr(Borrow *b, Expr *e)
     case EX_ARR_LIT:
         for (size_t i = 0; i < e->u.elems.len; i++)
             bx_expr(b, e->u.elems.items[i]);
+        return;
+    case EX_ORELSE:
+        bx_expr(b, e->u.orelse.lhs);
+        bx_expr(b, e->u.orelse.val);
+        if (e->u.orelse.jump && e->u.orelse.jump->kind == ST_RETURN)
+            bx_expr(b, e->u.orelse.jump->u.ret);
         return;
     case EX_SLICE: {
         /* slicing takes a shared read of the root for sub's lifetime */

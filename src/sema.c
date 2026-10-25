@@ -663,6 +663,14 @@ static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
             da_push(&n->u.elems,
                     clone_expr(se, e->u.elems.items[i], tps, args));
         break;
+    case EX_ORELSE:
+        n->u.orelse.lhs = clone_expr(se, e->u.orelse.lhs, tps, args);
+        n->u.orelse.val = clone_expr(se, e->u.orelse.val, tps, args);
+        n->u.orelse.jump =
+            e->u.orelse.jump ? clone_stmt(se, e->u.orelse.jump, tps, args)
+                             : NULL;
+        n->coerce_tag = e->coerce_tag; /* payload index rides along */
+        break;
     case EX_FIELD:
         n->u.field.base = clone_expr(se, e->u.field.base, tps, args);
         n->u.field.name = e->u.field.name;
@@ -1084,14 +1092,18 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         require_same(e->u.binary.lhs, e->u.binary.rhs, "<binary>");
         if (comparison) {
             Type *t = e->u.binary.lhs->type;
-            /* ==/!= generalize to str (memcmp) and enums; <,<= stay numeric */
+            /* ==/!= generalize to str (memcmp) and enums; <,<=,>,>=
+             * also order strings lexically via zov_str_cmp */
             int eq_ne = (op == TK_EQ || op == TK_NEQ);
-            if (!is_unknown(t) && !ty_is_num(t->kind) && t->kind != TY_CHAR
-                && !is_ptrish(t) && !(eq_ne && (t->kind == TY_STR
-                                                 || t->kind == TY_ENUM
-                                                 || t->kind == TY_BOOL)))
+            int ok = ty_is_num(t->kind) || t->kind == TY_CHAR
+                     || is_ptrish(t)
+                     || (eq_ne && (t->kind == TY_STR || t->kind == TY_ENUM
+                                   || t->kind == TY_BOOL))
+                     || (!eq_ne && t->kind == TY_STR);
+            if (!is_unknown(t) && !ok)
                 fatal_at(e->span,
-                         "relational operators require numeric operands");
+                         "relational operators require numeric or str "
+                         "operands");
             e->type = type_prim(TY_BOOL);
         } else {
             Type *t = e->u.binary.lhs->type;
@@ -1385,6 +1397,40 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         e->type = type_array(elem, e->u.elems.len);
         return e->type;
     }
+    case EX_ORELSE: {
+        Type *lt = check_expr(se, e->u.orelse.lhs, NULL);
+        Type *result = NULL;
+        int payload_idx = -1;
+        if (lt->kind == TY_PTR && lt->nullable) {
+            result = type_ptr(lt->base, 0);
+        } else if (lt->kind == TY_UNION) {
+            Type *payload = union_payload(lt);
+            if (!payload)
+                fatal_at(e->span,
+                         "orelse requires exactly one non-error variant");
+            result = payload;
+            for (size_t i = 0; i < lt->members.len; i++)
+                if (lt->members.items[i] == payload)
+                    payload_idx = (int)i;
+        } else {
+            fatal_at(e->span,
+                     "orelse requires a nullable pointer or a tagged "
+                     "union, got %s", type_spelling(lt));
+        }
+        e->coerce_tag = payload_idx; /* reused: payload member index */
+        if (e->u.orelse.jump) {
+            /* diverging fallback: defers unroll before the jump */
+            check_stmt(se, e->u.orelse.jump);
+        } else {
+            Type *rt = check_expr(se, e->u.orelse.val, result);
+            if (!is_unknown(rt) && !type_eq(result, rt)
+                && !ptr_widens(result, rt))
+                fatal_at(e->span, "orelse fallback is %s, expected %s",
+                         type_spelling(rt), type_spelling(result));
+        }
+        e->type = result;
+        return e->type;
+    }
     case EX_SLICE: {
         Type *bt = check_expr(se, e->u.slice.base, NULL);
         Type *st = e->u.slice.start
@@ -1558,15 +1604,20 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(fi->span, "field '%s' expects %s, got %s", fi->name,
                          type_spelling(ft), type_spelling(it));
         }
-        for (size_t j = 0; j < d->u.type.fields.len; j++) {
-            const char *fn = d->u.type.fields.items[j].name;
-            int found = 0;
-            for (size_t i = 0; i < e->u.stlit.fields.len; i++)
-                if (e->u.stlit.fields.items[i].name == fn)
-                    found = 1;
-            if (!found)
-                fatal_at(e->span, "missing field '%s' in '%s' literal", fn,
-                         st->name);
+        /* resource literals stay explicit; plain structs rely on
+         * C99 6.7.8/19 zero-filling unlisted members */
+        if (d->u.type.is_resource) {
+            for (size_t j = 0; j < d->u.type.fields.len; j++) {
+                const char *fn = d->u.type.fields.items[j].name;
+                int found = 0;
+                for (size_t i = 0; i < e->u.stlit.fields.len; i++)
+                    if (e->u.stlit.fields.items[i].name == fn)
+                        found = 1;
+                if (!found)
+                    fatal_at(e->span,
+                             "missing field '%s' in resource '%s' literal",
+                             fn, st->name);
+            }
         }
         e->type = st;
         return e->type;

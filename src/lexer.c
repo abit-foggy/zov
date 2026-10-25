@@ -41,6 +41,7 @@ static const Keyword keywords[] = {
     {"as", TK_AS}, {"export", TK_EXPORT}, {"nullable", TK_NULLABLE},
     {"null", TK_NULL}, {"true", TK_TRUE}, {"false", TK_FALSE},
     {"resource", TK_RESOURCE}, {"in", TK_IN}, {"test", TK_TEST},
+    {"orelse", TK_ORELSE},
     {"void", TK_VOID}, {"i8", TK_I8}, {"i16", TK_I16}, {"i32", TK_I32},
     {"i64", TK_I64}, {"isize", TK_ISIZE}, {"u8", TK_U8}, {"u16", TK_U16},
     {"u32", TK_U32}, {"u64", TK_U64}, {"usize", TK_USIZE},

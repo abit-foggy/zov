@@ -638,6 +638,11 @@ static Expr *parse_struct_lit(Parser *p, Expr *base)
     }
     expect(p, TK_LBRACE, "'{' in struct literal");
     while (!at(p, TK_RBRACE)) {
+        if (at(p, TK_DOTDOT)) {
+            /* trailing .. : remaining fields zero-initialize */
+            advance(p);
+            break;
+        }
         if (at(p, TK_DOT))
             advance(p); /* accept .field = e and field = e */
         if (!at(p, TK_IDENT))
@@ -807,6 +812,19 @@ static Expr *parse_binary(Parser *p, int min_prec)
 static Expr *parse_expr(Parser *p)
 {
     Expr *lhs = parse_binary(p, 1);
+    if (at(p, TK_ORELSE)) {
+        /* coalescing sits just above assignment in precedence */
+        advance(p);
+        Expr *e = expr_new(EX_ORELSE, lhs->span);
+        e->u.orelse.lhs = lhs;
+        if (at(p, TK_RETURN) || at(p, TK_BREAK) || at(p, TK_CONTINUE)) {
+            /* diverging fallback: unrolls defers, then jumps */
+            e->u.orelse.jump = parse_arm_jump(p, tok(p)->span);
+        } else {
+            e->u.orelse.val = parse_expr(p);
+        }
+        return e;
+    }
     if (at(p, TK_ASSIGN)) {
         advance(p);
         Expr *e = expr_new(EX_ASSIGN, lhs->span);

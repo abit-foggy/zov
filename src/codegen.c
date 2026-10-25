@@ -98,6 +98,7 @@ typedef struct CG {
     int needs_string; /* memcmp emission for native str equality */
     int needs_slice; /* runtime slice bounds helper */
     int needs_env;   /* std::env runtime helpers */
+    int needs_strcmp; /* lexical str ordering helper */
     int needs_hash;  /* hash_val helpers for std::map */
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
@@ -1044,6 +1045,26 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             emit_str_value(cg, e);
             break;
         }
+        if ((e->u.binary.op == TK_LT || e->u.binary.op == TK_LE
+             || e->u.binary.op == TK_GT || e->u.binary.op == TK_GE)
+            && e->u.binary.lhs->type && e->u.binary.rhs->type
+            && e->u.binary.lhs->type->kind == TY_STR
+            && e->u.binary.rhs->type->kind == TY_STR) {
+            /* lexical ordering via memcmp helper over hoisted temps */
+            cg->needs_strcmp = 1;
+            const char *op = e->u.binary.op == TK_LT ? "<"
+                           : e->u.binary.op == TK_LE ? "<="
+                           : e->u.binary.op == TK_GT ? ">" : ">=";
+            int a_id = cg->tmp_id++;
+            int b_id = cg->tmp_id++;
+            buf_printf(b, "({ zov_str _so%d = (", a_id);
+            emit_expr(cg, e->u.binary.lhs, 0);
+            buf_printf(b, "); zov_str _so%d = (", b_id);
+            emit_expr(cg, e->u.binary.rhs, 0);
+            buf_printf(b, "); (zov_str_cmp(_so%d, _so%d) %s 0); })",
+                       a_id, b_id, op);
+            break;
+        }
         if ((e->u.binary.op == TK_EQ || e->u.binary.op == TK_NEQ)
             && e->u.binary.lhs->type && e->u.binary.rhs->type
             && e->u.binary.lhs->type->kind == TY_STR
@@ -1119,6 +1140,79 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             emit_expr(cg, e->u.elems.items[i], 0);
         }
         buf_puts(b, " })");
+        break;
+    }
+    case EX_ORELSE: {
+        /* coalescing: hoist lhs once; jumps unroll defers before leaving */
+        Type *lt = e->u.orelse.lhs->type;
+        int id = cg->tmp_id++;
+        Buf *saved = cg->cur;
+        Buf pre = {0};
+        cg->cur = &pre;
+        buf_printf(&pre, "%s _or%d = (", c_type(cg, lt), id);
+        emit_expr(cg, e->u.orelse.lhs, 0);
+        buf_printf(&pre, ");\n");
+        cg->cur = saved;
+        int is_ptr = (lt->kind == TY_PTR);
+        /* fail test: NULL for pointers, any error tag for unions */
+        buf_printf(b, "({ %s ", pre.data ? pre.data : "");
+        buf_printf(b, "if (");
+        if (is_ptr) {
+            buf_printf(b, "_or%d == NULL", id);
+        } else {
+            int first = 1;
+            for (size_t i = 0; i < lt->members.len; i++) {
+                if (!lt->members.items[i]->is_error)
+                    continue;
+                if (!first)
+                    buf_printf(b, " || ");
+                buf_printf(b, "_or%d.tag == %luu", id, (unsigned long)i);
+                first = 0;
+            }
+        }
+        buf_printf(b, ") {\n");
+        /* result declared before the branch so both paths can assign */
+        emit_var(b, cg, e->type, "_orr");
+        buf_puts(b, ";\n");
+        if (e->u.orelse.jump) {
+            Stmt *j = e->u.orelse.jump;
+            if (j->kind == ST_RETURN) {
+                emit_defers_down_to(cg, 0);
+                buf_puts(b, "return ");
+                if (j->u.ret)
+                    emit_expr(cg, j->u.ret, 0);
+                buf_puts(b, ";\n");
+            } else if (j->kind == ST_BREAK) {
+                emit_defers_down_to(
+                    cg, cg->loop_marks.items[cg->loop_marks.len - 1]);
+                if (cg->switch_depth > 0)
+                    buf_printf(b, "goto zov_brk_%d;\n",
+                               cg->loop_ids.items[cg->loop_ids.len - 1]);
+                else
+                    buf_puts(b, "break;\n");
+            } else {
+                emit_defers_down_to(
+                    cg, cg->loop_marks.items[cg->loop_marks.len - 1]);
+                if (cg->switch_depth > 0)
+                    buf_printf(b, "goto zov_cont_%d;\n",
+                               cg->loop_ids.items[cg->loop_ids.len - 1]);
+                else
+                    buf_puts(b, "continue;\n");
+            }
+        } else {
+            buf_puts(b, "_orr = ");
+            emit_expr(cg, e->u.orelse.val, 0);
+            buf_puts(b, ";\n");
+        }
+        buf_printf(b, "} else {\n");
+        buf_puts(b, "_orr = ");
+        if (is_ptr)
+            buf_printf(b, "_or%d;", id);
+        else
+            buf_printf(b, "_or%d.u.v%d;", id, e->coerce_tag);
+        buf_puts(b, "\n}\n");
+        buf_puts(b, "_orr; })");
+        free(pre.data);
         break;
     }
     case EX_SLICE: {
@@ -1818,6 +1912,18 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         buf_puts(&out, "#include <stdlib.h>\n");
     if (cg->needs_string)
         buf_puts(&out, "#include <string.h>\n");
+    if (cg->needs_strcmp) {
+        buf_puts(&out, "#include <string.h>\n");
+        buf_puts(&out,
+                 "static int zov_str_cmp(zov_str a, zov_str b) {\n"
+                 "    size_t n = a.len < b.len ? a.len : b.len;\n"
+                 "    int r = memcmp(a.data, b.data, n);\n"
+                 "    if (r != 0) return r;\n"
+                 "    if (a.len < b.len) return -1;\n"
+                 "    if (a.len > b.len) return 1;\n"
+                 "    return 0;\n"
+                 "}\n");
+    }
     if (cg->needs_hash) {
         /* FNV-1a over bytes; splitmix64 finalizer for scalars */
         buf_puts(&out,

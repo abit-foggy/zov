@@ -99,6 +99,7 @@ typedef enum ExprKind {
     EX_CALL, EX_INDEX, EX_CAST, EX_GENERIC,
     EX_MATCH, EX_TRY, EX_UNWRAP, EX_COERCE,
     EX_DEREF, EX_FIELD, EX_STRUCT_LIT, EX_SLICE, EX_ARR_LIT,
+    EX_ORELSE,
 } ExprKind;
 
 typedef enum PatKind {
@@ -156,6 +157,7 @@ typedef struct Expr {
                  DA(Type *) targs; } stlit;
         struct { struct Expr *base, *start, *end; } slice;
         DA(struct Expr *) elems; /* EX_ARR_LIT */
+        struct { struct Expr *lhs, *val; struct Stmt *jump; } orelse;
     } u;
     int borrow_mut; /* &mut in EX_UNARY AMP */
     int via_ref;    /* EX_FIELD reached through a reference: emit '->' */
