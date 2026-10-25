@@ -1156,6 +1156,9 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         int is_ptr = (lt->kind == TY_PTR);
         /* fail test: NULL for pointers, any error tag for unions */
         buf_printf(b, "({ %s ", pre.data ? pre.data : "");
+        /* result declared before the branch so both paths assign it */
+        emit_var(b, cg, e->type, "_orr");
+        buf_puts(b, ";\n");
         buf_printf(b, "if (");
         if (is_ptr) {
             buf_printf(b, "_or%d == NULL", id);
@@ -1171,9 +1174,6 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             }
         }
         buf_printf(b, ") {\n");
-        /* result declared before the branch so both paths can assign */
-        emit_var(b, cg, e->type, "_orr");
-        buf_puts(b, ";\n");
         if (e->u.orelse.jump) {
             Stmt *j = e->u.orelse.jump;
             if (j->kind == ST_RETURN) {
