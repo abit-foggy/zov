@@ -72,7 +72,7 @@ static char *read_file(const char *path)
 
 static int cmd_init(const char *dir);
 static int cmd_project(const char *dir, int release, int test_mode,
-                       const char *run_args);
+                       const char *run_args, int check_only);
 
 static void mkdirs(const char *path)
 {
@@ -142,7 +142,7 @@ static int cmd_init(const char *dir)
 
 /* build (and optionally run) a zov.toml project */
 static int cmd_project(const char *dir, int release, int test_mode,
-                       const char *run_args)
+                       const char *run_args, int check_only)
 {
     char toml[600];
     snprintf(toml, sizeof(toml), "%s/zov.toml", dir);
@@ -160,6 +160,17 @@ static int cmd_project(const char *dir, int release, int test_mode,
         fprintf(stderr, "zovc: cannot open entry '%s'\n", entry);
         return 1;
     }
+    Program prog = {0};
+    parse_program(src, entry, &prog);
+    modules_load(&prog, entry, &pkg);
+    sema_check(&prog, test_mode);
+    borrow_check(&prog);
+    if (check_only) {
+        /* frontend only: no codegen, no lock, no target dir writes */
+        free(src);
+        pkg_free(&pkg);
+        return 0;
+    }
     char target[600];
     snprintf(target, sizeof(target), "%s/target", pkg.dir);
     mkdirs(target);
@@ -168,11 +179,6 @@ static int cmd_project(const char *dir, int release, int test_mode,
         snprintf(out, sizeof(out), "%s/%s_tests", target, pkg.name);
     else
         snprintf(out, sizeof(out), "%s/%s", target, pkg.name);
-    Program prog = {0};
-    parse_program(src, entry, &prog);
-    modules_load(&prog, entry, &pkg);
-    sema_check(&prog, test_mode);
-    borrow_check(&prog);
     char *c_src = codegen_generate_mode(&prog, test_mode);
     int rc = driver_compile_ex(c_src, out, 0, release, pkg.links.items,
                                pkg.links.len, pkg.include_dirs.items,
@@ -211,6 +217,8 @@ static void usage(const char *prog)
             "usage: %s [options] file.zov\n"
             "options:\n"
             "  --emit-c     print generated ISO C99 to stdout\n"
+            "  --check      run the frontend only, exit 0/1 with "
+            "diagnostics\n"
             "  --release    use the system cc pipe even with libtcc\n"
             "  --version    print the compiler version\n"
             "  -o <path>    output executable path (default a.out)\n",
@@ -224,6 +232,7 @@ int main(int argc, char **argv)
     int emit_c = 0;
     int force_cc = 0;
     int test_mode = 0;
+    int check_only = 0;
 
     if (argc >= 2 && strcmp(argv[1], "init") == 0) {
         if (argc < 3) {
@@ -242,7 +251,7 @@ int main(int argc, char **argv)
         for (int i = 2; i < argc; i++)
             if (strcmp(argv[i], "--release") == 0)
                 release = 1;
-        return cmd_project(dir, release, 0, NULL);
+        return cmd_project(dir, release, 0, NULL, 0);
     }
     if (argc >= 2 && strcmp(argv[1], "run") == 0) {
         const char *dir = ".";
@@ -265,7 +274,20 @@ int main(int argc, char **argv)
             snprintf(runargs + len, sizeof(runargs) - len, " %s",
                      argv[i]);
         }
-        return cmd_project(dir, release, 0, runargs);
+        return cmd_project(dir, release, 0, runargs, 0);
+    }
+    if (argc >= 2 && strcmp(argv[1], "check") == 0) {
+        if (argc >= 3 && strstr(argv[2], ".zov")) {
+            file = argv[2];
+            check_only = 1;
+        } else {
+            const char *dir = ".";
+            for (int i = 2; i < argc; i++) {
+                if (strcmp(argv[i], "-C") == 0 && i + 1 < argc)
+                    dir = argv[++i];
+            }
+            return cmd_project(dir, 0, 0, NULL, 1);
+        }
     }
     if (argc >= 2 && strcmp(argv[1], "test") == 0) {
         if (argc >= 3 && strstr(argv[2], ".zov")) {
@@ -279,14 +301,14 @@ int main(int argc, char **argv)
                 if (strcmp(argv[i], "-C") == 0 && i + 1 < argc)
                     dir = argv[++i];
             }
-            return cmd_project(dir, 0, 1, NULL);
+            return cmd_project(dir, 0, 1, NULL, 0);
         }
     }
 
 
     if (argc >= 2 && (strcmp(argv[1], "--version") == 0
                        || strcmp(argv[1], "-V") == 0)) {
-        printf("zovc 1.0.1\n");
+        printf("zovc 1.2.0\n");
         return 0;
     }
 
@@ -295,6 +317,8 @@ int main(int argc, char **argv)
             emit_c = 1;
         } else if (strcmp(argv[i], "--test") == 0) {
             test_mode = 1;
+        } else if (strcmp(argv[i], "--check") == 0) {
+            check_only = 1;
         } else if (strcmp(argv[i], "--release") == 0) {
             force_cc = 1;
         } else if (strcmp(argv[i], "-o") == 0) {
@@ -329,6 +353,11 @@ int main(int argc, char **argv)
     modules_load(&prog, file, NULL);
     sema_check(&prog, test_mode);
     borrow_check(&prog);
+    if (check_only) {
+        /* frontend pass complete: diagnostics already on stderr */
+        free(src);
+        return 0;
+    }
     char *c_src = codegen_generate_mode(&prog, test_mode);
     int rc = driver_compile(c_src, out, emit_c, force_cc);
     free(c_src);
