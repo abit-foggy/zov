@@ -100,6 +100,7 @@ typedef struct CG {
     int needs_env;   /* std::env runtime helpers */
     int needs_strcmp; /* lexical str ordering helper */
     int needs_hash;  /* hash_val helpers for std::map */
+    int freestanding; /* bare-metal: no hosted headers or main scaffolding */
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
     int tmp_id;       /* unique temp/label counter */
@@ -872,19 +873,29 @@ static void emit_match(CG *cg, Expr *e, int want_value)
 static void emit_assert(CG *cg, Expr *e, int as_stmt)
 {
     Buf *b = &*cg->cur;
-    cg->needs_io = 1;
     cg->needs_abort = 1;
     Expr *cond = e->u.call.args.items[0];
     if (!as_stmt)
         buf_puts(b, "({ ");
     buf_puts(b, "if (!(");
     emit_expr(cg, cond, 0);
-    buf_puts(b, ")) { fprintf(stderr, \"ASSERT FAILED at ");
-    append_fmt_str(b, cond->span.file, strlen(cond->span.file));
-    buf_printf(b, ":%lu: ", (unsigned long)cond->span.line);
-    append_fmt_str(b, cond->span.start,
-                   (size_t)(cond->span.end - cond->span.start));
-    buf_puts(b, "\\n\"); abort(); }\n");
+    if (cg->freestanding) {
+        /* ring-0: the kernel owns zov_panic; no stdio exists */
+        buf_puts(b, ")) { zov_panic(\"assert failed: ");
+        append_fmt_str(b, cond->span.start,
+                       (size_t)(cond->span.end - cond->span.start));
+        buf_puts(b, "\", ");
+        emit_str_lit(b, cond->span.file, strlen(cond->span.file));
+        buf_printf(b, ", %luu); }\n", (unsigned long)cond->span.line);
+    } else {
+        cg->needs_io = 1;
+        buf_puts(b, ")) { fprintf(stderr, \"ASSERT FAILED at ");
+        append_fmt_str(b, cond->span.file, strlen(cond->span.file));
+        buf_printf(b, ":%lu: ", (unsigned long)cond->span.line);
+        append_fmt_str(b, cond->span.start,
+                       (size_t)(cond->span.end - cond->span.start));
+        buf_puts(b, "\\n\"); abort(); }\n");
+    }
     if (!as_stmt)
         buf_puts(b, "0; })\n");
 }
@@ -1465,14 +1476,35 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             const char *un = union_name(cg, t);
             buf_printf(b, "({ %s _u%d = (", un, id);
             emit_expr(cg, e->u.unwrap, 0);
-            buf_printf(b, "); if (_u%d.tag != %du) { abort(); }\n", id,
-                       cg_union_idx(t, union_ok_member(t)));
+            if (cg->freestanding) {
+                cg->needs_abort = 1;
+                buf_printf(b, "); if (_u%d.tag != %du) { zov_panic("
+                              "\"unwrap of error value\", ", id,
+                           cg_union_idx(t, union_ok_member(t)));
+                emit_str_lit(b, e->span.file, strlen(e->span.file));
+                buf_printf(b, ", %luu); }\n",
+                           (unsigned long)e->span.line);
+            } else {
+                cg->needs_abort = 1;
+                buf_printf(b, "); if (_u%d.tag != %du) { abort(); }\n", id,
+                           cg_union_idx(t, union_ok_member(t)));
+            }
             buf_printf(b, "_u%d.u.v%d; })", id,
                        cg_union_idx(t, union_ok_member(t)));
         } else {
             buf_printf(b, "({ %s *_u%d = (", c_type(cg, t->base), id);
             emit_expr(cg, e->u.unwrap, 0);
-            buf_printf(b, "); if (_u%d == NULL) { abort(); }\n", id);
+            if (cg->freestanding) {
+                cg->needs_abort = 1;
+                buf_printf(b, "); if (_u%d == NULL) { zov_panic("
+                              "\"unwrap of null\", ", id);
+                emit_str_lit(b, e->span.file, strlen(e->span.file));
+                buf_printf(b, ", %luu); }\n",
+                           (unsigned long)e->span.line);
+            } else {
+                cg->needs_abort = 1;
+                buf_printf(b, "); if (_u%d == NULL) { abort(); }\n", id);
+            }
             buf_printf(b, "_u%d; })", id);
         }
         break;
@@ -1745,7 +1777,9 @@ static void emit_params(CG *cg, Decl *d)
 
 static void emit_fn(CG *cg, Decl *d, int proto_only)
 {
-    int is_main = zstr_eq(d->u.fn.name, "main") && !d->u.fn.recv;
+    /* freestanding: main emits with its declared signature only */
+    int is_main = zstr_eq(d->u.fn.name, "main") && !d->u.fn.recv
+                  && !cg->freestanding;
     if (proto_only) {
         cg->cur = &cg->protos;
         emit_var(&*cg->cur, cg, d->u.fn.ret,
@@ -1824,13 +1858,17 @@ char *codegen_generate(Program *prog)
 char *codegen_generate_mode(Program *prog, int test_mode)
 {
     CG *cg = zalloc(sizeof(CG));
+    cg->freestanding = prog->freestanding;
 
     cg->cur = &cg->head;
     buf_puts(&*cg->cur,
              "#include <stdint.h>\n"
              "#include <stddef.h>\n"
-             "#include <stdbool.h>\n"
-             "static int zov_rt_argc; static char **zov_rt_argv;\n");
+             "#include <stdbool.h>\n");
+    if (!cg->freestanding)
+        /* argv capture exists only for hosted std::env */
+        buf_puts(&*cg->cur,
+                 "static int zov_rt_argc; static char **zov_rt_argv;\n");
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
         if (d->kind == DL_USE && d->u.use.is_c_header)
@@ -1904,14 +1942,27 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     Buf out = {0};
     buf_puts(&out, cg->head.data);
     if (cg->needs_bounds) {
-        buf_puts(&out, "#include <stdio.h>\n#include <stdlib.h>\n"
-                       "static size_t zov_bounds(size_t i, size_t n) {\n"
-                       "    if (i >= n) {\n"
-                       "        fprintf(stderr, \"zov: index out of bounds\\n\");\n"
-                       "        abort();\n"
-                       "    }\n"
-                       "    return i;\n"
-                       "}\n");
+        if (cg->freestanding) {
+            cg->needs_abort = 1;
+            buf_puts(&out,
+                     "static size_t zov_bounds(size_t i, size_t n) {\n"
+                     "    if (i >= n) {\n"
+                     "        zov_panic(\"index out of bounds\", \"?\", "
+                     "0);\n"
+                     "    }\n"
+                     "    return i;\n"
+                     "}\n");
+        } else {
+            buf_puts(&out, "#include <stdio.h>\n#include <stdlib.h>\n"
+                           "static size_t zov_bounds(size_t i, size_t n) {\n"
+                           "    if (i >= n) {\n"
+                           "        fprintf(stderr, \"zov: index out of "
+                           "bounds\\n\");\n"
+                           "        abort();\n"
+                           "    }\n"
+                           "    return i;\n"
+                           "}\n");
+        }
     }
     for (size_t i = 0; i < cg->slices.len; i++) {
         Type *s = cg->slices.items[i];
@@ -1921,10 +1972,44 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         buf_printf(&out, "%lu", (unsigned long)i);
         buf_puts(&out, ";\n");
     }
-    if (cg->needs_abort)
-        buf_puts(&out, "#include <stdlib.h>\n");
-    if (cg->needs_string)
-        buf_puts(&out, "#include <string.h>\n");
+    if (cg->freestanding) {
+        if (cg->needs_abort)
+            /* kernels own the panic hook; no libc abort() exists */
+            buf_puts(&out, "extern void zov_panic(const char *msg, "
+                           "const char *file, int line);\n");
+        if (cg->needs_slice)
+            buf_puts(&out,
+                     "static size_t zov_slice_check(size_t a, size_t b, "
+                     "size_t n, const char *f, int l) {\n"
+                     "    if (a > b || b > n) {\n"
+                     "        zov_panic(\"slice out of bounds\", f, l);\n"
+                     "    }\n"
+                     "    return a;\n"
+                     "}\n");
+        if (cg->needs_string || cg->needs_strcmp || cg->needs_slice)
+            /* memcmp stays a kernel-provided primitive at link time */
+            buf_puts(&out, "#include <string.h>\n");
+    } else {
+        if (cg->needs_abort)
+            buf_puts(&out, "#include <stdlib.h>\n");
+        if (cg->needs_slice) {
+            /* the helper precedes stdio: declare fprintf's dependency */
+            buf_puts(&out, "#include <stdio.h>\n#include <string.h>\n");
+            buf_puts(&out,
+                     "static size_t zov_slice_check(size_t a, size_t b, "
+                     "size_t n, const char *f, unsigned long l) {\n"
+                     "    if (a > b || b > n) {\n"
+                     "        fprintf(stderr, \"zov: slice out of bounds at "
+                     "%s:%lu (%lu..%lu of %lu)\\n\", f, l, "
+                     "(unsigned long)a, (unsigned long)b, (unsigned long)n);\n"
+                     "        abort();\n"
+                     "    }\n"
+                     "    return a;\n"
+                     "}\n");
+        }
+        if (cg->needs_string)
+            buf_puts(&out, "#include <string.h>\n");
+    }
     if (cg->needs_strcmp) {
         buf_puts(&out, "#include <string.h>\n");
         buf_puts(&out,
@@ -1984,21 +2069,6 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                  "    const char *v = getenv(buf);\n"
                  "    zov_str s; s.data = (const uint8_t *)v;\n"
                  "    s.len = v ? strlen(v) : 0; return s;\n"
-                 "}\n");
-    }
-    if (cg->needs_slice) {
-        /* the helper precedes stdio: declare fprintf's dependency */
-        buf_puts(&out, "#include <stdio.h>\n#include <string.h>\n");
-        buf_puts(&out,
-                 "static size_t zov_slice_check(size_t a, size_t b, "
-                 "size_t n, const char *f, unsigned long l) {\n"
-                 "    if (a > b || b > n) {\n"
-                 "        fprintf(stderr, \"zov: slice out of bounds at "
-                 "%s:%lu (%lu..%lu of %lu)\\n\", f, l, "
-                 "(unsigned long)a, (unsigned long)b, (unsigned long)n);\n"
-                 "        abort();\n"
-                 "    }\n"
-                 "    return a;\n"
                  "}\n");
     }
     if (cg->needs_io) {

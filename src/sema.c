@@ -2428,7 +2428,8 @@ void sema_check(Program *prog, int test_mode)
     push_scope(se); /* global scope */
     for (size_t i = 0; i < prog->decls.len; i++)
         register_decl(se, prog->decls.items[i]);
-    if (!se->has_main && !test_mode)
+    /* freestanding kernels may use kmain or no entry at all */
+    if (!se->has_main && !test_mode && !prog->freestanding)
         fatal("no 'fn main' found in program");
     /* is_move fixpoint: a struct is linear if it is a resource or has a
      * linear field; iterate until the mark stops propagating */
