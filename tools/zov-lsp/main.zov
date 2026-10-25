@@ -1,0 +1,678 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+// zov-lsp: a JSON-RPC 2.0 language server for Zov, written in Zov.
+// Speaks Content-Length framed LSP over fd 0/1 with raw POSIX I/O.
+
+use <stdio.h> as c;
+use <stdlib.h> as stdlib;
+use <unistd.h> as u;
+use std::str as strlib;
+use std::vec as vec;
+use std::fs as fs;
+use std::map as map;
+use std::mem as mem;
+
+// ---- byte/string plumbing ----
+
+export fn finish(v: &vec::Vec[u8]) str = {
+    if (v.length == 0usize) {
+        return "";
+    };
+    let d: *u8 = v.data!;
+    return zov_str_from_raw(d, v.length);
+};
+
+export fn put_str(sb: &mut vec::Vec[u8], s: str) void = {
+    for (let ch in s) {
+        sb.push(ch);
+    };
+};
+
+export fn put_uint(sb: &mut vec::Vec[u8], n: usize) void = {
+    let mut digits: [32]u8;
+    let mut count: usize = 0usize;
+    let mut v: usize = n;
+    while (true) {
+        digits[count] = (48u8 + ((v % 10usize) as u8));
+        count += 1usize;
+        v = v / 10usize;
+        if (v == 0usize) {
+            break;
+        };
+    };
+    while (count > 0usize) {
+        count -= 1usize;
+        sb.push(digits[count]);
+    };
+};
+
+// JSON strings: escape quotes, backslash, and control bytes
+export fn put_json_str(sb: &mut vec::Vec[u8], s: str) void = {
+    sb.push(34u8);
+    for (let ch in s) {
+        if (ch == 34u8) {
+            sb.push(92u8);
+            sb.push(34u8);
+        } else if (ch == 92u8) {
+            sb.push(92u8);
+            sb.push(92u8);
+        } else if (ch == 10u8) {
+            sb.push(92u8);
+            sb.push(110u8);
+        } else if (ch == 13u8) {
+            sb.push(92u8);
+            sb.push(114u8);
+        } else if (ch == 9u8) {
+            sb.push(92u8);
+            sb.push(116u8);
+        } else {
+            sb.push(ch);
+        };
+    };
+    sb.push(34u8);
+};
+
+export fn send_json(s: str) void = {
+    let mut out = vec::new[u8]();
+    defer out.free();
+    put_str(&mut out, "Content-Length: ");
+    put_uint(&mut out, s.len);
+    put_str(&mut out, "\r\n\r\n");
+    put_str(&mut out, s);
+    let d: *u8 = out.data!;
+    u::write(1, (d as *void), out.length);
+};
+
+// ---- stdin framing ----
+
+// str values are fat pointers: copy onto a fresh heap buffer so the
+// returned slice outlives the scratch Vec it was built from
+export fn heap_copy(s: str) str = {
+    if (s.len == 0usize) {
+        return "";
+    };
+    let p: *u8 = mem::alloc[u8](s.len);
+    let mut i: usize = 0usize;
+    while (i < s.len) {
+        p[i] = s.ptr[i];
+        i += 1usize;
+    };
+    return zov_str_from_raw(p, s.len);
+};
+
+export fn read_line_into(out: &mut str) bool = {
+    let one: [1]u8;
+    let mut bytes = vec::new[u8]();
+    defer bytes.free();
+    let mut got = false;
+    while (true) {
+        let n = u::read(0, (&one[0usize]) as *void, 1usize);
+        if (n != 1i64) {
+            break;
+        };
+        got = true;
+        let ch: u8 = one[0usize];
+        if (ch == 10u8) {
+            break;
+        };
+        bytes.push(ch);
+    };
+    if (!got) {
+        return false;
+    };
+    if (bytes.length > 0usize) {
+        let d: *u8 = bytes.data!;
+        if (d[bytes.length - 1usize] == 13u8) {
+            bytes.length = bytes.length - 1usize;
+        };
+    };
+    *out = heap_copy(finish(&bytes));
+    return true;
+};
+
+export fn read_payload(n: usize, out: &mut str) bool = {
+    let chunk: [4096]u8;
+    let mut bytes = vec::new[u8]();
+    defer bytes.free();
+    let mut remaining: usize = n;
+    while (remaining > 0usize) {
+        let mut want: usize = remaining;
+        if (want > 4096usize) {
+            want = 4096usize;
+        };
+        let got = u::read(0, (&chunk[0usize]) as *void, want);
+        if (got <= 0i64) {
+            break;
+        };
+        let mut i: i64 = 0;
+        while (i < got) {
+            bytes.push(chunk[i as usize]);
+            i += 1;
+        };
+        remaining -= got as usize;
+    };
+    *out = heap_copy(finish(&bytes));
+    return remaining == 0usize;
+};
+
+// ---- tiny JSON scanning ----
+
+export fn find_sub(hay: str, needle: str, from: usize) i64 = {
+    if (needle.len == 0usize) {
+        return from as i64;
+    };
+    if (hay.len < needle.len) {
+        return -1i64;
+    };
+    let mut i: usize = from;
+    while (i + needle.len <= hay.len) {
+        let cand: str = hay[i..(i + needle.len)];
+        if (cand == needle) {
+            return i as i64;
+        };
+        i += 1usize;
+    };
+    return -1i64;
+};
+
+export fn parse_i64(s: str) i64 = {
+    let mut v: i64 = 0;
+    let mut i: usize = 0usize;
+    while (i < s.len && (s.ptr[i] == 32u8 || s.ptr[i] == 9u8)) {
+        i += 1usize;
+    };
+    let mut neg = false;
+    if (i < s.len && (s.ptr[i] == 45u8 || s.ptr[i] == 43u8)) {
+        neg = s.ptr[i] == 45u8;
+        i += 1usize;
+    };
+    while (i < s.len && s.ptr[i] >= 48u8 && s.ptr[i] <= 57u8) {
+        v = v * 10 + (s.ptr[i] as i64 - 48);
+        i += 1usize;
+    };
+    if (neg) {
+        v = -v;
+    };
+    return v;
+};
+
+// hex digit value, -1 when not a hex byte
+export fn hex_val(ch: u8) i64 = {
+    if (ch >= 48u8 && ch <= 57u8) {
+        return (ch as i64 - 48);
+    };
+    if (ch >= 97u8 && ch <= 102u8) {
+        return (ch as i64 - 87);
+    };
+    if (ch >= 65u8 && ch <= 70u8) {
+        return (ch as i64 - 55);
+    };
+    return -1i64;
+};
+
+export fn key_value_pos(json: str, key: str) i64 = {
+    let mut pat = vec::new[u8]();
+    defer pat.free();
+    sb_key(&mut pat, key);
+    let patstr: str = finish(&pat);
+    let idx = find_sub(json, patstr, 0usize);
+    if (idx < 0i64) {
+        return -1i64;
+    };
+    let mut i: usize = (idx as usize) + patstr.len;
+    while (i < json.len && (json.ptr[i] == 32u8 || json.ptr[i] == 9u8)) {
+        i += 1usize;
+    };
+    return i as i64;
+};
+
+// builds the `"key":` probe for key lookups
+export fn sb_key(sb: &mut vec::Vec[u8], key: str) void = {
+    sb.push(34u8);
+    put_str(sb, key);
+    sb.push(34u8);
+    sb.push(58u8);
+};
+
+export fn json_get_str(json: str, key: str, out: &mut str) bool = {
+    let pos = key_value_pos(json, key);
+    if (pos < 0i64) {
+        return false;
+    };
+    let i: usize = pos as usize;
+    if (i >= json.len || json.ptr[i] != 34u8) {
+        return false;
+    };
+    let mut bytes = vec::new[u8]();
+    defer bytes.free();
+    let mut j: usize = i + 1usize;
+    while (j < json.len) {
+        let ch: u8 = json.ptr[j];
+        if (ch == 34u8) {
+            *out = heap_copy(finish(&bytes));
+            return true;
+        };
+        if (ch == 92u8 && j + 1usize < json.len) {
+            let esc: u8 = json.ptr[j + 1usize];
+            j += 2usize;
+            if (esc == 110u8) {
+                bytes.push(10u8);
+            } else if (esc == 116u8) {
+                bytes.push(9u8);
+            } else if (esc == 114u8) {
+                bytes.push(13u8);
+            } else if (esc == 117u8) {
+                // \u00XX only: two hex digits after 00
+                if (j + 3usize < json.len) {
+                    let h1 = hex_val(json.ptr[j + 2usize]);
+                    let h2 = hex_val(json.ptr[j + 3usize]);
+                    if (h1 >= 0i64 && h2 >= 0i64) {
+                        bytes.push(((h1 * 16i64) + h2) as u8);
+                    } else {
+                        bytes.push(63u8);
+                    };
+                    j += 4usize;
+                } else {
+                    bytes.push(63u8);
+                };
+            } else {
+                bytes.push(esc);
+            };
+            continue;
+        };
+        bytes.push(ch);
+        j += 1usize;
+    };
+    return false;
+};
+
+export fn json_get_int(json: str, key: str, out: &mut i64) bool = {
+    let pos = key_value_pos(json, key);
+    if (pos < 0i64) {
+        return false;
+    };
+    let mut i: usize = pos as usize;
+    let start: usize = i;
+    if (i < json.len && (json.ptr[i] == 45u8 || json.ptr[i] == 43u8)) {
+        i += 1usize;
+    };
+    while (i < json.len && json.ptr[i] >= 48u8 && json.ptr[i] <= 57u8) {
+        i += 1usize;
+    };
+    if (i == start) {
+        return false;
+    };
+    *out = parse_i64(json[start..i]);
+    return true;
+};
+
+// ---- diagnostics ----
+
+export fn uri_to_path(uri: str) str = {
+    if (strlib::starts_with(uri, "file://")) {
+        return uri[7..];
+    };
+    return uri;
+};
+
+export fn run_check(path: str) str = {
+    // PATH lookup: sh resolves zovc wherever it is installed
+    let cmd: str = "zovc --check '" + path + "' 2>&1";
+    let raw = c::popen(cmd, "r");
+    let fp: *c::FILE = match (raw) {
+        case null => return "",
+        case let p: *c::FILE => p,
+    };
+    let buf: [4096]u8;
+    let mut bytes = vec::new[u8]();
+    while (true) {
+        let n = c::fread((&buf[0usize]) as *void, 1usize, 4096usize, fp);
+        if (n == 0usize) {
+            break;
+        };
+        let mut i: i64 = 0;
+        while (i < (n as i64)) {
+            bytes.push(buf[i as usize]);
+            i += 1;
+        };
+    };
+    c::pclose(fp);
+    let out: str = heap_copy(finish(&bytes));
+    return out;
+};
+
+// extracts <line>, <col>, and message from one zovc diagnostic row
+export fn parse_diag(line: str, ln: &mut i64, col: &mut i64,
+                     msg: &mut str) bool = {
+    let r1 = strlib::find_byte(line, 58u8);
+    let i1: usize = match (r1) {
+        case let v: usize => v,
+        case strlib::NotFound => return false,
+    };
+    let rest1: str = line[(i1 + 1usize)..];
+    let r2 = strlib::find_byte(rest1, 58u8);
+    let i2: usize = match (r2) {
+        case let v: usize => v,
+        case strlib::NotFound => return false,
+    };
+    *ln = parse_i64(rest1[0..i2]);
+    let rest2: str = rest1[(i2 + 1usize)..];
+    let r3 = strlib::find_byte(rest2, 58u8);
+    let i3: usize = match (r3) {
+        case let v: usize => v,
+        case strlib::NotFound => return false,
+    };
+    *col = parse_i64(rest2[0..i3]);
+    if (rest2.len < i3 + 9usize) {
+        return false;
+    };
+    let seg: str = rest2[(i3 + 1usize)..(i3 + 7usize)];
+    if (!(seg == " error")) {
+        return false;
+    };
+    *msg = rest2[(i3 + 9usize)..];
+    return true;
+};
+
+export fn publish_diagnostics(uri: str, output: str) void = {
+    let mut sb = vec::new[u8]();
+    defer sb.free();
+    put_str(&mut sb, "\{\"jsonrpc\":\"2.0\",\"method\":");
+    put_json_str(&mut sb, "textDocument/publishDiagnostics");
+    put_str(&mut sb, ",\"params\":\{\"uri\":");
+    put_json_str(&mut sb, uri);
+    put_str(&mut sb, ",\"diagnostics\":[");
+    let ls = strlib::lines(output);
+    defer ls.free();
+    let mut first = true;
+    for (let idx in 0..(ls.len() as i64)) {
+        let line: str = ls.get(idx as usize);
+        let mut ln: i64 = 0;
+        let mut col: i64 = 0;
+        let mut msg: str = "";
+        if (!parse_diag(line, &mut ln, &mut col, &mut msg)) {
+            continue;
+        };
+        if (!first) {
+            sb.push(44u8);
+        };
+        first = false;
+        // LSP positions are 0-based; zovc emits 1-based lines
+        let zline: usize = (ln - 1i64) as usize;
+        let zcol: usize = (col - 1i64) as usize;
+        put_str(&mut sb, "\{\"range\":\{\"start\":\{\"line\":");
+        put_uint(&mut sb, zline);
+        put_str(&mut sb, ",\"character\":");
+        put_uint(&mut sb, zcol);
+        put_str(&mut sb, "},\"end\":\{\"line\":");
+        put_uint(&mut sb, zline);
+        put_str(&mut sb, ",\"character\":");
+        put_uint(&mut sb, zcol + 1usize);
+        put_str(&mut sb, "}},\"severity\":1,\"source\":\"zovc\",\"message\":");
+        put_json_str(&mut sb, msg);
+        sb.push(125u8);
+    };
+    put_str(&mut sb, "]}}");
+    send_json(finish(&sb));
+};
+
+// ---- hover ----
+
+export fn word_at(text: str, line: i64, character: i64) str = {
+    let ls = strlib::lines(text);
+    defer ls.free();
+    if (line < 0i64 || line >= (ls.len() as i64)) {
+        return "";
+    };
+    let l: str = ls.get(line as usize);
+    if (character < 0i64 || character > (l.len as i64)) {
+        return "";
+    };
+    let mut end: usize = character as usize;
+    if (end > l.len) {
+        end = l.len;
+    };
+    let mut start: usize = end;
+    while (start > 0usize) {
+        let ch: u8 = l.ptr[start - 1usize];
+        let wordy: bool = (ch >= 97u8 && ch <= 122u8)
+            || (ch >= 65u8 && ch <= 90u8)
+            || (ch >= 48u8 && ch <= 57u8) || ch == 95u8;
+        if (!wordy) {
+            break;
+        };
+        start -= 1usize;
+    };
+    while (end < l.len) {
+        let ch: u8 = l.ptr[end];
+        let wordy: bool = (ch >= 97u8 && ch <= 122u8)
+            || (ch >= 65u8 && ch <= 90u8)
+            || (ch >= 48u8 && ch <= 57u8) || ch == 95u8;
+        if (!wordy) {
+            break;
+        };
+        end += 1usize;
+    };
+    return l[start..end];
+};
+
+export fn hover_reply(id: i64, text: str, line: i64, character: i64,
+                      docs: &map::Map[str, str]) void = {
+    let w = word_at(text, line, character);
+    let r = docs.get(w);
+    let mut sb = vec::new[u8]();
+    defer sb.free();
+    put_str(&mut sb, "\{\"jsonrpc\":\"2.0\",\"id\":");
+    put_uint(&mut sb, id as usize);
+    put_str(&mut sb, ",\"result\":");
+    let found: str = match (r) {
+        case let v: str => v,
+        case map::MapNotFound => "",
+    };
+    if (w == "" || found == "") {
+        put_str(&mut sb, "null}");
+        send_json(finish(&sb));
+        return;
+    };
+    put_str(&mut sb, "\{\"contents\":\{\"kind\":\"markdown\",\"value\":");
+    put_json_str(&mut sb, found);
+    put_str(&mut sb, "}}}");
+    send_json(finish(&sb));
+};
+
+// ---- completion ----
+
+export fn complete_item(sb: &mut vec::Vec[u8], label: str, kind: usize,
+                         first: &mut bool) void = {
+    if (!*first) {
+        put_str(sb, ",");
+    };
+    *first = false;
+    put_str(sb, "\{\"label\":");
+    put_json_str(sb, label);
+    put_str(sb, ",\"kind\":");
+    put_uint(sb, kind);
+    sb.push(125u8);
+};
+
+export fn completion_reply(id: i64) void = {
+    let mut sb = vec::new[u8]();
+    defer sb.free();
+    put_str(&mut sb, "\{\"jsonrpc\":\"2.0\",\"id\":");
+    put_uint(&mut sb, id as usize);
+    put_str(&mut sb, ",\"result\":[");
+    let mut first = true;
+    // keywords (kind 14)
+    let kws: [17]str = ["fn", "let", "mut", "type", "resource", "struct",
+                        "enum", "match", "case", "defer", "orelse", "use",
+                        "export", "test", "assert", "print", "println"];
+    for (let i in 0..17) {
+        complete_item(&mut sb, kws[i as usize], 14usize, &mut first);
+    };
+    // primitives (kind 14)
+    let prims: [12]str = ["i32", "u32", "i64", "u64", "usize", "f32",
+                          "f64", "bool", "str", "void", "nullable", "char"];
+    for (let i in 0..12) {
+        complete_item(&mut sb, prims[i as usize], 14usize, &mut first);
+    };
+    // std modules (kind 9)
+    let mods: [7]str = ["std::vec", "std::map", "std::str", "std::arena",
+                        "std::fs", "std::env", "std::mem"];
+    for (let i in 0..7) {
+        complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
+    };
+    // methods + intrinsics (kind 2)
+    let fns: [10]str = ["push", "pop", "len", "as_slice", "sort",
+                        "insert", "get", "free", "sizeof", "hash_val"];
+    for (let i in 0..10) {
+        complete_item(&mut sb, fns[i as usize], 2usize, &mut first);
+    };
+    put_str(&mut sb, "]}");
+    send_json(finish(&sb));
+};
+
+export fn simple_result(id: i64, result: str) void = {
+    let mut sb = vec::new[u8]();
+    defer sb.free();
+    put_str(&mut sb, "\{\"jsonrpc\":\"2.0\",\"id\":");
+    put_uint(&mut sb, id as usize);
+    put_str(&mut sb, ",\"result\":");
+    put_str(&mut sb, result);
+    sb.push(125u8);
+    send_json(finish(&sb));
+};
+
+// ---- main loop ----
+
+export fn main() i32 = {
+    let mut doc_text: str = "";
+    let mut docs = map::new[str, str]();
+    defer docs.free();
+    docs.insert("print", "`print(...)` — zero-alloc stdout writer; "
+        + "segments concatenate with `+`");
+    docs.insert("println", "`println(...)` — `print` with a trailing "
+        + "newline; `\{expr}` interpolation supported");
+    docs.insert("assert", "`assert(cond: bool)` — aborts with "
+        + "`file:line: condition` on failure");
+    docs.insert("sizeof", "`sizeof[T]()` — byte size of `T` as `usize`");
+    docs.insert("orelse", "`expr orelse fallback` — coalesces "
+        + "`nullable *T` / tagged unions; `orelse return x` diverges");
+    docs.insert("resource", "`resource struct` — move-only type; the "
+        + "borrow checker prevents use-after-move and double-frees");
+    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: "
+        + "push, pop, get, set, len, as_slice, sort, free");
+    docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: "
+        + "insert, get, contains, remove, len, free");
+    docs.insert("std::str", "str utilities: eq, starts_with, ends_with, "
+        + "find_byte, trim");
+    docs.insert("std::arena", "`Arena` — bump allocator: new, "
+        + "alloc_bytes, reset, free");
+    docs.insert("std::fs", "file helpers: write_str, read_str, exists");
+    docs.insert("std::env", "CLI + environment: args_count, arg_at, get");
+
+    let mut running = true;
+    while (running) {
+        let mut length: usize = 0usize;
+        let mut have_len = false;
+        // headers terminate on the first empty line
+        while (true) {
+            let mut line: str = "";
+            if (!read_line_into(&mut line)) {
+                running = false;
+                break;
+            };
+            if (line == "") {
+                break;
+            };
+            if (strlib::starts_with(line, "Content-Length:")) {
+                let tail: str = line[15..];
+                length = parse_i64(tail) as usize;
+                have_len = true;
+            };
+        };
+        if (!running) {
+            break;
+        };
+        if (!have_len) {
+            continue;
+        };
+        let mut json: str = "";
+        if (!read_payload(length, &mut json)) {
+            break;
+        };
+        let mut method: str = "";
+        if (!json_get_str(json, "method", &mut method)) {
+            continue;
+        };
+        let mut id: i64 = 0;
+        let has_id: bool = json_get_int(json, "id", &mut id);
+
+        if (method == "initialize") {
+            simple_result(id, "\{\"capabilities\":\{\"textDocumentSync\":1,"
+                + "\"hoverProvider\":true,\"completionProvider\":"
+                + "\{\"triggerCharacters\":[\".\",\":\"]}}}");
+        } else if (method == "shutdown") {
+            if (has_id) {
+                simple_result(id, "null");
+            };
+        } else if (method == "exit") {
+            stdlib::exit(0);
+        } else if (method == "textDocument/didOpen"
+                   || method == "textDocument/didChange"
+                   || method == "textDocument/didSave") {
+            let mut uri: str = "";
+            if (!json_get_str(json, "uri", &mut uri)) {
+                continue;
+            };
+            let mut text: str = "";
+            let has_text: bool = json_get_str(json, "text", &mut text);
+            let path: str = uri_to_path(uri);
+            let mut check_path: str = path;
+            if (has_text && text != "") {
+                doc_text = text;
+                let _ = fs::write_str(".zov-lsp-buffer.zov", text);
+                check_path = ".zov-lsp-buffer.zov";
+            } else {
+                doc_text = fs::read_str(path)
+                    orelse "";
+            };
+            let output: str = run_check(check_path);
+            publish_diagnostics(uri, output);
+        } else if (method == "textDocument/completion") {
+            completion_reply(id);
+        } else if (method == "textDocument/hover") {
+            let mut line: i64 = 0;
+            let mut character: i64 = 0;
+            json_get_int(json, "line", &mut line);
+            json_get_int(json, "character", &mut character);
+            hover_reply(id, doc_text, line, character, &docs);
+        } else {
+            if (has_id) {
+                simple_result(id, "null");
+            };
+        };
+    };
+    return 0;
+};
