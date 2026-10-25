@@ -28,14 +28,5 @@ name = "Zov"
 grammar = "c"
 path_suffixes = ["zov"]
 line_comments = ["// "]
-
-[brackets]
- "(" = ")"
- "[" = "]"
- "{" = "}"
- "\"" = "\""
-
-[auto_indent]
-patterns = [
-    "break_line"
-]
+brackets = [["(", ")"], ["[", "]"], ["{", "}"], ["\"", "\""]]
+auto_indent_using_non_brackets = false

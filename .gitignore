@@ -13,3 +13,5 @@ tests/pkg_workspace/app/target/
 /zov-lsp
 .zov-lsp-buffer.zov
 /editors/zed/target/
+/editors/zed/extension.wasm
+/editors/zed/target/
