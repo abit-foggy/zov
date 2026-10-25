@@ -15,3 +15,4 @@ tests/pkg_workspace/app/target/
 /editors/zed/target/
 /editors/zed/extension.wasm
 /editors/zed/target/
+/editors/zed/tree-sitter-zov/src/

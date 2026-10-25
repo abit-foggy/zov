@@ -1,0 +1,14 @@
+{
+  "name": "tree-sitter-zov",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the Zov systems programming language",
+  "main": "bindings/node",
+  "keywords": ["tree-sitter", "zov", "grammar"],
+  "license": "BSD-2-Clause",
+  "tree-sitter": [
+    {
+      "scope": "source.zov",
+      "file-types": ["zov"]
+    }
+  ]
+}

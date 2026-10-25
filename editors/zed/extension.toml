@@ -27,6 +27,9 @@ name = "Zov"
 version = "1.2.0"
 schema_version = 1
 
+[grammars.zov]
+repository = "file://tree-sitter-zov"
+
 [language_servers.zov-lsp]
 name = "Zov LSP"
 languages = ["Zov"]

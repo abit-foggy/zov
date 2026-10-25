@@ -41,8 +41,6 @@
 (export_keyword) @keyword
 (test_keyword) @keyword
 (return_keyword) @keyword
-(break_keyword) @keyword
-(continue_keyword) @keyword
 (for_keyword) @keyword
 (in_keyword) @keyword
 (while_keyword) @keyword
@@ -54,67 +52,30 @@
 (false_keyword) @constant.builtin
 
 (primitive_type) @type.builtin
-(struct_name) @type
-(enum_name) @type
-(variant_name) @constant
-(field_name) @property
+(type_name) @type
 (function_name) @function
-(method_name) @function.method
 (parameter_name) @variable.parameter
+(field_name) @property
+(member_name) @variable.member
+(variant_name) @constant
 (identifier) @variable
 
 (int_literal) @number
 (float_literal) @number
-(char_literal) @character
+(char_literal) @string.special
+(escape_sequence) @string.escape
 (string_literal) @string
 (interpolation) @embedded
 
-(escape_sequence) @escape
+(qualified_identifier) @variable
 
-"=" @operator
-"==" @operator
-"!=" @operator
-"<" @operator
-">" @operator
-"<=" @operator
-">=" @operator
-"+" @operator
-"-" @operator
-"*" @operator
-"/" @operator
-"%" @operator
-"&" @operator
-"|" @operator
-"^" @operator
-"~" @operator
-"<<" @operator
-">>" @operator
-"+=" @operator
-"-=" @operator
-"*=" @operator
-"/=" @operator
-"%=" @operator
-"&=" @operator
-"|=" @operator
-"^=" @operator
-"<<=" @operator
-">>=" @operator
-"&&" @operator
-"||" @operator
-"!" @operator
-"?" @operator
-"=>" @operator
-"::" @operator
-".." @operator
-"&" @operator
+[
+  "=" "==" "!=" "<" ">" "<=" ">="
+  "+" "-" "*" "/" "%" "&" "|" "^" "~"
+  "<<" ">>"
+  "+=" "-=" "*=" "/=" "%=" "&=" "|=" "^=" "<<=" ">>="
+  "&&" "||" "?" "!" "=>" "::" ".."
+] @operator
 
-"(" @punctuation.bracket
-")" @punctuation.bracket
-"[" @punctuation.bracket
-"]" @punctuation.bracket
-"{" @punctuation.bracket
-"}" @punctuation.bracket
-"," @punctuation.delimiter
-";" @punctuation.delimiter
-":" @punctuation.delimiter
-"." @punctuation.delimiter
+["(" ")" "[" "]" "{" "}"] @punctuation.bracket
+["," ";" ":" "." "|"] @punctuation.delimiter

@@ -23,10 +23,10 @@
 ; POSSIBILITY OF SUCH DAMAGE.
 
 (function_declaration
-  name: (identifier) @name) @item
+  name: (function_name) @name) @item
 
 (type_declaration
-  name: (identifier) @name) @item
+  name: (type_name) @name) @item
 
 (test_declaration
   description: (string_literal) @name) @item
