@@ -156,6 +156,59 @@ else
     fails=$((fails + 1))
 fi
 
+# freestanding mode: zero hosted headers, panic-routed asserts, and a
+# clean -ffreestanding -nostdlib object with only the kernel hook undefined
+if $ZOV --freestanding --emit-c tests/16_freestanding_smoke.zov \
+        > "$TMP/fs.c" 2>"$TMP/fs.err"; then
+    hosted_refs=$(grep -cE "stdio|stdlib|abort|main\(int" "$TMP/fs.c" || true)
+    if [ "$hosted_refs" = "0" ] \
+       && grep -q "zov_panic" "$TMP/fs.c" \
+       && grep -q "zov_kmain" "$TMP/fs.c"; then
+        echo "PASS: 16_freestanding emit"
+    else
+        echo "FAIL: 16_freestanding emit (hosted refs: $hosted_refs)"
+        fails=$((fails + 1))
+    fi
+    if cc -ffreestanding -nostdlib -mno-red-zone -fno-pie -std=c99 \
+         -Wall -Wextra -Werror -c "$TMP/fs.c" -o "$TMP/fs.o" \
+         2>"$TMP/fscc.err"; then
+        if [ "$(nm -u "$TMP/fs.o" | grep -c zov_panic)" = "1" ] \
+           && [ "$(nm -u "$TMP/fs.o" | grep -cv zov_panic)" = "0" ]; then
+            echo "PASS: 16_freestanding object"
+        else
+            echo "FAIL: 16_freestanding object symbols"
+            nm -u "$TMP/fs.o" | sed 's/^/    /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL: 16_freestanding object compile"
+        cat "$TMP/fscc.err" | sed 's/^/    /' | head -4
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL: 16_freestanding emit (zovc error)"
+    cat "$TMP/fs.err" | sed 's/^/    /'
+    fails=$((fails + 1))
+fi
+
+# manifest: freestanding = true builds a kernel .o object
+FSPJ="$TMP/fsproj"
+rm -rf "$FSPJ"
+mkdir -p "$FSPJ/src"
+printf '[package]\nname = "zovos"\nversion = "0.1.0"\nentry = "src/kernel.zov"\nfreestanding = true\n' \
+    > "$FSPJ/zov.toml"
+printf 'export fn kmain() void = {\n    let mut x: i32 = 1;\n    x = x + 1;\n};\n' \
+    > "$FSPJ/src/kernel.zov"
+if $ZOV build -C "$FSPJ" > "$TMP/fsb.out" 2>&1 \
+   && test -f "$FSPJ/target/zovos.o"; then
+    echo "PASS: freestanding manifest object build"
+else
+    echo "FAIL: freestanding manifest object build"
+    cat "$TMP/fsb.out" | sed 's/^/    /' | head -3
+    fails=$((fails + 1))
+fi
+rm -rf "$FSPJ"
+
 if [ "$fails" -ne 0 ]; then
     echo "$fails test(s) failed"
     exit 1

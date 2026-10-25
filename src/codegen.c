@@ -1236,7 +1236,9 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     }
     case EX_SLICE: {
         cg->needs_slice = 1;
-        cg->needs_io = 1;
+        if (!cg->freestanding)
+            /* hosted bounds helper reports via fprintf; ring-0 panics */
+            cg->needs_io = 1;
         cg->needs_abort = 1;
         Type *bt = e->u.slice.base->type;
         int id = cg->tmp_id++;
@@ -1865,10 +1867,16 @@ char *codegen_generate_mode(Program *prog, int test_mode)
              "#include <stdint.h>\n"
              "#include <stddef.h>\n"
              "#include <stdbool.h>\n");
-    if (!cg->freestanding)
+    if (!cg->freestanding) {
         /* argv capture exists only for hosted std::env */
         buf_puts(&*cg->cur,
                  "static int zov_rt_argc; static char **zov_rt_argv;\n");
+    } else {
+        /* declared before every helper; kernels own the definition */
+        buf_puts(&*cg->cur,
+                 "extern void zov_panic(const char *msg, "
+                 "const char *file, int line);\n");
+    }
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
         if (d->kind == DL_USE && d->u.use.is_c_header)
@@ -1945,7 +1953,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         if (cg->freestanding) {
             cg->needs_abort = 1;
             buf_puts(&out,
-                     "static size_t zov_bounds(size_t i, size_t n) {\n"
+                     "static inline size_t zov_bounds(size_t i, "
+                     "size_t n) {\n"
                      "    if (i >= n) {\n"
                      "        zov_panic(\"index out of bounds\", \"?\", "
                      "0);\n"
@@ -1973,14 +1982,10 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         buf_puts(&out, ";\n");
     }
     if (cg->freestanding) {
-        if (cg->needs_abort)
-            /* kernels own the panic hook; no libc abort() exists */
-            buf_puts(&out, "extern void zov_panic(const char *msg, "
-                           "const char *file, int line);\n");
         if (cg->needs_slice)
             buf_puts(&out,
-                     "static size_t zov_slice_check(size_t a, size_t b, "
-                     "size_t n, const char *f, int l) {\n"
+                     "static inline size_t zov_slice_check(size_t a, "
+                     "size_t b, size_t n, const char *f, int l) {\n"
                      "    if (a > b || b > n) {\n"
                      "        zov_panic(\"slice out of bounds\", f, l);\n"
                      "    }\n"
