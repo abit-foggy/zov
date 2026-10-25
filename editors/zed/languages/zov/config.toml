@@ -23,7 +23,9 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 name = "Zov"
-grammar = "zov"
+# tree-sitter-zov is not yet published; the built-in C grammar gives
+# approximate highlighting until it lands, and the LSP carries the rest
+grammar = "c"
 path_suffixes = ["zov"]
 line_comments = ["// "]
 

@@ -22,7 +22,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-use zed_extension_api::{self as zed, LanguageServerConfiguration, Result};
+use zed_extension_api::{self as zed, Result};
 
 struct ZovExtension;
 
@@ -31,16 +31,14 @@ impl zed::Extension for ZovExtension {
         ZovExtension
     }
 
-    // The grammar is bundled with the extension manifest; no repo fetch.
     fn language_server_command(
         &mut self,
         _language_server_id: &zed::LanguageServerId,
-        _project_root: &std::path::Path,
+        _worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
-        // zov-lsp is resolved from $PATH or the workspace root; Zed launches
+        // zov-lsp resolves from $PATH or the workspace root; Zed launches
         // it over stdio, matching the server's fd 0/1 JSON-RPC transport.
-        let lsp = which_zov_lsp()
-            .unwrap_or_else(|| "zov-lsp".to_string());
+        let lsp = which_zov_lsp().unwrap_or_else(|| "zov-lsp".to_string());
         Ok(zed::Command {
             command: lsp,
             args: vec![],
@@ -51,6 +49,7 @@ impl zed::Extension for ZovExtension {
     fn language_server_initialization_options(
         &mut self,
         _language_server_id: &zed::LanguageServerId,
+        _worktree: &zed::Worktree,
     ) -> Result<Option<zed::serde_json::Value>> {
         Ok(None)
     }
@@ -58,26 +57,9 @@ impl zed::Extension for ZovExtension {
     fn language_server_workspace_configuration(
         &mut self,
         _language_server_id: &zed::LanguageServerId,
-        _project_configuration: Option<zed::serde_json::Value>,
+        _worktree: &zed::Worktree,
     ) -> Result<Option<zed::serde_json::Value>> {
         Ok(None)
-    }
-
-    fn language_configs(&mut self) -> Result<Vec<zed::LanguageConfig>> {
-        Ok(vec![zed::LanguageConfig {
-            name: "Zov".into(),
-            grammar: Some("zov".into()),
-            line_comments: vec!["// ".into()],
-            path_suffixes: vec!["zov".into()],
-            ..Default::default()
-        }])
-    }
-
-    fn language_server_configurations(
-        &mut self,
-        _language_server_id: &zed::LanguageServerId,
-    ) -> Result<Vec<LanguageServerConfiguration>> {
-        Ok(vec![])
     }
 }
 

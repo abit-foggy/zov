@@ -12,3 +12,4 @@ tests/pkg_workspace/app/target/
 .zov-test-bin
 /zov-lsp
 .zov-lsp-buffer.zov
+/editors/zed/target/
