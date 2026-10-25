@@ -1,0 +1,70 @@
+{
+  "name": "zov",
+  "displayName": "Zov",
+  "description": "Zov language support: tree-sitter-accurate highlighting, snippets, and zov-lsp integration (diagnostics, completion, hover)",
+  "version": "1.2.0",
+  "publisher": "abit-foggy",
+  "license": "BSD-2-Clause",
+  "icon": "icons/zov.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Language Packs"
+  ],
+  "activationEvents": [
+    "onLanguage:zov"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "zov",
+        "aliases": ["Zov", "zov"],
+        "extensions": [".zov"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zov",
+        "scopeName": "source.zov",
+        "path": "./syntaxes/zov.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "zov",
+        "path": "./snippets/zov.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "zov.restartLsp",
+        "title": "Zov: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "Zov",
+      "properties": {
+        "zov.lsp.path": {
+          "type": "string",
+          "default": "zov-lsp",
+          "description": "Path to the zov-lsp binary"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}

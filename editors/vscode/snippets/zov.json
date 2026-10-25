@@ -1,0 +1,111 @@
+{
+  "fn": {
+    "prefix": "fn",
+    "body": [
+      "export fn ${1:name}(${2:args}) ${3:i32} = {",
+      "\t$0",
+      "};"
+    ],
+    "description": "exported function"
+  },
+  "main": {
+    "prefix": "main",
+    "body": [
+      "export fn main() i32 = {",
+      "\t$0",
+      "\treturn 0;",
+      "};"
+    ],
+    "description": "program entry point"
+  },
+  "method": {
+    "prefix": "method",
+    "body": [
+      "export fn (self: &mut ${1:Type}) ${2:name}(${3}) ${4:void} = {",
+      "\t$0",
+      "};"
+    ],
+    "description": "receiver method on a mutable borrow"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": [
+      "export type ${1:Name} = struct {",
+      "\t${2:field}: ${3:i32},",
+      "};"
+    ],
+    "description": "struct type declaration"
+  },
+  "res": {
+    "prefix": "res",
+    "body": [
+      "export type ${1:Name} = resource struct {",
+      "\t${2:ptr}: nullable *${3:u8},",
+      "};"
+    ],
+    "description": "resource struct (move-checked)"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "export type ${1:Name} = enum {",
+      "\t${2:Variant},",
+      "};"
+    ],
+    "description": "enum type declaration"
+  },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match (${1:expr}) {",
+      "\tcase ${2:pat} => ${3:body},",
+      "\tcase _ => ${0},",
+      "};"
+    ],
+    "description": "exhaustive match with wildcard"
+  },
+  "matchnull": {
+    "prefix": "matchnull",
+    "body": [
+      "let ${1:ptr} = match (${2:raw}) {",
+      "\tcase null => return ${3:-1},",
+      "\tcase let p: *${4:Type} => p,",
+      "};"
+    ],
+    "description": "narrow a nullable pointer via match"
+  },
+  "fori": {
+    "prefix": "fori",
+    "body": [
+      "for (let ${1:i} in 0..${2:n}) {",
+      "\t$0",
+      "};"
+    ],
+    "description": "ranged for loop"
+  },
+  "fore": {
+    "prefix": "fore",
+    "body": [
+      "for (let ${1:i}, ${2:item} in ${3:slice}) {",
+      "\t$0",
+      "};"
+    ],
+    "description": "indexed element iteration"
+  },
+  "test": {
+    "prefix": "test",
+    "body": [
+      "test \"${1:description}\" {",
+      "\tassert(${0:true});",
+      "};"
+    ],
+    "description": "test block"
+  },
+  "pl": {
+    "prefix": "pl",
+    "body": [
+      "println(\"${1:msg}=\" + ${0:val});"
+    ],
+    "description": "print with label"
+  }
+}
