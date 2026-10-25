@@ -1,0 +1,64 @@
+<!-- Copyright (c) 2026 foggy (abit-foggy)
+     All rights reserved.
+
+     Redistribution and use in source and binary forms, with or without
+     modification, are permitted provided that the following conditions are met:
+
+     1. Redistributions of source code must retain the above copyright notice,
+        this list of conditions and the following disclaimer.
+     2. Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+
+     THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+     AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+     IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+     ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+     LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+     CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+     SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+     INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+     CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+     ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+     POSSIBILITY OF SUCH DAMAGE. -->
+
+<idea-plugin>
+    <id>dev.zov</id>
+    <name>Zov</name>
+    <vendor>abit-foggy</vendor>
+
+    <description><![CDATA[
+        Zov language support for CLion, IntelliJ IDEA Ultimate, and other
+        IntelliJ-platform IDEs. Provides native syntax highlighting for the
+        full v1.2.0 grammar (string interpolation, hex/float literals with
+        type suffixes, block comments), paired-brace matching, comment
+        support, and full zov-lsp integration for diagnostics, completion,
+        hover, folding, and structure view.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.ultimate</depends>
+    <depends>com.intellij.modules.lsp</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="Zov"
+                  language="Zov"
+                  extensions="zov"
+                  implementationClass="zov.idea.ZovFileType"
+                  fieldName="INSTANCE"/>
+        <lang.syntaxHighlighterFactory
+                language="Zov"
+                implementationClass="zov.idea.ZovSyntaxHighlighterFactory"/>
+        <lang.commenter
+                language="Zov"
+                implementationClass="zov.idea.ZovCommenter"/>
+        <lang.braceMatcher
+                language="Zov"
+                implementationClass="zov.idea.ZovBraceMatcher"/>
+    </extensions>
+
+    <extensions>
+        <com.intellij.platform.lsp.integrationProvider
+                implementation="zov.idea.ZovLspIntegrationProvider"/>
+    </extensions>
+</idea-plugin>
