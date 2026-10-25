@@ -117,6 +117,45 @@ for neg in tests/neg/*.zov; do
     run_neg "$neg"
 done
 
+# --check: valid file exits 0 silently, invalid file exits 1 with a
+# file:line:col diagnostic row
+if $ZOV --check tests/01_arith.zov 2>"$TMP/chk.err" \
+   && test ! -s "$TMP/chk.err"; then
+    echo "PASS: --check valid"
+else
+    echo "FAIL: --check valid"
+    cat "$TMP/chk.err" | sed 's/^/    /'
+    fails=$((fails + 1))
+fi
+printf 'export fn main() i32 = {\n    let q: i32 = "bad";\n    return 0;\n};\n' \
+    > "$TMP/invalid.zov"
+if $ZOV --check "$TMP/invalid.zov" >"$TMP/chk.out" 2>"$TMP/chk.err"; then
+    echo "FAIL: --check invalid (exited 0)"
+    fails=$((fails + 1))
+else
+    if grep -qE '^[^:]+:[0-9]+:[0-9]+: error: ' "$TMP/chk.err"; then
+        echo "PASS: --check invalid diagnostic format"
+    else
+        echo "FAIL: --check invalid diagnostic format"
+        cat "$TMP/chk.err" | sed 's/^/    /'
+        fails=$((fails + 1))
+    fi
+fi
+
+# zov-lsp: JSON-RPC lifecycle with live diagnostics and completion
+if test -x ./zov-lsp; then
+    python3 tests/lsp_protocol.py "$TMP" ./zov-lsp "$PWD/tests/lsp_fixture.zov"
+    if [ $? -eq 0 ]; then
+        echo "PASS: zov-lsp JSON-RPC protocol"
+    else
+        echo "FAIL: zov-lsp JSON-RPC protocol"
+        fails=$((fails + 1))
+    fi
+else
+    echo "FAIL: zov-lsp binary missing"
+    fails=$((fails + 1))
+fi
+
 if [ "$fails" -ne 0 ]; then
     echo "$fails test(s) failed"
     exit 1
