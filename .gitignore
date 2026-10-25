@@ -10,3 +10,5 @@ vendor/tinycc/tcc
 tests/pkg_workspace/app/zov.lock
 tests/pkg_workspace/app/target/
 .zov-test-bin
+zov-lsp
+.zov-lsp-buffer.zov

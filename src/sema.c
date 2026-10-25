@@ -1279,6 +1279,26 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (callee->kind == EX_IDENT) {
             Sym *fn = scope_find(se->scope, callee->u.ident);
             if (!fn) {
+                if (zstr_eq(callee->u.ident, "zov_str_from_raw")) {
+                    if (e->u.call.args.len != 2)
+                        fatal_at(e->span,
+                                 "zov_str_from_raw takes a pointer and "
+                                 "a length");
+                    Type *pt = check_expr(se, e->u.call.args.items[0],
+                                          NULL);
+                    Type *nt = check_expr(se, e->u.call.args.items[1],
+                                         type_prim(TY_USIZE));
+                    if (!is_unknown(pt) && !is_ptrish(pt))
+                        fatal_at(e->u.call.args.items[0]->span,
+                                 "zov_str_from_raw needs a pointer");
+                    if (!is_unknown(nt) && !ty_is_int(nt->kind))
+                        fatal_at(e->u.call.args.items[1]->span,
+                                 "length must be an integer");
+                    e->builtin_env_kind = 0;
+                    e->type = type_prim(TY_STR);
+                    e->str_raw_builtin = 1;
+                    return e->type;
+                }
                 /* runtime-env builtins backing std::env */
                 if (zstr_eq(callee->u.ident, "zov_env_args_count")) {
                     if (e->u.call.args.len != 0)
@@ -1953,8 +1973,23 @@ static void check_let(Sema *se, Stmt *s)
 {
     if (s->u.let.ty)
         s->u.let.ty = resolve_type(se, s->u.let.ty);
-    if (s->u.let.init == NULL)
-        fatal_at(s->span, "let requires an initializer in v0.1");
+    if (s->u.let.init == NULL) {
+        /* init-less lets: arrays and structs zero-initialize */
+        if (!s->u.let.ty || (s->u.let.ty->kind != TY_ARRAY
+                             && s->u.let.ty->kind != TY_STRUCT))
+            fatal_at(s->span,
+                     "let without an initializer requires an array or "
+                     "struct type");
+        Sym sym;
+        memset(&sym, 0, sizeof(sym));
+        sym.name = s->u.let.name;
+        sym.kind = SYM_VAR;
+        sym.span = s->span;
+        sym.type = s->u.let.ty;
+        sym.mut = s->u.let.mut;
+        scope_add(se, sym);
+        return;
+    }
     Type *it = check_expr(se, s->u.let.init, s->u.let.ty);
     if (s->u.let.ty && s->u.let.ty->kind == TY_UNION) {
         s->u.let.init = maybe_coerce(s->u.let.init, s->u.let.ty);

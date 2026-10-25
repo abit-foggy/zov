@@ -905,6 +905,14 @@ static void emit_call(CG *cg, Expr *e)
         buf_puts(&*cg->cur, "))");
         return;
     }
+    if (e->str_raw_builtin) {
+        buf_puts(&*cg->cur, "(zov_str){ (const uint8_t *)(");
+        emit_expr(cg, e->u.call.args.items[0], 0);
+        buf_puts(&*cg->cur, "), (size_t)(");
+        emit_expr(cg, e->u.call.args.items[1], 0);
+        buf_puts(&*cg->cur, ") }");
+        return;
+    }
     if (e->builtin_env_kind) {
         cg->needs_env = 1;
         switch (e->builtin_env_kind) {
@@ -1510,6 +1518,11 @@ static int emit_stmt(CG *cg, Stmt *s)
     switch (s->kind) {
     case ST_LET: {
         emit_var(&*cg->cur, cg, s->u.let.ty, mangle_local(s->u.let.name));
+        if (!s->u.let.init) {
+            /* init-less let: C99 {0} zero-fills every member/element */
+            buf_puts(&*cg->cur, " = {0};\n");
+            return 0;
+        }
         if (s->u.let.init->kind == EX_ARR_LIT && s->u.let.ty
             && s->u.let.ty->kind == TY_ARRAY) {
             /* arrays take initializer lists, not compound literals */

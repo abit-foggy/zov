@@ -982,7 +982,11 @@ static int b_stmt(Borrow *b, Stmt *s)
     switch (s->kind) {
     case ST_LET: {
         Expr *init = s->u.let.init;
-        if (init && init->kind == EX_UNARY && init->u.unary.op == TK_AMP) {
+        if (!init) {
+            var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
+            return 0;
+        }
+        if (init->kind == EX_UNARY && init->u.unary.op == TK_AMP) {
             /* named reference binding: loan held until its last use */
             check_borrow(b, init, init->borrow_mut);
             bx_borrow_operand(b, init->u.unary.e);

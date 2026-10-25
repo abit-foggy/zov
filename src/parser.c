@@ -920,9 +920,15 @@ static Stmt *parse_stmt(Parser *p)
         if (at(p, TK_COLON)) {
             advance(p);
             s->u.let.ty = parse_type(p);
+            /* typed lets may omit '=': zero-initialized arrays/structs */
+            if (at(p, TK_ASSIGN)) {
+                advance(p);
+                s->u.let.init = parse_expr(p);
+            }
+        } else {
+            expect(p, TK_ASSIGN, "'=' in let binding");
+            s->u.let.init = parse_expr(p);
         }
-        expect(p, TK_ASSIGN, "'=' in let binding");
-        s->u.let.init = parse_expr(p);
         expect(p, TK_SEMI, "';' after let");
         return s;
     }

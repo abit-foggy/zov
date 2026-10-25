@@ -24,7 +24,27 @@
 
 use <stdio.h> as c;
 
+use std::mem as mem;
+
 export type FsError = !i32;
+
+export fn read_str(path: str) (str | FsError) = {
+    let raw: nullable *c::FILE = c::fopen(path, "rb");
+    let fp: *c::FILE = match (raw) {
+        case null => return 1,
+        case let p: *c::FILE => p,
+    };
+    defer c::fclose(fp);
+    c::fseek(fp, 0, c::SEEK_END);
+    let size: i64 = c::ftell(fp);
+    if (size < 0i64) {
+        return 2;
+    };
+    c::fseek(fp, 0, c::SEEK_SET);
+    let buf: *u8 = mem::alloc[u8](size as usize);
+    let n = c::fread(buf as *void, 1usize, size as usize, fp);
+    return zov_str_from_raw(buf, n);
+};
 
 export fn write_str(path: str, content: str) (void | FsError) = {
     let raw: nullable *c::FILE = c::fopen(path, "w");

@@ -28,10 +28,10 @@ zovc: $(OBJ) $(TCC_STAMP)
 src/%.o: src/%.c include/common.h include/token.h include/ast.h $(TCC_STAMP)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-test: zovc
+test: zovc zov-lsp
 	sh tests/run.sh
 
 clean:
-	rm -f zovc $(OBJ)
+	rm -f zovc zov-lsp $(OBJ)
 
-.PHONY: all test clean
+.PHONY: all lsp test clean
