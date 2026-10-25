@@ -28,7 +28,7 @@ version = "1.2.0"
 schema_version = 1
 
 [grammars.zov]
-repository = "file://tree-sitter-zov"
+repository = "file:///home/foggy/zov/editors/zed/tree-sitter-zov"
 rev = "f8c892dfc485d5c385cea3aecf84b5328f40b6d4"
 
 [language_servers.zov-lsp]
