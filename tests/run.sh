@@ -57,6 +57,22 @@ run_stdout 12_enums tests/12_enums_and_slices.zov tests/12_enums_and_slices.expe
 run_stdout 13_std_arena tests/13_std_arena_and_str.zov tests/13_std_arena_and_str.expected
 run_stdout 14_bitwise_map tests/14_bitwise_and_map.zov tests/14_bitwise_and_map.expected
 run_stdout 15_capstone tests/15_capstone_interpreter.zov tests/15_capstone_interpreter.expected
+run_stdin 17_std_io tests/17_std_io.zov "first line" tests/17_std_io.expected
+
+run_stdin() { # name file input_line expected_stdout_file
+    name=$1; file=$2; input=$3; wantfile=$4
+    out="$TMP/$name"
+    if ! $ZOV "$file" -o "$out" 2> "$TMP/$name.err"; then
+        echo "FAIL: $name (compile)"; cat "$TMP/$name.err"; fails=$((fails + 1)); return
+    fi
+    printf '%s\n' "$input" | "$out" > "$TMP/$name.out" 2>&1
+    if ! cmp -s "$TMP/$name.out" "$wantfile"; then
+        echo "FAIL: $name (stdout mismatch)"
+        diff "$wantfile" "$TMP/$name.out" | sed 's/^/    /'
+        fails=$((fails + 1)); return
+    fi
+    echo "PASS: $name"
+}
 
 # test-block runner: zovc test <file>
 if $ZOV test tests/11_test_blocks.zov > "$TMP/11.out" 2>&1; then
