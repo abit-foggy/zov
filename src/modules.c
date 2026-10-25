@@ -252,12 +252,33 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
     if (list_has(&ld->loading, file))
         die("circular module import: '%s' is already being loaded", path);
     if (list_has(&ld->visited, file)) {
-        /* diamond: already merged; re-expose its exported names */
-        FILE *probe = fopen(file, "r");
-        if (!probe)
+        /* diamond: decls already merged, but the IMPORTING module's
+         * use-decl still needs the member list for ns resolution */
+        char *dsrc = read_file(file);
+        if (!dsrc)
             die("cannot open module '%s' (%s)", path, file);
-        fclose(probe);
-        /* symbol re-scan happens in the caller via decl names */
+        Program dsub = {0};
+        parse_program(dsrc, file, &dsub);
+        const char *canon = canonical_modname(path);
+        for (size_t j = 0; j < dsub.decls.len; j++) {
+            Decl *sd = dsub.decls.items[j];
+            if (sd->kind == DL_USE || !sd->exported)
+                continue;
+            const char *nm = NULL;
+            if (sd->kind == DL_FN && !sd->u.fn.recv)
+                nm = sd->u.fn.name;
+            if (sd->kind == DL_TYPE)
+                nm = sd->u.type.name;
+            if (nm) {
+                da_push(syms_out, nm);
+                if (sd->kind == DL_FN)
+                    da_push(targets_out,
+                            mangled_mod_fn(canon, nm));
+                else
+                    da_push(targets_out, nm);
+            }
+        }
+        free(dsrc);
         free(file);
         return;
     }

@@ -26,6 +26,8 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <unistd.h>
+
 #include "driver.h"
 #include "common.h"
 
@@ -35,7 +37,32 @@
 #include <libtcc.h>
 #endif
 
-#define ZOV_TCC_DIR "vendor/tinycc"
+/* tcc runtime dir: cwd (dev tree), then exe-relative installs */
+static const char *tcc_runtime_dir(void)
+{
+    static char resolved[1024];
+    if (access("vendor/tinycc/include", F_OK) == 0)
+        return "vendor/tinycc";
+    ssize_t n = readlink("/proc/self/exe", resolved,
+                         sizeof(resolved) - 1);
+    if (n > 0) {
+        resolved[n] = '\0';
+        char *slash = strrchr(resolved, '/');
+        if (slash) {
+            *slash = '\0';
+            static char cand[1024];
+            if (snprintf(cand, sizeof(cand), "%s/../lib/zov/tinycc",
+                         resolved) < (int)sizeof(cand)
+                && access(cand, F_OK) == 0)
+                return cand;
+            if (snprintf(cand, sizeof(cand), "%s/vendor/tinycc",
+                         resolved) < (int)sizeof(cand)
+                && access(cand, F_OK) == 0)
+                return cand;
+        }
+    }
+    return "vendor/tinycc";
+}
 
 static int compile_via_cc_ex(const char *c_src, const char *out_path,
                              char **links, size_t nlinks, char **include_dirs,
@@ -83,12 +110,18 @@ static int compile_via_tcc_ex(const char *c_src, const char *out_path,
         return 1;
     /* {B} expands inside tcc_set_output_type, so the lib path must be
      * installed first */
-    tcc_set_lib_path(tcc, ZOV_TCC_DIR);
+    const char *trt = tcc_runtime_dir();
+    tcc_set_lib_path(tcc, trt);
     if (tcc_set_output_type(tcc, TCC_OUTPUT_EXE) < 0) {
         tcc_delete(tcc);
         return 1;
     }
-    tcc_add_sysinclude_path(tcc, ZOV_TCC_DIR "/include");
+    {
+        char incdir[1024];
+        if (snprintf(incdir, sizeof(incdir), "%s/include", trt)
+            < (int)sizeof(incdir))
+            tcc_add_sysinclude_path(tcc, incdir);
+    }
     tcc_add_sysinclude_path(tcc, "/usr/include");
     for (size_t i = 0; i < ninclude; i++)
         tcc_add_sysinclude_path(tcc, include_dirs[i]);
