@@ -55,10 +55,7 @@
         <lang.braceMatcher
                 language="Zov"
                 implementationClass="zov.idea.ZovBraceMatcher"/>
-    </extensions>
-
-    <extensions>
-        <com.intellij.platform.lsp.integrationProvider
+        <platform.lsp.integrationProvider
                 implementation="zov.idea.ZovLspIntegrationProvider"/>
     </extensions>
 </idea-plugin>
