@@ -26,6 +26,7 @@
 
 #include "sema.h"
 #include "cimport.h"
+#include "modules.h"
 
 #include <ctype.h>
 
@@ -190,6 +191,7 @@ static Type *union_payload(Type *u)
 static Type *resolve_type(Sema *se, Type *t);
 static Type *instantiate_struct(Sema *se, const char *tname,
                                  TypeList *args);
+static void push_module_scope(Sema *se, const char *modname);
 
 /* module fn access resolves to the mangled registered spelling */
 static const char *zov_ns_target(Sema *se, const char *ns, const char *name)
@@ -201,6 +203,30 @@ static const char *zov_ns_target(Sema *se, const char *ns, const char *name)
         if (s->zsyms.items[i] == name)
             return s->ztargets.items[i];
     return NULL;
+}
+
+/* module ns call diagnostics: a missing member or an unimported std
+ * module gets an actionable message instead of the C-ns fallback */
+static void ns_call_diag(Sema *se, Expr *callee, Span span)
+{
+    const char *ns = callee->u.nident.ns;
+    Sym *nsym = scope_find(se->scope, ns);
+    if (nsym && nsym->kind == SYM_NS && nsym->is_zov)
+        fatal_at(span, "module '%s' has no function '%s'", ns,
+                 callee->u.nident.name);
+    const char *stdpath = NULL;
+    if (strstr(ns, "::")) {
+        if (zov_module_exists(ns))
+            stdpath = ns;
+    } else {
+        char probe[256];
+        snprintf(probe, sizeof(probe), "std::%s", ns);
+        if (zov_module_exists(probe))
+            stdpath = str_intern_c(probe);
+    }
+    if (stdpath)
+        fatal_at(span, "module '%s' is not imported; add `use %s;` "
+                 "at the top of the file", ns, stdpath);
 }
 
 static Type *resolve_ns_type(Sema *se, const char *qual)
@@ -716,7 +742,16 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
     d->u.fn.body = clone_block(se, sym->decl->u.fn.body, tps, args);
     da_push(&se->prog->decls, d);
     register_decl(se, d);
+    /* the clone resolves names from the template's own world: its
+     * module's aliases plus globals, never the caller's live locals
+     * (a caller binding named 'c' must not shadow a cimport alias) */
+    Scope *saved_scope = se->scope;
+    while (se->scope->parent)
+        se->scope = se->scope->parent;
+    push_module_scope(se, sym->decl->modname);
     check_fn(se, d);
+    pop_scope(se);
+    se->scope = saved_scope;
     return scope_find(se->scope, keyi);
 }
 
@@ -1152,6 +1187,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 id->u.ident = tgt;
                 e->u.call.callee = id;
                 callee = id;
+            } else {
+                ns_call_diag(se, callee, callee->span);
             }
         }
         if (callee->kind == EX_GENERIC
@@ -1163,6 +1200,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 Expr *id = expr_new(EX_IDENT, callee->u.generic.base->span);
                 id->u.ident = tgt;
                 callee->u.generic.base = id;
+            } else {
+                ns_call_diag(se, callee->u.generic.base, callee->span);
             }
         }
         if (callee->kind == EX_FIELD) {
@@ -1372,11 +1411,44 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     fatal_at(callee->span, "unresolved module symbol '%s'",
                              callee->u.ident);
             }
-            if (fn->is_template)
-                fatal_at(callee->span,
-                         "generic function '%s' requires explicit type "
-                         "arguments, e.g. %s[T](...)",
-                         callee->u.ident, callee->u.ident);
+            if (fn->is_template) {
+                /* bare generic call: infer type args from the arguments */
+                StrList *tps = &fn->decl->u.fn.tparams;
+                TypeList inferred = {0};
+                int complete = 1;
+                for (size_t ti = 0; ti < tps->len && complete; ti++) {
+                    Type *pick = NULL;
+                    for (size_t ai = 0;
+                         ai < fn->decl->u.fn.params.len
+                             && ai < e->u.call.args.len; ai++) {
+                        Type *pt = fn->decl->u.fn.params.items[ai].ty;
+                        if (pt && pt->kind == TY_STRUCT
+                            && zstr_eq(pt->name, tps->items[ti])) {
+                            Type *at =
+                                check_expr(se, e->u.call.args.items[ai], NULL);
+                            if (at && !is_unknown(at))
+                                pick = at;
+                            break;
+                        }
+                    }
+                    if (!pick)
+                        complete = 0;
+                    else
+                        da_push(&inferred, pick);
+                }
+                if (!complete)
+                    fatal_at(callee->span,
+                             "generic function '%s' requires explicit type "
+                             "arguments, e.g. %s[T](...)",
+                             callee->u.ident, callee->u.ident);
+                Sym *inst = instantiate_fn(se, callee->u.ident, &inferred,
+                                           callee->span);
+                Expr *id = expr_new(EX_IDENT, callee->span);
+                id->u.ident = inst->name;
+                e->u.call.callee = id;
+                e->type = check_call_user(se, e, inst);
+                return e->type;
+            }
             e->type = check_call_user(se, e, fn);
             return e->type;
         }
@@ -2184,6 +2256,14 @@ static void register_decl(Sema *se, Decl *d)
             sym.zsyms = d->u.use.zsyms;
             sym.ztargets = d->u.use.ztargets;
             scope_add(se, sym);
+            /* the full path (std::io) resolves to the same members, so
+             * std::io::println works without the alias */
+            const char *full = str_intern_c(d->u.use.path);
+            if (full != sym.name && !scope_find(se->scope, full)) {
+                Sym full_sym = sym;
+                full_sym.name = full;
+                scope_add(se, full_sym);
+            }
             break;
         }
         if (!d->u.use.is_c_header)

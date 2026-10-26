@@ -33,5 +33,11 @@ export fn main() i32 = {
     };
     io::print("echo:");
     io::println(line);
+    let n = 5;
+    io::println(n);
+    io::println(3.5f64);
+    io::println(true);
+    io::println('Z');
+    std::io::println("full path works");
     return 0;
 };

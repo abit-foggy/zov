@@ -59,17 +59,17 @@ export fn readline() (str | IoError) = {
     return zov_str_from_raw(buf, len);
 };
 
-// raw byte writer; no separators are added
-export fn print(msg: str) void = {
+// renders any printable value: '' + msg builds its str form
+export fn print[T](msg: T) void = {
+    let s: str = "" + msg;
     let mut i: usize = 0usize;
-    while (i < msg.len) {
-        c::putchar(msg.ptr[i] as i32);
+    while (i < s.len) {
+        c::putchar(s.ptr[i] as i32);
         i += 1usize;
     };
 };
 
-// print plus a trailing newline
-export fn println(msg: str) void = {
+export fn println[T](msg: T) void = {
     print(msg);
     c::putchar(10);
 };

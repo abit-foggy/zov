@@ -34,4 +34,7 @@
 struct Pkg;
 void modules_load(Program *prog, const char *main_file, struct Pkg *pkg);
 
+/* True when the module path names a loadable .zov file. */
+int zov_module_exists(const char *path);
+
 #endif /* ZOV_MODULES_H */

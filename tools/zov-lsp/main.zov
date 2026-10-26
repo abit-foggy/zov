@@ -570,9 +570,9 @@ export fn main() i32 = {
     let mut doc_text: str = "";
     let mut docs = map::new[str, str]();
     defer docs.free();
-    docs.insert("print", "`io::print(msg: str)` — zero-alloc stdout "
-        + "writer; segments concatenate with `+`");
-    docs.insert("println", "`io::println(msg: str)` — `io::print` "
+    docs.insert("print", "`io::print[T](msg: T)` — stdout writer for "
+        + "any printable value; segments concatenate with `+`");
+    docs.insert("println", "`io::println[T](msg: T)` — `io::print` "
         + "with a trailing newline; `\{expr}` interpolation supported");
     docs.insert("readline", "`io::readline()` — one line from stdin "
         + "as `(str | IoError)`");

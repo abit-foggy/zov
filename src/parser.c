@@ -694,6 +694,16 @@ static Expr *parse_postfix_after(Parser *p, Expr *e)
             advance(p);
             if (!at(p, TK_IDENT))
                 fatal_at(tok(p)->span, "expected symbol after '::'");
+            if (e->kind == EX_NS_IDENT) {
+                /* std::io::println: fold deeper segments into the qualifier */
+                char joined[256];
+                snprintf(joined, sizeof(joined), "%s::%s",
+                         e->u.nident.ns, e->u.nident.name);
+                e->u.nident.ns = str_intern_c(joined);
+                e->u.nident.name = tok(p)->name;
+                advance(p);
+                break;
+            }
             if (e->kind != EX_IDENT)
                 fatal_at(e->span, "namespace qualifier must be an identifier");
             Expr *ns = expr_new(EX_NS_IDENT, e->span);

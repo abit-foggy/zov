@@ -400,3 +400,13 @@ void modules_load(Program *prog, const char *main_file, struct Pkg *pkg)
         prog->decls.cap = total;
     }
 }
+
+int zov_module_exists(const char *path)
+{
+    char *file = resolve_module(path, ".");
+    if (!file)
+        return 0;
+    int ok = access(file, R_OK) == 0;
+    free(file);
+    return ok;
+}
