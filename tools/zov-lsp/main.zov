@@ -525,10 +525,10 @@ export fn completion_reply(id: i64) void = {
     put_str(&mut sb, ",\"result\":[");
     let mut first = true;
     // keywords (kind 14)
-    let kws: [17]str = ["fn", "let", "mut", "type", "resource", "struct",
+    let kws: [15]str = ["fn", "let", "mut", "type", "resource", "struct",
                         "enum", "match", "case", "defer", "orelse", "use",
-                        "export", "test", "assert", "print", "println"];
-    for (let i in 0..17) {
+                        "export", "test", "assert"];
+    for (let i in 0..15) {
         complete_item(&mut sb, kws[i as usize], 14usize, &mut first);
     };
     // primitives (kind 14)
@@ -538,9 +538,9 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, prims[i as usize], 14usize, &mut first);
     };
     // std modules (kind 9)
-    let mods: [7]str = ["std::vec", "std::map", "std::str", "std::arena",
-                        "std::fs", "std::env", "std::mem"];
-    for (let i in 0..7) {
+    let mods: [8]str = ["std::vec", "std::map", "std::str", "std::arena",
+                        "std::fs", "std::env", "std::mem", "std::io"];
+    for (let i in 0..8) {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)
@@ -570,10 +570,12 @@ export fn main() i32 = {
     let mut doc_text: str = "";
     let mut docs = map::new[str, str]();
     defer docs.free();
-    docs.insert("print", "`print(...)` — zero-alloc stdout writer; "
-        + "segments concatenate with `+`");
-    docs.insert("println", "`println(...)` — `print` with a trailing "
-        + "newline; `\{expr}` interpolation supported");
+    docs.insert("print", "`io::print(msg: str)` — zero-alloc stdout "
+        + "writer; segments concatenate with `+`");
+    docs.insert("println", "`io::println(msg: str)` — `io::print` "
+        + "with a trailing newline; `\{expr}` interpolation supported");
+    docs.insert("readline", "`io::readline()` — one line from stdin "
+        + "as `(str | IoError)`");
     docs.insert("assert", "`assert(cond: bool)` — aborts with "
         + "`file:line: condition` on failure");
     docs.insert("sizeof", "`sizeof[T]()` — byte size of `T` as `usize`");
@@ -590,6 +592,8 @@ export fn main() i32 = {
     docs.insert("std::arena", "`Arena` — bump allocator: new, "
         + "alloc_bytes, reset, free");
     docs.insert("std::fs", "file helpers: write_str, read_str, exists");
+    docs.insert("std::io", "terminal I/O module: print, println, "
+        + "readline as `(str | IoError)`");
     docs.insert("std::env", "CLI + environment: args_count, arg_at, get");
 
     let mut running = true;

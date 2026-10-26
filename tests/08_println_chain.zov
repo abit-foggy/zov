@@ -1,3 +1,29 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+use std::io;
+
 // built-in print/println: + chains, multi-args, {expr} interpolation,
 // and standalone str + T scratch-buffer values -- no stdio import needed
 export type Handle = resource struct { fd: i32 };
@@ -15,19 +41,19 @@ export fn get_label() str = {
 };
 
 export fn main() i32 = {
-    println("hello1 " + compute_fn(21) + " bool=" + true + " hex=" + 0xffu32);
-    print("part1 ");
-    println("part2", 99, false);
+    io::println("hello1 " + compute_fn(21) + " bool=" + true + " hex=" + 0xffu32);
+    io::print("part1 ");
+    io::println("part2" + 99 + false);
     let msg: str = "count=" + 42;
-    println(msg);
+    io::println(msg);
     let h = Handle{ fd = 7 };
-    println("fd=" + h.fd);
+    io::println("fd=" + h.fd);
     let v = consume(h);
     let name: str = "zov";
-    println("v={v} pi={3.14} n={compute_fn(3)} name={name}");
-    println("dyn=" + get_label() + " big=" + 12345678901i64);
+    io::println("v={v} pi={3.14} n={compute_fn(3)} name={name}");
+    io::println("dyn=" + get_label() + " big=" + 12345678901i64);
     let ch: char = 'Z';
-    println("ch={ch} brace=\{literal}");
-    println();
+    io::println("ch={ch} brace=\{literal}");
+    io::println("");
     return v - 7;
 };

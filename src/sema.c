@@ -1358,19 +1358,6 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     e->type = type_prim(TY_VOID);
                     return e->type;
                 }
-                if (zstr_eq(callee->u.ident, "print")
-                    || zstr_eq(callee->u.ident, "println")) {
-                    for (size_t i = 0; i < e->u.call.args.len; i++) {
-                        Type *t = check_expr(se, e->u.call.args.items[i],
-                                             NULL);
-                        if (!is_printable(t))
-                            fatal_at(e->u.call.args.items[i]->span,
-                                     "cannot print %s", type_spelling(t));
-                    }
-                    e->builtin_io = 1;
-                    e->type = type_prim(TY_VOID);
-                    return e->type;
-                }
                 fatal_at(callee->span, "undefined function '%s'",
                          callee->u.ident);
             }

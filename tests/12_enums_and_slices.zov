@@ -1,3 +1,29 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+use std::io;
+
 // enums, variant-name printing, value match, slicing, and slice for-each
 export type Color = enum {
     Red,
@@ -7,41 +33,41 @@ export type Color = enum {
 
 export fn main() i32 = {
     let c = Color::Blue;
-    println("c={c}");
+    io::println("c={c}");
     match (c) {
         case Color::Red => return 1,
         case Color::Green => return 2,
-        case Color::Blue => println("matched blue"),
+        case Color::Blue => io::println("matched blue"),
     };
 
     let cmd: str = "start";
     match (cmd) {
-        case "start" => println("starting"),
-        case "stop" => println("stopping"),
-        case _ => println("unknown"),
+        case "start" => io::println("starting"),
+        case "stop" => io::println("stopping"),
+        case _ => io::println("unknown"),
     };
 
     let s: str = "hello zov world";
     let head: str = s[0..5];
     let tail: str = s[6..];
-    println("head={head} tail={tail}");
+    io::println("head={head} tail={tail}");
 
     let nums: [4]i32 = [10, 20, 30, 40];
     for (let x in nums[..]) {
-        println("item={x}");
+        io::println("item={x}");
     };
     let mid = nums[1..3];
-    println("mid.len={mid.len}");
+    io::println("mid.len={mid.len}");
     let mut sum = 0;
     for (let x in mid) {
         sum = sum + x;
     };
-    println("mid sum={sum}");
+    io::println("mid sum={sum}");
 
     let mut bytes = 0;
     for (let b in "AZ") {
         bytes = bytes + (b as i32);
     };
-    println("bytes={bytes}");
+    io::println("bytes={bytes}");
     return 0;
 };

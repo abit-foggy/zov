@@ -93,7 +93,7 @@ typedef struct CG {
     DA(Type *) unions;
     int needs_bounds;
     int needs_abort;
-    int needs_io;   /* print/println or str-concat emission */
+    int needs_io;   /* str-concat and diagnostic emission */
     int needs_utf8; /* char formatting helper */
     int needs_string; /* memcmp emission for native str equality */
     int needs_slice; /* runtime slice bounds helper */
@@ -396,110 +396,6 @@ static void prepare_seg(CG *cg, Expr *e, PSeg *ps, Buf *pre)
     emit_expr(cg, e, 0);
     buf_printf(pre, ");\n");
     cg->cur = saved;
-}
-
-static void emit_prepared_out(CG *cg, PSeg *ps)
-{
-    Buf *b = &*cg->cur;
-    Expr *e = ps->e;
-    Type *t = e->type;
-    if (e->kind == EX_STR) {
-        buf_puts(b, "fwrite(");
-        emit_str_lit(b, e->u.slit.v, e->u.slit.len);
-        buf_printf(b, ", 1, %luu, stdout);\n",
-                   (unsigned long)e->u.slit.len);
-        return;
-    }
-    if (ty_is_num(t->kind)) {
-        if (ty_is_float(t->kind)) {
-            buf_puts(b, "fprintf(stdout, \"%g\", (double)(");
-        } else {
-            buf_printf(b, "fprintf(stdout, \"%%\" %s, (%s)(", int_spec(t->kind),
-                       c_type(cg, t));
-        }
-        if (ps->tmp)
-            buf_printf(b, "_p%d", ps->tmp);
-        else
-            emit_expr(cg, e, 0);
-        buf_puts(b, "));\n");
-        return;
-    }
-    if (t->kind == TY_BOOL) {
-        buf_puts(b, "fprintf(stdout, \"%s\", (");
-        if (ps->tmp)
-            buf_printf(b, "_p%d", ps->tmp);
-        else
-            emit_expr(cg, e, 0);
-        buf_puts(b, ") ? \"true\" : \"false\");\n");
-        return;
-    }
-    if (t->kind == TY_ENUM) {
-        /* variant names ride the per-enum helper */
-        buf_printf(b, "fprintf(stdout, \"%%s\", zov_enum_%s_name(",
-                   t->name);
-        if (ps->tmp)
-            buf_printf(b, "_p%d", ps->tmp);
-        else
-            emit_expr(cg, e, 0);
-        buf_puts(b, "));\n");
-        return;
-    }
-    if (t->kind == TY_CHAR) {
-        buf_printf(b, "fprintf(stdout, \"%%.*s\", _cl%d, _c%d);\n",
-                   ps->char_tmp, ps->char_tmp);
-        return;
-    }
-    if (t->kind == TY_STR) {
-        buf_printf(b, "fprintf(stdout, \"%%.*s\", (int)_p%d.len, _p%d.data);\n",
-                   ps->tmp, ps->tmp);
-        return;
-    }
-    if (t->kind == TY_PTR && t->nullable) {
-        buf_printf(b, "if (_p%d == NULL) {\n", ps->nul_tmp);
-        buf_puts(b, "fprintf(stdout, \"null\");\n");
-        buf_printf(b, "} else {\n");
-        buf_printf(b, "fprintf(stdout, \"%%p\", (void *)_p%d);\n}\n",
-                   ps->nul_tmp);
-        return;
-    }
-    if (t->kind == TY_PTR) {
-        buf_puts(b, "fprintf(stdout, \"%p\", (void *)(");
-        if (ps->tmp)
-            buf_printf(b, "_p%d", ps->tmp);
-        else
-            emit_expr(cg, e, 0);
-        buf_puts(b, "));\n");
-        return;
-    }
-    fatal("internal: unprintable segment reached codegen");
-}
-
-/* Case A: stream flattening; temps hoisted so side effects run first */
-static void emit_print(CG *cg, Expr *e, int newline)
-{
-    cg->needs_io = 1;
-    Buf *b = &*cg->cur;
-    ExprList segs = {0};
-    for (size_t i = 0; i < e->u.call.args.len; i++)
-        flatten_concat(cg, e->u.call.args.items[i], &segs);
-    struct { PSeg *items; size_t len, cap; } ps = {0};
-    Buf pre = {0};
-    for (size_t i = 0; i < segs.len; i++) {
-        PSeg one;
-        prepare_seg(cg, segs.items[i], &one, &pre);
-        da_push(&ps, one);
-    }
-    buf_puts(b, "{\n");
-    if (pre.len)
-        buf_puts(b, pre.data);
-    for (size_t i = 0; i < ps.len; i++)
-        emit_prepared_out(cg, &ps.items[i]);
-    if (newline)
-        buf_puts(b, "fprintf(stdout, \"\\n\");\n");
-    buf_puts(b, "}\n");
-    free(segs.items);
-    free(ps.items);
-    free(pre.data);
 }
 
 /* Case B: standalone str value rides a frame-local scratch buffer */
@@ -953,15 +849,6 @@ static void emit_call(CG *cg, Expr *e)
     }
     if (e->szarg) {
         buf_printf(&*cg->cur, "((size_t)sizeof(%s))", c_type(cg, e->szarg));
-        return;
-    }
-    if (e->builtin_io) {
-        /* print/println in value position: void statement-expression */
-        int nl = zstr_eq(callee->u.ident, "println");
-        Buf *b = &*cg->cur;
-        buf_puts(b, "({ ");
-        emit_print(cg, e, nl);
-        buf_puts(b, "0; })");
         return;
     }
     int extern_cstr = (callee->kind == EX_NS_IDENT);
@@ -1723,11 +1610,6 @@ static int emit_stmt(CG *cg, Stmt *s)
             emit_match(cg, s->u.expr, 0);
             return 0;
         }
-        if (s->u.expr->kind == EX_CALL && s->u.expr->builtin_io) {
-            int nl = zstr_eq(s->u.expr->u.call.callee->u.ident, "println");
-            emit_print(cg, s->u.expr, nl);
-            return 0;
-        }
         emit_expr(cg, s->u.expr, 0);
         buf_puts(&*cg->cur, ";\n");
         return 0;
@@ -1900,7 +1782,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
             }
             buf_printf(&*cg->cur, "} %s;\n",
                        mangle_type(d->u.type.name));
-            /* variant names for print/println */
+            /* variant names: str-concat stringify rides these helpers */
             buf_printf(&*cg->cur, "static const char *zov_enum_%s_name("
                                   "%s v) { switch (v) { ",
                        d->u.type.name, mangle_type(d->u.type.name));

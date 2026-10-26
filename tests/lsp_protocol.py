@@ -109,7 +109,7 @@ if not comp or not isinstance(comp.get("result"), list):
     print("missing completion result:", comp)
     sys.exit(1)
 labels = {item["label"] for item in comp["result"]}
-for want in ("println", "orelse", "resource", "std::vec", "std::map",
+for want in ("orelse", "resource", "std::io", "std::vec", "std::map",
              "push", "free", "i32", "defer"):
     if want not in labels:
         print("completion missing", want)
