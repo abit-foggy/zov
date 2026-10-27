@@ -23,6 +23,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 use std::io;
+use std::mem as mem;
 
 export fn main() i32 = {
     io::println("io online");
@@ -39,5 +40,7 @@ export fn main() i32 = {
     io::println(true);
     io::println('Z');
     std::io::println("full path works");
+    let scratch: *u8 = mem::alloc[u8](4usize);
+    mem::free_ptr(scratch);
     return 0;
 };

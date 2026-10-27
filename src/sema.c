@@ -192,6 +192,7 @@ static Type *resolve_type(Sema *se, Type *t);
 static Type *instantiate_struct(Sema *se, const char *tname,
                                  TypeList *args);
 static void push_module_scope(Sema *se, const char *modname);
+static const char *fn_display_name(Sym *fn);
 
 /* module fn access resolves to the mangled registered spelling */
 static const char *zov_ns_target(Sema *se, const char *ns, const char *name)
@@ -730,6 +731,8 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
         return scope_find(se->scope, keyi);
     Decl *d = decl_new(DL_FN, sym->decl->span);
     d->u.fn.name = keyi;
+    d->u.fn.srcname = sym->decl->u.fn.srcname ? sym->decl->u.fn.srcname
+                                              : sym->decl->u.fn.name;
     for (size_t i = 0; i < sym->decl->u.fn.params.len; i++) {
         Param *pm = &sym->decl->u.fn.params.items[i];
         Param np;
@@ -760,10 +763,12 @@ static Sym *instantiate_fn(Sema *se, const char *fname, TypeList *args,
 {
     Sym *sym = scope_find(se->scope, fname);
     if (!sym || sym->kind != SYM_FN || !sym->is_template || !sym->decl)
-        fatal_at(span, "'%s' is not a generic function", fname);
+        fatal_at(span, "'%s' is not a generic function",
+                 fn_display_name(sym));
     StrList *tps = &sym->decl->u.fn.tparams;
     if (tps->len != args->len)
-        fatal_at(span, "'%s' expects %lu type argument(s), got %lu", fname,
+        fatal_at(span, "'%s' expects %lu type argument(s), got %lu",
+                 fn_display_name(sym),
                  (unsigned long)tps->len, (unsigned long)args->len);
     char *key = inst_key(fname, args);
     return instantiate_fn_from(se, sym, tps, args, key);
@@ -823,10 +828,47 @@ static void require_same(Expr *a, Expr *b, const char *op)
              op, type_spelling(a->type), type_spelling(b->type));
 }
 
+// user-facing name: the source spelling, never the mangled registration
+static const char *fn_display_name(Sym *fn)
+{
+    if (fn && fn->decl && fn->decl->kind == DL_FN)
+        return fn->decl->u.fn.srcname ? fn->decl->u.fn.srcname
+                                      : fn->decl->u.fn.name;
+    return fn ? fn->name : "?";
+}
+
+// binds a type parameter by unifying a parameter shape against an
+// argument; pointers, borrows, slices, and arrays look through
+static Type *infer_tparam(Type *pt, Type *at, const char *tp)
+{
+    if (!pt || !at)
+        return NULL;
+    if (pt->kind == TY_STRUCT && zstr_eq(pt->name, tp))
+        return at;
+    switch (pt->kind) {
+    case TY_PTR:
+    case TY_SLICE:
+    case TY_ARRAY:
+        if (at->kind != pt->kind)
+            return NULL;
+        return infer_tparam(pt->base, at->base, tp);
+    case TY_REF:
+    case TY_MUTREF:
+        if (at->kind == TY_REF || at->kind == TY_MUTREF
+            || at->kind == TY_PTR)
+            return infer_tparam(pt->base, at->base, tp);
+        // auto-borrow: a value argument binds T to the value type
+        return infer_tparam(pt->base, at, tp);
+    default:
+        return NULL;
+    }
+}
+
 static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
 {
     if (e->u.call.args.len != fn->params.len)
-        fatal_at(e->span, "'%s' expects %lu argument(s), got %lu", fn->name,
+        fatal_at(e->span, "'%s' expects %lu argument(s), got %lu",
+                 fn_display_name(fn),
                  (unsigned long)fn->params.len,
                  (unsigned long)e->u.call.args.len);
     for (size_t i = 0; i < fn->params.len; i++) {
@@ -841,7 +883,8 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
             continue;
         if (!type_eq(arg->type, pt))
             fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
-                     (unsigned long)(i + 1), fn->name, type_spelling(pt),
+                     (unsigned long)(i + 1), fn_display_name(fn),
+                     type_spelling(pt),
                      type_spelling(arg->type));
     }
     return fn->ret;
@@ -1414,33 +1457,42 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (fn->is_template) {
                 /* bare generic call: infer type args from the arguments */
                 StrList *tps = &fn->decl->u.fn.tparams;
+                if (e->u.call.args.len < fn->decl->u.fn.params.len)
+                    fatal_at(e->span, "'%s' expects %lu argument(s), "
+                             "got %lu", fn_display_name(fn),
+                             (unsigned long)fn->decl->u.fn.params.len,
+                             (unsigned long)e->u.call.args.len);
+                TypeList argtys = {0};
+                for (size_t ai = 0; ai < e->u.call.args.len; ai++)
+                    da_push(&argtys,
+                            check_expr(se, e->u.call.args.items[ai], NULL));
                 TypeList inferred = {0};
                 int complete = 1;
+                size_t width = fn->decl->u.fn.params.len < argtys.len
+                    ? fn->decl->u.fn.params.len : argtys.len;
                 for (size_t ti = 0; ti < tps->len && complete; ti++) {
                     Type *pick = NULL;
-                    for (size_t ai = 0;
-                         ai < fn->decl->u.fn.params.len
-                             && ai < e->u.call.args.len; ai++) {
-                        Type *pt = fn->decl->u.fn.params.items[ai].ty;
-                        if (pt && pt->kind == TY_STRUCT
-                            && zstr_eq(pt->name, tps->items[ti])) {
-                            Type *at =
-                                check_expr(se, e->u.call.args.items[ai], NULL);
-                            if (at && !is_unknown(at))
-                                pick = at;
+                    for (size_t ai = 0; ai < width; ai++) {
+                        Type *at = argtys.items[ai];
+                        if (!at || is_unknown(at))
+                            continue;
+                        pick = infer_tparam(
+                            fn->decl->u.fn.params.items[ai].ty, at,
+                            tps->items[ti]);
+                        if (pick)
                             break;
-                        }
                     }
                     if (!pick)
                         complete = 0;
                     else
                         da_push(&inferred, pick);
                 }
+                free(argtys.items);
                 if (!complete)
                     fatal_at(callee->span,
                              "generic function '%s' requires explicit type "
                              "arguments, e.g. %s[T](...)",
-                             callee->u.ident, callee->u.ident);
+                             fn_display_name(fn), fn_display_name(fn));
                 Sym *inst = instantiate_fn(se, callee->u.ident, &inferred,
                                            callee->span);
                 Expr *id = expr_new(EX_IDENT, callee->span);

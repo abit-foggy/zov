@@ -241,7 +241,8 @@ typedef struct Decl {
                   StrList tparams; } type;
         struct { const char *name; DA(struct Param) params; Type *ret;
                   Block *body; StrList tparams; struct Param *recv;
-                  const char *sname; const char *mname; } fn;
+                  const char *sname; const char *mname;
+                  const char *srcname; } fn;
         struct { const char *desc; Block *body; } test;
     } u;
 } Decl;
