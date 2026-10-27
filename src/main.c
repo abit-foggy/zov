@@ -123,8 +123,10 @@ static int cmd_init(const char *dir)
     {
         char starter[512];
         snprintf(starter, sizeof(starter),
+                 "use std::io;\n"
+                 "\n"
                  "export fn main() i32 = {\n"
-                 "    println(\"hello from %s\");\n"
+                 "    io::println(\"hello from %s\");\n"
                  "    return 0;\n"
                  "};\n"
                  "\n"
@@ -315,7 +317,7 @@ int main(int argc, char **argv)
 
     if (argc >= 2 && (strcmp(argv[1], "--version") == 0
                        || strcmp(argv[1], "-V") == 0)) {
-        printf("zovc 1.4.0\n");
+        printf("zovc 1.4.1\n");
         return 0;
     }
 
