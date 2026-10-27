@@ -246,17 +246,17 @@ static void lex_number(Lexer *lx)
     if (peek(lx) == '0' && (peek2(lx) == 'x' || peek2(lx) == 'X')) {
         base = 16;
         lx->pos += 2;
-        while (is_hex(peek(lx)))
+        while (is_hex(peek(lx)) || peek(lx) == '_')
             lx->pos++;
     } else {
-        while (is_digit(peek(lx)))
+        while (is_digit(peek(lx)) || peek(lx) == '_')
             lx->pos++;
     }
     /* '..' is the range operator, never a float dot */
     if (peek(lx) == '.' && peek2(lx) != '.' && is_digit(peek2(lx))) {
         is_float = 1;
         lx->pos++;
-        while (is_digit(peek(lx)))
+        while (is_digit(peek(lx)) || peek(lx) == '_')
             lx->pos++;
     }
     if ((peek(lx) == 'e' || peek(lx) == 'E')
@@ -267,7 +267,7 @@ static void lex_number(Lexer *lx)
         lx->pos++;
         if (peek(lx) == '+' || peek(lx) == '-')
             lx->pos++;
-        while (is_digit(peek(lx)))
+        while (is_digit(peek(lx)) || peek(lx) == '_')
             lx->pos++;
     }
     const char *num_end = lx->pos;
@@ -279,11 +279,12 @@ static void lex_number(Lexer *lx)
     if (is_float && *suf && !(*suf == 'f'))
         fatal_at(here(lx, at, at), "float literal with integer suffix '%s'", suf);
 
+    // digit separators are stripped before the numeric conversion
     char buf[64];
-    size_t n = (size_t)(num_end - at);
-    if (n >= sizeof(buf))
-        fatal_at(here(lx, at, at), "numeric literal too long");
-    memcpy(buf, at, n);
+    size_t n = 0;
+    for (const char *p = at; p < num_end && n < sizeof(buf) - 1; p++)
+        if (*p != '_')
+            buf[n++] = *p;
     buf[n] = '\0';
     if (is_float) {
         lx->tok.kind = TK_FLOAT;

@@ -59,6 +59,7 @@ run_stdout 14_bitwise_map tests/14_bitwise_and_map.zov tests/14_bitwise_and_map.
 run_stdout 15_capstone tests/15_capstone_interpreter.zov tests/15_capstone_interpreter.expected
 run_stdin 17_std_io tests/17_std_io.zov "first line" tests/17_std_io.expected
 run_exit  18_std_time tests/18_std_time.zov 0
+run_exit  19_std_math tests/19_std_math_and_separators.zov 0
 
 run_stdin() { # name file input_line expected_stdout_file
     name=$1; file=$2; input=$3; wantfile=$4

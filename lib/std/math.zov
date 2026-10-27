@@ -1,0 +1,120 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+use <math.h> as m;
+use <stdlib.h> as st;
+
+export fn min(a: i32, b: i32) i32 = {
+    if (a < b) { return a; };
+    return b;
+};
+
+export fn max(a: i32, b: i32) i32 = {
+    if (a > b) { return a; };
+    return b;
+};
+
+export fn clamp(val: i32, lo: i32, hi: i32) i32 = {
+    if (val < lo) { return lo; };
+    if (val > hi) { return hi; };
+    return val;
+};
+
+export fn abs(x: i32) i32 = {
+    if (x < 0) { return -x; };
+    return x;
+};
+
+export fn randint(lo: i32, hi: i32) i32 = {
+    return lo + (st::rand() % (hi - lo + 1));
+};
+
+export fn popcnt(x: u32) i32 = {
+    let mut n: i32 = 0;
+    let mut v: u32 = x;
+    while (v != 0u32) {
+        n += (v & 1u32) as i32;
+        v = v >> 1u32;
+    };
+    return n;
+};
+
+export fn nextpow2(x: u32) u32 = {
+    if (x <= 1u32) { return 1u32; };
+    let mut v: u32 = x - 1u32;
+    v = v | (v >> 1u32);
+    v = v | (v >> 2u32);
+    v = v | (v >> 4u32);
+    v = v | (v >> 8u32);
+    v = v | (v >> 16u32);
+    return v + 1u32;
+};
+
+export fn fmin(a: f64, b: f64) f64 = {
+    return m::fmin(a, b);
+};
+
+export fn fmax(a: f64, b: f64) f64 = {
+    return m::fmax(a, b);
+};
+
+export fn fclamp(val: f64, lo: f64, hi: f64) f64 = {
+    return m::fmin(m::fmax(val, lo), hi);
+};
+
+export fn fabs(x: f64) f64 = {
+    return m::fabs(x);
+};
+
+export fn sqrt(x: f64) f64 = {
+    return m::sqrt(x);
+};
+
+export fn pow(x: f64, y: f64) f64 = {
+    return m::pow(x, y);
+};
+
+export fn floor(x: f64) f64 = {
+    return m::floor(x);
+};
+
+export fn ceil(x: f64) f64 = {
+    return m::ceil(x);
+};
+
+export fn round(x: f64) f64 = {
+    return m::round(x);
+};
+
+export fn sin(x: f64) f64 = {
+    return m::sin(x);
+};
+
+export fn cos(x: f64) f64 = {
+    return m::cos(x);
+};
+
+export fn tan(x: f64) f64 = {
+    return m::tan(x);
+};

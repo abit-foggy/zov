@@ -82,8 +82,9 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
     for (size_t i = 0; i < nlinks && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                                 " -l%s", links[i]);
+    // std::math and the C library both resolve through libm
     off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
-                            " -o '%s' -", out_path);
+                            " -lm -o '%s' -", out_path);
     if (off >= sizeof(cmd)) {
         fatal("link command too long");
         return 1;
@@ -131,6 +132,7 @@ static int compile_via_tcc_ex(const char *c_src, const char *out_path,
     for (size_t i = 0; i < ninclude; i++)
         tcc_add_sysinclude_path(tcc, include_dirs[i]);
     tcc_add_library(tcc, "c");
+    tcc_add_library(tcc, "m");
     for (size_t i = 0; i < nlinks; i++)
         tcc_add_library(tcc, links[i]);
     if (tcc_compile_string(tcc, c_src) < 0) {

@@ -1012,6 +1012,25 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         case TK_SHR: op = ">>"; break;
         default: fatal("unsupported binary operator"); break;
         }
+        if ((e->u.binary.op == TK_SLASH || e->u.binary.op == TK_PERCENT)
+            && e->type && ty_is_num(e->type->kind)
+            && !ty_is_float(e->type->kind)
+            && cg->debug && !cg->freestanding) {
+            // integer div/mod: debug mode reports the .zov source site
+            cg->needs_io = 1;
+            const char *ct = c_type(cg, e->type);
+            int tmp = ++cg->tmp_id;
+            buf_printf(b, "({ %s _dz%d = (", ct, tmp);
+            emit_expr(cg, e->u.binary.rhs, 0);
+            buf_printf(b, "); if (_dz%d == 0) { __zov_panic(", tmp);
+            buf_puts(b, "\"integer division by zero\", ");
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %lu, %lu); } (", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
+            emit_expr(cg, e->u.binary.lhs, 0);
+            buf_printf(b, ") %s _dz%d; })", op, tmp);
+            break;
+        }
         buf_puts(b, "(");
         emit_expr(cg, e->u.binary.lhs, 0);
         buf_printf(b, " %s ", op);
