@@ -25,6 +25,7 @@
  */
 
 #include "ast.h"
+#include "diag.h"
 
 static Arena g_arena;
 static Arena g_intern_arena;
@@ -174,13 +175,23 @@ void fatal(const char *fmt, ...)
 
 void fatal_at(Span span, const char *fmt, ...)
 {
+    char msg[1024];
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "%s:%lu:%lu: error: ", span.file,
-            (unsigned long)span.line, (unsigned long)span.col);
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+
+    Diagnostic d;
+    memset(&d, 0, sizeof(d));
+    d.severity = DIAG_ERR;
+    d.message = msg;
+    d.primary.file = span.file;
+    d.primary.line = (int)span.line;
+    d.primary.col = (int)span.col;
+    d.primary.len = (int)(span.end > span.start
+                              ? span.end - span.start : 1);
+    d.primary.src_ptr = span.start;
+    diag_emit(&d);
     exit(1);
 }
 

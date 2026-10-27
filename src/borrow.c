@@ -25,6 +25,7 @@
  */
 
 #include "borrow.h"
+#include "diag.h"
 
 typedef struct BVar {
     const char *name;
@@ -41,6 +42,7 @@ typedef struct Loan {
     int exclusive;      /* &mut */
     int active;
     int last_use; /* statement position; dead once pos > last_use */
+    Span origin;  /* source site where the loan was created */
 } Loan;
 
 typedef struct Borrow {
@@ -58,13 +60,22 @@ typedef struct UseRec {
 
 static void bfatal(Span sp, const char *fmt, ...)
 {
+    char msg[1024];
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "%s:%lu:%lu: error: ", sp.file,
-            (unsigned long)sp.line, (unsigned long)sp.col);
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+
+    Diagnostic d;
+    memset(&d, 0, sizeof(d));
+    d.severity = DIAG_ERR;
+    d.message = msg;
+    d.primary.file = sp.file;
+    d.primary.line = (int)sp.line;
+    d.primary.col = (int)sp.col;
+    d.primary.len = (int)(sp.end > sp.start ? sp.end - sp.start : 1);
+    d.primary.src_ptr = sp.start;
+    diag_emit(&d);
     exit(1);
 }
 
@@ -469,6 +480,7 @@ static void bx_assign(Borrow *b, Expr *e)
                         l.exclusive = 0;
                         l.active = 1;
                         l.last_use = recorded_last_use(b, lhs->u.ident);
+                        l.origin = rhs->span;
                         da_push(&b->loans, l);
                     }
                 } else {
@@ -628,6 +640,7 @@ static void transfer_call_loans(Borrow *b, const char *holder,
         l.exclusive = roots.items[i].exclusive;
         l.active = 1;
         l.last_use = recorded_last_use(b, holder);
+        l.origin = call->span;
         da_push(&b->loans, l);
     }
     free(roots.items);
@@ -652,6 +665,34 @@ static void bx_expr(Borrow *b, Expr *e)
                        "cannot move '%s': a deferred cleanup still uses it",
                        bv->name);
             Loan *rl = root_loan(b, bv->name);
+            if (rl && rl->origin.file) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "cannot move '%s': it is still borrowed by '%s'",
+                         bv->name, rl->holder);
+                Diagnostic d;
+                memset(&d, 0, sizeof(d));
+                d.severity = DIAG_ERR;
+                d.code = "E0502";
+                d.message = msg;
+                d.primary.file = e->span.file;
+                d.primary.line = (int)e->span.line;
+                d.primary.col = (int)e->span.col;
+                d.primary.len = (int)(e->span.end > e->span.start
+                                         ? e->span.end - e->span.start : 1);
+                d.primary.src_ptr = e->span.start;
+                d.primary.label = "move occurs here";
+                d.secondary.file = rl->origin.file;
+                d.secondary.line = (int)rl->origin.line;
+                d.secondary.col = (int)rl->origin.col;
+                d.secondary.len = (int)(rl->origin.end > rl->origin.start
+                                          ? rl->origin.end - rl->origin.start
+                                          : 1);
+                d.secondary.src_ptr = rl->origin.start;
+                d.secondary.label = "borrow of this value is still active";
+                diag_emit(&d);
+                exit(1);
+            }
             if (rl)
                 bfatal(e->span,
                        "cannot move '%s': it is still borrowed by '%s'",
@@ -929,6 +970,7 @@ static int b_foreach(Borrow *b, Stmt *s)
         l.exclusive = 0;
         l.active = 1;
         l.last_use = 1 << 28; /* outlives every statement position */
+        l.origin = s->u.foreach.iter->span;
         da_push(&b->loans, l);
     }
     size_t nvars = b->vars.len;

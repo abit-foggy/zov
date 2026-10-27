@@ -27,6 +27,7 @@
 #include "sema.h"
 #include "cimport.h"
 #include "modules.h"
+#include "diag.h"
 
 #include <ctype.h>
 
@@ -194,9 +195,19 @@ static Type *instantiate_struct(Sema *se, const char *tname,
 static void push_module_scope(Sema *se, const char *modname);
 static const char *fn_display_name(Sym *fn);
 
-/* module fn access resolves to the mangled registered spelling */
-static const char *zov_ns_target(Sema *se, const char *ns, const char *name)
+// walks the scope chain collecting candidate names for typo suggestions
+static const char *scope_suggest(Sema *se, const char *name)
 {
+    const char *cands[256];
+    size_t n = 0;
+    for (Scope *s = se->scope; s && n < 256; s = s->parent)
+        for (size_t i = s->syms.len; i > 0 && n < 256; i--)
+            cands[n++] = s->syms.items[i - 1].name;
+    return diag_suggest_symbol(name, cands, n);
+}
+
+/* module fn access resolves to the mangled registered spelling */
+static const char *zov_ns_target(Sema *se, const char *ns, const char *name){
     Sym *s = scope_find(se->scope, ns);
     if (!s || s->kind != SYM_NS || !s->is_zov)
         return NULL;
@@ -1021,8 +1032,15 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = sym->type;
             return e->type;
         }
-        if (!sym)
-            fatal_at(e->span, "undefined symbol '%s'", e->u.ident);
+        if (!sym) {
+            const char *hint = scope_suggest(se, e->u.ident);
+            char help[256];
+            if (hint)
+                snprintf(help, sizeof(help), "did you mean '%s'?", hint);
+            diag_fatal_at("E0402", e->span, NULL, NULL, NULL,
+                          hint ? help : NULL,
+                          "undefined symbol '%s'", e->u.ident);
+        }
         if (sym->kind != SYM_VAR)
             fatal_at(e->span, "'%s' is not a variable", e->u.ident);
         e->type = sym->type;
@@ -1440,8 +1458,17 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     e->type = type_prim(TY_VOID);
                     return e->type;
                 }
-                fatal_at(callee->span, "undefined function '%s'",
-                         callee->u.ident);
+                {
+                    const char *hint = scope_suggest(se, callee->u.ident);
+                    char help[256];
+                    if (hint)
+                        snprintf(help, sizeof(help), "did you mean '%s'?",
+                                 hint);
+                    diag_fatal_at("E0401", callee->span, NULL, NULL, NULL,
+                                  hint ? help : NULL,
+                                  "undefined function '%s'",
+                                  callee->u.ident);
+                }
             }
             if (fn->kind != SYM_FN)
                 fatal_at(callee->span, "'%s' is not callable",
