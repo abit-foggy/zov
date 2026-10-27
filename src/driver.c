@@ -66,11 +66,16 @@ static const char *tcc_runtime_dir(void)
 
 static int compile_via_cc_ex(const char *c_src, const char *out_path,
                              char **links, size_t nlinks, char **include_dirs,
-                             size_t ninclude)
+                             size_t ninclude, int release)
 {
     char cmd[2048];
-    size_t off = (size_t)snprintf(cmd, sizeof(cmd),
-                                  "cc -x c -std=c99 -O2");
+    const char *cc_mode = release
+                              ? "cc -x c -std=c99 -O3 -DNDEBUG"
+                              : "cc -x c -std=c99 -O0 -g"
+                                " -Wno-unused-variable"
+                                " -Wno-unused-function"
+                                " -Wno-unused-but-set-variable";
+    size_t off = (size_t)snprintf(cmd, sizeof(cmd), "%s", cc_mode);
     for (size_t i = 0; i < ninclude && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                                 " -I'%s'", include_dirs[i]);
@@ -199,7 +204,7 @@ int driver_compile_ex(const char *c_src, const char *out_path,
     (void)force_cc;
 #endif
     return compile_via_cc_ex(c_src, out_path, links, nlinks, include_dirs,
-                             ninclude);
+                             ninclude, force_cc);
 }
 
 int driver_compile(const char *c_src, const char *out_path,

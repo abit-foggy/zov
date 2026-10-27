@@ -29,6 +29,7 @@
 #include "pkg.h"
 #include "parser.h"
 #include "modules.h"
+#include "diag.h"
 #include "sema.h"
 #include "borrow.h"
 #include "codegen.h"
@@ -242,6 +243,7 @@ int main(int argc, char **argv)
     int test_mode = 0;
     int check_only = 0;
     int freestanding = 0;
+    int release = 0;
 
     if (argc >= 2 && strcmp(argv[1], "init") == 0) {
         if (argc < 3) {
@@ -249,6 +251,13 @@ int main(int argc, char **argv)
             return 1;
         }
         return cmd_init(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "explain") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: zovc explain <CODE>\n");
+            return 1;
+        }
+        return diag_print_explanation(argv[2]);
     }
     if (argc >= 2 && strcmp(argv[1], "build") == 0) {
         const char *dir = ".";
@@ -263,6 +272,41 @@ int main(int argc, char **argv)
         return cmd_project(dir, release, 0, NULL, 0);
     }
     if (argc >= 2 && strcmp(argv[1], "run") == 0) {
+        if (argc >= 3 && strstr(argv[2], ".zov")) {
+            /* single-file run: temp binary, forward args, unlink on exit */
+            char tmpbin[128];
+            snprintf(tmpbin, sizeof(tmpbin), "/tmp/zov_run_%d", (int)getpid());
+            char *src = read_file(argv[2]);
+            if (!src) {
+                fprintf(stderr, "zovc: cannot open '%s'\n", argv[2]);
+                return 1;
+            }
+            Program prog = {0};
+            prog.debug = 1;
+            parse_program(src, argv[2], &prog);
+            modules_load(&prog, argv[2], NULL);
+            sema_check(&prog, 0);
+            borrow_check(&prog);
+            char *c_src = codegen_generate_mode(&prog, 0);
+            int rc = driver_compile_ex(c_src, tmpbin, 0, 0, NULL, 0,
+                                       NULL, 0, 0);
+            free(c_src);
+            free(src);
+            if (rc != 0) {
+                remove(tmpbin);
+                return 1;
+            }
+            char cmd[2048] = "";
+            size_t off = (size_t)snprintf(cmd, sizeof(cmd), "'%s'", tmpbin);
+            for (int i = 3; i < argc && off < sizeof(cmd) - 256; i++)
+                off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                                        " '%s'", argv[i]);
+            int st = system(cmd);
+            remove(tmpbin);
+            if (WIFEXITED(st))
+                return WEXITSTATUS(st);
+            return 1;
+        }
         const char *dir = ".";
         int ai = 2;
         for (int i = 2; i < argc; i++) {
@@ -317,7 +361,7 @@ int main(int argc, char **argv)
 
     if (argc >= 2 && (strcmp(argv[1], "--version") == 0
                        || strcmp(argv[1], "-V") == 0)) {
-        printf("zovc 1.4.1\n");
+        printf("zovc 1.5.0\n");
         return 0;
     }
 
@@ -330,7 +374,9 @@ int main(int argc, char **argv)
             check_only = 1;
         } else if (strcmp(argv[i], "--freestanding") == 0) {
             freestanding = 1;
-        } else if (strcmp(argv[i], "--release") == 0) {
+        } else if (strcmp(argv[i], "--release") == 0
+                   || strcmp(argv[i], "--prod") == 0) {
+            release = 1;
             force_cc = 1;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (++i >= argc) {
@@ -361,6 +407,7 @@ int main(int argc, char **argv)
     char *src = read_file(file);
     Program prog = {0};
     prog.freestanding = freestanding;
+    prog.debug = !release;
     parse_program(src, file, &prog);
     modules_load(&prog, file, NULL);
     sema_check(&prog, test_mode);

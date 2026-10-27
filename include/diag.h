@@ -53,6 +53,7 @@ typedef struct {
 
 void diag_emit(Diagnostic *d);
 void diag_set_color(int enabled);
+int diag_print_explanation(const char *code);
 
 // closest candidate within Levenshtein distance 2, or NULL
 const char *diag_suggest_symbol(const char *input, const char **candidates,

@@ -101,6 +101,7 @@ typedef struct CG {
     int needs_strcmp; /* lexical str ordering helper */
     int needs_hash;  /* hash_val helpers for std::map */
     int freestanding; /* bare-metal: no hosted headers or main scaffolding */
+    int debug;       /* 1 = pretty runtime panics with file:line:col */
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
     int tmp_id;       /* unique temp/label counter */
@@ -776,21 +777,22 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
     buf_puts(b, "if (!(");
     emit_expr(cg, cond, 0);
     if (cg->freestanding) {
-        /* ring-0: the kernel owns zov_panic; no stdio exists */
         buf_puts(b, ")) { zov_panic(\"assert failed: ");
         append_fmt_str(b, cond->span.start,
                        (size_t)(cond->span.end - cond->span.start));
         buf_puts(b, "\", ");
         emit_str_lit(b, cond->span.file, strlen(cond->span.file));
         buf_printf(b, ", %luu); }\n", (unsigned long)cond->span.line);
-    } else {
+    } else if (cg->debug) {
         cg->needs_io = 1;
-        buf_puts(b, ")) { fprintf(stderr, \"ASSERT FAILED at ");
-        append_fmt_str(b, cond->span.file, strlen(cond->span.file));
-        buf_printf(b, ":%lu: ", (unsigned long)cond->span.line);
+        buf_puts(b, ")) { __zov_panic(\"assert failed: ");
         append_fmt_str(b, cond->span.start,
                        (size_t)(cond->span.end - cond->span.start));
-        buf_puts(b, "\\n\"); abort(); }\n");
+        buf_puts(b, "\", ");
+        emit_str_lit(b, cond->span.file, strlen(cond->span.file));
+        buf_printf(b, ", %luu, 0); }\n", (unsigned long)cond->span.line);
+    } else {
+        buf_puts(b, ")) { __builtin_trap(); }\n");
     }
     if (!as_stmt)
         buf_puts(b, "0; })\n");
@@ -1390,9 +1392,17 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                 emit_str_lit(b, e->span.file, strlen(e->span.file));
                 buf_printf(b, ", %luu); }\n",
                            (unsigned long)e->span.line);
+            } else if (cg->debug) {
+                cg->needs_io = 1;
+                buf_printf(b, "); if (_u%d == NULL) { __zov_panic("
+                              "\"unwrap of null\", ", id);
+                emit_str_lit(b, e->span.file, strlen(e->span.file));
+                buf_printf(b, ", %luu, 0); }\n",
+                           (unsigned long)e->span.line);
             } else {
                 cg->needs_abort = 1;
-                buf_printf(b, "); if (_u%d == NULL) { abort(); }\n", id);
+                buf_printf(b, "); if (_u%d == NULL) "
+                              "{ __builtin_trap(); }\n", id);
             }
             buf_printf(b, "_u%d; })", id);
         }
@@ -1743,6 +1753,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
 {
     CG *cg = zalloc(sizeof(CG));
     cg->freestanding = prog->freestanding;
+    cg->debug = prog->debug;
 
     cg->cur = &cg->head;
     buf_puts(&*cg->cur,
@@ -1766,6 +1777,16 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     }
     buf_puts(&*cg->cur,
              "typedef struct { const uint8_t *data; size_t len; } zov_str;\n");
+    if (cg->debug && !cg->freestanding) {
+        buf_puts(&*cg->cur,
+                 "#include <stdio.h>\n#include <stdlib.h>\n"
+                 "static void __zov_panic(const char *msg, "
+                 "const char *file, int line, int col) {\n"
+                 "    fprintf(stderr, \"thread 'main' panicked at "
+                 "'%s'\\n  --> %s:%d:%d\\n\", msg, file, line, col);\n"
+                 "    exit(101);\n"
+                 "}\n");
+    }
 
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
@@ -1843,13 +1864,20 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "    }\n"
                      "    return i;\n"
                      "}\n");
-        } else {
-            buf_puts(&out, "#include <stdio.h>\n#include <stdlib.h>\n"
+        } else if (cg->debug) {
+            buf_puts(&out, "#include <stdlib.h>\n"
                            "static size_t zov_bounds(size_t i, size_t n) {\n"
                            "    if (i >= n) {\n"
-                           "        fprintf(stderr, \"zov: index out of "
-                           "bounds\\n\");\n"
-                           "        abort();\n"
+                           "        __zov_panic(\"index out of bounds\", "
+                           "\"?\", 0, 0);\n"
+                           "    }\n"
+                           "    return i;\n"
+                           "}\n");
+        } else {
+            buf_puts(&out, "#include <stdlib.h>\n"
+                           "static size_t zov_bounds(size_t i, size_t n) {\n"
+                           "    if (i >= n) {\n"
+                           "        __builtin_trap();\n"
                            "    }\n"
                            "    return i;\n"
                            "}\n");
@@ -1880,19 +1908,28 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         if (cg->needs_abort)
             buf_puts(&out, "#include <stdlib.h>\n");
         if (cg->needs_slice) {
-            /* the helper precedes stdio: declare fprintf's dependency */
-            buf_puts(&out, "#include <stdio.h>\n#include <string.h>\n");
+            if (cg->debug) {
+            buf_puts(&out, "#include <string.h>\n");
             buf_puts(&out,
                      "static size_t zov_slice_check(size_t a, size_t b, "
                      "size_t n, const char *f, unsigned long l) {\n"
                      "    if (a > b || b > n) {\n"
-                     "        fprintf(stderr, \"zov: slice out of bounds at "
-                     "%s:%lu (%lu..%lu of %lu)\\n\", f, l, "
-                     "(unsigned long)a, (unsigned long)b, (unsigned long)n);\n"
-                     "        abort();\n"
+                     "        __zov_panic(\"slice out of bounds\", f, "
+                     "(int)l, 0);\n"
                      "    }\n"
                      "    return a;\n"
                      "}\n");
+            } else {
+            buf_puts(&out, "#include <string.h>\n");
+            buf_puts(&out,
+                     "static size_t zov_slice_check(size_t a, size_t b, "
+                     "size_t n, const char *f, unsigned long l) {\n"
+                     "    if (a > b || b > n) {\n"
+                     "        __builtin_trap();\n"
+                     "    }\n"
+                     "    return a;\n"
+                     "}\n");
+            }
         }
         if (cg->needs_string)
             buf_puts(&out, "#include <string.h>\n");

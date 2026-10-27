@@ -39,6 +39,7 @@ typedef struct Sym {
     Span span;
     Type *type;      /* variable type, alias type, or struct type */
     int mut;
+    int read_count;  /* reads of a SYM_VAR; 0 at declaration */
     DA(Param) params; /* function signature */
     Type *ret;
     CHeader *hdr;     /* imported C namespace members */
@@ -79,6 +80,30 @@ static void push_scope(Sema *se)
 
 static void pop_scope(Sema *se)
 {
+    for (size_t i = 0; i < se->scope->syms.len; i++) {
+        Sym *s = &se->scope->syms.items[i];
+        if (s->kind != SYM_VAR || s->read_count > 0 || !s->name)
+            continue;
+        if (s->name[0] == '_')
+            continue;
+        char help[256];
+        snprintf(help, sizeof(help), "prefix with an underscore to "
+                "silence: '_%s'", s->name);
+        Diagnostic d;
+        memset(&d, 0, sizeof(d));
+        d.severity = DIAG_WARN;
+        d.code = "W0001";
+        char msg[256];
+        snprintf(msg, sizeof(msg), "unused variable '%s'", s->name);
+        d.message = msg;
+        d.primary.file = s->span.file;
+        d.primary.line = (int)s->span.line;
+        d.primary.col = (int)s->span.col;
+        d.primary.len = 1;
+        d.primary.src_ptr = s->span.start;
+        d.help = help;
+        diag_emit(&d);
+    }
     se->scope = se->scope->parent;
 }
 
@@ -1043,6 +1068,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (sym->kind != SYM_VAR)
             fatal_at(e->span, "'%s' is not a variable", e->u.ident);
+        sym->read_count++;
         e->type = sym->type;
         return e->type;
     }

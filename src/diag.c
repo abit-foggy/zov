@@ -174,6 +174,87 @@ void diag_emit(Diagnostic *d)
                 d->help);
 }
 
+/* ---- explain ---- */
+
+struct diag_explain {
+    const char *code;
+    const char *title;
+    const char *body;
+    const char *good;
+    const char *bad;
+};
+
+static const struct diag_explain g_explains[] = {
+    {"E0401", "undefined function",
+     "The function name was not found in any visible scope or imported "
+     "module. Check the spelling, or add the corresponding `use` "
+     "declaration at the top of the file.",
+     "use std::io; io::println(\"hi\");",
+     "io::println(\"hi\");"},
+    {"E0402", "undefined symbol",
+     "The variable was not found in any visible scope. Declare it "
+     "with `let` before its first use, or check the spelling; names "
+     "are case-sensitive.",
+     "let count = 5; return count;",
+     "let conut = 5; return count;"},
+    {"E0403", "module member not found",
+     "The imported module does not export a function with this name. "
+     "Check the module's source for the exact exported spelling.",
+     "vec::push(v, 1);",
+     "vec::pushs(v, 1);"},
+    {"E0404", "module not imported",
+     "The module namespace is not in scope. Add a `use` declaration "
+     "at the top of the file to bring it into scope.",
+     "use std::io; io::println(\"hi\");",
+     "io::println(\"hi\");"},
+    {"E0502", "move while borrowed",
+     "The value cannot be moved or freed while a borrow (a reference "
+     "or slice derived from it) is still live. Drop or consume the "
+     "borrow first, or move the cleanup after the borrow's last use.",
+     "let s = v[0..2]; let x = s[0]; v.free();",
+     "let s = v[0..2]; v.free(); let x = s[0];"},
+    {"E0503", "use after move",
+     "The value was moved (freed, passed by value, or returned) and "
+     "cannot be used again. Resource types are linear: each value "
+     "has exactly one owner at a time.",
+     "let b = a; use(b);",
+     "let b = a; use(a); use(b);"},
+    {"E0601", "type mismatch",
+     "The two sides of the expression have different types. Zov does "
+     "not implicitly coerce between integer widths or signedness; "
+     "use an explicit `as` cast.",
+     "let x: i64 = 5i32 as i64;",
+     "let x: i64 = 5i32;"},
+    {"E0602", "argument count mismatch",
+     "The function was called with a different number of arguments "
+     "than it declares. Check the function signature.",
+     "println(\"one\");",
+     "println();"},
+    {"W0001", "unused variable",
+     "The variable was declared but never read. Prefix it with an "
+     "underscore to silence this warning if the binding is "
+     "intentional.",
+     "let _unused = 5;",
+     "let unused = 5;"},
+};
+
+int diag_print_explanation(const char *code)
+{
+    for (size_t i = 0; i < sizeof(g_explains) / sizeof(g_explains[0]); i++) {
+        if (strcmp(g_explains[i].code, code) != 0)
+            continue;
+        printf("%s[%s]: %s\n\n%s\n", code[0] == 'W' ? "warning" : "error",
+               code, g_explains[i].title, g_explains[i].body);
+        if (g_explains[i].good)
+            printf("\n  good: %s\n", g_explains[i].good);
+        if (g_explains[i].bad)
+            printf("  bad:  %s\n", g_explains[i].bad);
+        return 0;
+    }
+    fprintf(stderr, "zovc: no explanation for code '%s'\n", code);
+    return 1;
+}
+
 /* ---- Levenshtein ---- */
 
 static int levenshtein(const char *a, const char *b, int max)
