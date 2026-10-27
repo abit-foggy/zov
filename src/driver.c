@@ -215,3 +215,142 @@ int driver_compile(const char *c_src, const char *out_path,
     return driver_compile_ex(c_src, out_path, emit_c_only, force_cc, NULL,
                              0, NULL, 0, 0);
 }
+
+/* ---- zovc cc: drop-in C99 compiler driver ---- */
+
+#ifdef USE_LIBTCC
+
+static int cc_via_tcc(int argc, char **argv)
+{
+    TCCState *tcc = tcc_new();
+    if (!tcc)
+        return 1;
+    const char *trt = tcc_runtime_dir();
+    tcc_set_lib_path(tcc, trt);
+
+    char incdir[1024];
+    if (snprintf(incdir, sizeof(incdir), "%s/include", trt)
+        < (int)sizeof(incdir))
+        tcc_add_sysinclude_path(tcc, incdir);
+    tcc_add_sysinclude_path(tcc, "/usr/include");
+    tcc_add_sysinclude_path(tcc, "/usr/local/include");
+    tcc_add_sysinclude_path(tcc, "/usr/lib/gcc/x86_64-linux-gnu/12/include");
+    tcc_add_sysinclude_path(tcc,
+                            "/usr/lib/gcc/x86_64-linux-gnu/13/include");
+    tcc_add_sysinclude_path(tcc,
+                            "/usr/lib/gcc/x86_64-linux-gnu/14/include");
+
+    const char *out = "a.out";
+    int output_type = TCC_OUTPUT_EXE;
+    const char *files[256];
+    const char *libs[64];
+    int nfiles = 0;
+    int nlibs = 0;
+
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        if (strcmp(a, "-c") == 0) {
+            output_type = TCC_OUTPUT_OBJ;
+        } else if (strcmp(a, "-shared") == 0) {
+            output_type = TCC_OUTPUT_DLL;
+        } else if (strcmp(a, "-o") == 0 && i + 1 < argc) {
+            out = argv[++i];
+        } else if (strncmp(a, "-o", 2) == 0 && a[2]) {
+            out = a + 2;
+        } else if (strncmp(a, "-I", 2) == 0) {
+            if (a[2]) {
+                tcc_add_include_path(tcc, a + 2);
+            } else if (i + 1 < argc) {
+                tcc_add_include_path(tcc, argv[++i]);
+            }
+        } else if (strncmp(a, "-D", 2) == 0) {
+            const char *def = a + 2;
+            if (!*def && i + 1 < argc)
+                def = argv[++i];
+            const char *eq = strchr(def, '=');
+            if (eq) {
+                char name[256];
+                size_t nlen = (size_t)(eq - def);
+                if (nlen >= sizeof(name))
+                    nlen = sizeof(name) - 1;
+                memcpy(name, def, nlen);
+                name[nlen] = '\0';
+                tcc_define_symbol(tcc, name, eq + 1);
+            } else {
+                tcc_define_symbol(tcc, def, "1");
+            }
+        } else if (strncmp(a, "-L", 2) == 0) {
+            if (a[2]) {
+                tcc_add_library_path(tcc, a + 2);
+            } else if (i + 1 < argc) {
+                tcc_add_library_path(tcc, argv[++i]);
+            }
+        } else if (strncmp(a, "-l", 2) == 0) {
+            if (a[2]) {
+                if (nlibs < 64) libs[nlibs++] = a + 2;
+            } else if (i + 1 < argc) {
+                if (nlibs < 64) libs[nlibs++] = argv[++i];
+            }
+        } else if (a[0] == '-') {
+            // optimization, warning, and debug flags are accepted silently
+        } else if (nfiles < 256) {
+            files[nfiles++] = a;
+        }
+    }
+
+    if (nfiles == 0) {
+        fprintf(stderr, "zovc cc: no input files\n");
+        tcc_delete(tcc);
+        return 1;
+    }
+
+    tcc_set_output_type(tcc, output_type);
+    if (output_type != TCC_OUTPUT_OBJ) {
+        tcc_add_library(tcc, "c");
+        tcc_add_library(tcc, "m");
+    }
+    for (int i = 0; i < nlibs; i++)
+        tcc_add_library(tcc, libs[i]);
+    for (int i = 0; i < nfiles; i++) {
+        if (tcc_add_file(tcc, files[i]) < 0) {
+            fprintf(stderr, "zovc cc: failed to process '%s'\n", files[i]);
+            tcc_delete(tcc);
+            return 1;
+        }
+    }
+
+    int rc = tcc_output_file(tcc, out) < 0 ? 1 : 0;
+    tcc_delete(tcc);
+    return rc;
+}
+
+#else
+
+static int cc_via_cc_pipe(int argc, char **argv)
+{
+    char cmd[4096] = "cc";
+    size_t off = 2;
+    for (int i = 0; i < argc && off < sizeof(cmd) - 256; i++)
+        off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                                " '%s'", argv[i]);
+    FILE *p = popen(cmd, "w");
+    if (!p)
+        return 1;
+    int st = pclose(p);
+    return (!WIFEXITED(st) || WEXITSTATUS(st) != 0) ? 1 : 0;
+}
+
+#endif /* USE_LIBTCC */
+
+int driver_run_cc(int argc, char **argv)
+{
+    if (argc == 0) {
+        fprintf(stderr, "usage: zovc cc [cc-flags] <files.c...>\n");
+        return 1;
+    }
+#ifdef USE_LIBTCC
+    return cc_via_tcc(argc, argv);
+#else
+    return cc_via_cc_pipe(argc, argv);
+#endif
+}

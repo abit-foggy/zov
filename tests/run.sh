@@ -174,6 +174,30 @@ else
     fails=$((fails + 1))
 fi
 
+# zovc cc: drop-in C99 compiler driver
+if printf '#include <stdio.h>\nint main(void){printf("cc ok\\n");return 0;}\n' \
+        > "$TMP/cc_standalone.c" \
+   && $ZOV cc "$TMP/cc_standalone.c" -o "$TMP/cc_standalone" 2>/dev/null \
+   && "$TMP/cc_standalone" > "$TMP/cc1.out" 2>&1 \
+   && grep -q "cc ok" "$TMP/cc1.out"; then
+    echo "PASS: zovc cc standalone"
+else
+    echo "FAIL: zovc cc standalone"
+    fails=$((fails + 1))
+fi
+if printf 'int helper(void){return 42;}\n' > "$TMP/cc_helper.c" \
+   && $ZOV cc -c "$TMP/cc_helper.c" -o "$TMP/cc_helper.o" 2>/dev/null \
+   && printf 'int helper(void);\nint main(void){return helper() - 42;}\n' \
+        > "$TMP/cc_main.c" \
+   && $ZOV cc "$TMP/cc_helper.o" "$TMP/cc_main.c" -o "$TMP/cc_app" \
+        2>/dev/null \
+   && "$TMP/cc_app"; then
+    echo "PASS: zovc cc object + link"
+else
+    echo "FAIL: zovc cc object + link"
+    fails=$((fails + 1))
+fi
+
 # freestanding mode: zero hosted headers, panic-routed asserts, and a
 # clean -ffreestanding -nostdlib object with only the kernel hook undefined
 if $ZOV --freestanding --emit-c tests/16_freestanding_smoke.zov \

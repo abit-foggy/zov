@@ -39,4 +39,7 @@ int driver_compile_ex(const char *c_src, const char *out_path,
                       size_t nlinks, char **include_dirs, size_t ninclude,
                       int freestanding);
 
+/* Drop-in C compiler driver: forwards cc-style flags to the TCC backend. */
+int driver_run_cc(int argc, char **argv);
+
 #endif /* ZOV_DRIVER_H */

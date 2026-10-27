@@ -259,6 +259,8 @@ int main(int argc, char **argv)
         }
         return diag_print_explanation(argv[2]);
     }
+    if (argc >= 2 && strcmp(argv[1], "cc") == 0)
+        return driver_run_cc(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "build") == 0) {
         const char *dir = ".";
         for (int i = 2; i < argc; i++) {
