@@ -69,6 +69,11 @@ export fn print[T](msg: T) void = {
     };
 };
 
+// forces pending stdout bytes to reach the terminal
+export fn flush() void = {
+    c::fflush(c::stdout);
+};
+
 export fn println[T](msg: T) void = {
     print(msg);
     c::putchar(10);

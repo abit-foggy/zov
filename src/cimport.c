@@ -421,8 +421,19 @@ static void parse_prototype(CHeader *h, CTokList * t, size_t i, size_t end)
     TypeList params = {0};
     int variadic = 0;
     size_t j = i;
-    if (!parse_params(h, t, &j, &params, &variadic))
+    if (!parse_params(h, t, &j, &params, &variadic)) {
+        /* extern variable declaration: register as a typed constant */
+        CTok after = tok_at(t, i);
+        if (tok_is_punct(&after, ';')) {
+            CMember m;
+            memset(&m, 0, sizeof(m));
+            m.name = str_intern_c(name);
+            m.kind = CM_CONST;
+            m.ret = ret;
+            header_add(h, m);
+        }
         return;
+    }
     if (j > end)
         return; /* junk trailing tokens: be conservative */
     CMember m;
