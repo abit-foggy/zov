@@ -538,15 +538,17 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, prims[i as usize], 14usize, &mut first);
     };
     // std modules (kind 9)
-    let mods: [8]str = ["std::vec", "std::map", "std::str", "std::arena",
-                        "std::fs", "std::env", "std::mem", "std::io"];
-    for (let i in 0..8) {
+    let mods: [9]str = ["std::vec", "std::map", "std::str", "std::arena",
+                        "std::fs", "std::env", "std::mem", "std::io",
+                        "std::time"];
+    for (let i in 0..9) {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)
-    let fns: [10]str = ["push", "pop", "len", "as_slice", "sort",
-                        "insert", "get", "free", "sizeof", "hash_val"];
-    for (let i in 0..10) {
+    let fns: [12]str = ["push", "pop", "len", "as_slice", "sort",
+                        "insert", "get", "free", "sizeof", "hash_val",
+                        "sleep", "sleepms"];
+    for (let i in 0..12) {
         complete_item(&mut sb, fns[i as usize], 2usize, &mut first);
     };
     put_str(&mut sb, "]}");
@@ -593,7 +595,9 @@ export fn main() i32 = {
         + "alloc_bytes, reset, free");
     docs.insert("std::fs", "file helpers: write_str, read_str, exists");
     docs.insert("std::io", "terminal I/O module: print, println, "
-        + "readline as `(str | IoError)`");
+        + "readline as `(str | IoError)`, flush");
+    docs.insert("std::time", "sleep for fractional seconds or whole "
+        + "milliseconds: sleep(secs: f64), sleepms(ms: u32)");
     docs.insert("std::env", "CLI + environment: args_count, arg_at, get");
 
     let mut running = true;
