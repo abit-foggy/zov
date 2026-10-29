@@ -363,7 +363,7 @@ int main(int argc, char **argv)
 
     if (argc >= 2 && (strcmp(argv[1], "--version") == 0
                        || strcmp(argv[1], "-V") == 0)) {
-        printf("zovc 1.6.0\n");
+        printf("zovc 1.7.0\n");
         return 0;
     }
 
