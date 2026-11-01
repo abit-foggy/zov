@@ -72,3 +72,5 @@
 69_drop_then_use.zov|7|13|E0504|use of freed value 's'
 70_drop_double.zov|7|15|E0509|value was already freed: 's'
 71_drop_temporary.zov|5|15|E0605|mem::drop requires a place expression
+72_drop_moved_field.zov|9|15|E0503|use of moved value 'h.name'
+73_free_moved_field.zov|7|5|E0503|use of moved value 'h.name'

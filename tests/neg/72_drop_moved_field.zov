@@ -1,0 +1,11 @@
+// MUST FAIL: a field moved out cannot be destroyed through the original
+use std::mem as mem;
+
+export type Bag = resource struct { name: String, id: i32 };
+
+export fn main() i32 = {
+    let h = Bag{ name = String::from("x"), id = 1 };
+    let d = h.name;
+    mem::drop(h.name);
+    return 0;
+};

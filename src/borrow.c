@@ -832,6 +832,9 @@ static void check_free_receiver(Borrow *b, Expr *recv)
         clear_freed_fields(bv);
         clear_moved_fields(bv);
     } else if (field) {
+        if (field_moved(bv, field))
+            bfatal(E0503, recv->span, "use of moved value '%s.%s'", root,
+                   field);
         mark_field_freed(bv, field);
         unmark_field_moved(bv, field);
     }

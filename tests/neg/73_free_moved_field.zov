@@ -1,0 +1,9 @@
+// MUST FAIL: freeing a moved field would double-free the moved value
+export type Bag = resource struct { name: String, id: i32 };
+
+export fn main() i32 = {
+    let h = Bag{ name = String::from("x"), id = 1 };
+    let d = h.name;
+    h.name.free();
+    return 0;
+};
