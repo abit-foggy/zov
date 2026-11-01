@@ -31,7 +31,7 @@ use std::mem as mem;
 export type IoError = !void;
 
 // one line from stdin; trailing \n and \r are stripped, 255 bytes max
-export fn readline() (str | IoError) = {
+export fn readline() str = {
     let cap: usize = 256usize;
     let buf: *u8 = mem::alloc[u8](cap);
     let one: [1]u8;
@@ -51,7 +51,7 @@ export fn readline() (str | IoError) = {
     };
     if (!got) {
         mem::free_ptr[u8](buf);
-        return IoError;
+        return "";
     };
     if (len > 0usize && buf[len - 1usize] == 13u8) {
         len -= 1usize;
