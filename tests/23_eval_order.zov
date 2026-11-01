@@ -1,0 +1,36 @@
+// C99 lowering must evaluate operands left-to-right exactly once, even
+// when a later operand needs a hoisted statement prelude.
+use std::io;
+
+export type Missing = !void;
+
+fn noisy(tag: str, v: i32) i32 = {
+    io::println(tag);
+    return v;
+};
+
+fn fallible(b: bool) (i32 | Missing) = {
+    io::println("fallible");
+    if (b) { return Missing; };
+    return 7;
+};
+
+fn sum2(a: i32, b: i32) i32 = {
+    return a + b;
+};
+
+export fn main() i32 = {
+    let x: i32 = noisy("left", 1) + (fallible(false) orelse noisy("right", 2));
+    io::println("x={x}");
+
+    let y: i32 = sum2(noisy("arg0", 1), (fallible(false) orelse noisy("arg1", 2)));
+    io::println("y={y}");
+
+    let mut n: i32 = 0;
+    while ((fallible(true) orelse 1) == 1) {
+        io::println("loop{n}");
+        n = n + 1;
+        if (n == 2) { break; };
+    };
+    return 0;
+};

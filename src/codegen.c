@@ -341,6 +341,52 @@ static void emit_expr_into(CG *cg, Expr *e, Buf *out, int cstr)
     emit_expr_capture(cg, e, out, cg->pre, cstr);
 }
 
+/* Emit two operands left-to-right.  When the right operand needs a
+ * statement prelude, the left operand is spilled to a temp first so its
+ * side effects stay ahead of the hoisted statements. */
+static int emit_ordered_operands(CG *cg, Expr *lhs, Expr *rhs, Buf *lout,
+                                 Buf *rout)
+{
+    Buf left = {0};
+    Buf right = {0};
+    Buf pre_left = {0};
+    Buf pre_right = {0};
+    emit_expr_capture(cg, lhs, &left, &pre_left, 0);
+    emit_expr_capture(cg, rhs, &right, &pre_right, 0);
+    buf_append(cg->pre, &pre_left);
+    if (pre_right.len > 0) {
+        int id = cg->tmp_id++;
+        buf_printf(cg->pre, "%s _bo%d = ", c_type(cg, lhs->type), id);
+        buf_append(cg->pre, &left);
+        buf_puts(cg->pre, ";\n");
+        buf_printf(lout, "_bo%d", id);
+    } else {
+        buf_append(lout, &left);
+    }
+    buf_append(cg->pre, &pre_right);
+    buf_append(rout, &right);
+    int hoisted = pre_right.len > 0;
+    free(left.data);
+    free(right.data);
+    free(pre_left.data);
+    free(pre_right.data);
+    return hoisted;
+}
+
+/* Wrap an already-emitted expression in a zov_str view when needed. */
+static void emit_view_text(CG *cg, Expr *e, Buf *text, Buf *out)
+{
+    if (ty_is_owned_string(e->type)) {
+        cg->needs_string_owned = 1;
+        cg->needs_string_view = 1;
+        buf_puts(out, "zov_string_view(");
+        buf_append(out, text);
+        buf_puts(out, ")");
+        return;
+    }
+    buf_append(out, text);
+}
+
 /* Emit defers into the active prelude (used by conditional returns). */
 static void emit_defers_to_pre(CG *cg, size_t base)
 {
@@ -893,6 +939,66 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
     }
 }
 
+/* Evaluate call arguments left-to-right.  A later argument that hoists a
+ * statement prelude forces every earlier argument text into a temp first. */
+static void emit_call_args(CG *cg, Expr *e, int extern_cstr)
+{
+    size_t n = e->u.call.args.len;
+    Buf *texts = n ? calloc(n, sizeof(Buf)) : NULL;
+    if (n && !texts)
+        fatal("out of memory");
+    size_t unsaved = 0;
+    for (size_t i = 0; i < n; i++) {
+        Expr *arg = e->u.call.args.items[i];
+        int literal_cstr = extern_cstr && arg->type
+                           && arg->type->kind == TY_STR
+                           && arg->kind == EX_STR;
+        int value_cstr = extern_cstr && arg->type
+                         && arg->type->kind == TY_STR && !literal_cstr;
+        Buf txt = {0};
+        Buf pre = {0};
+        emit_expr_capture(cg, arg, &txt, &pre, literal_cstr);
+        if (pre.len > 0) {
+            for (size_t j = unsaved; j < i; j++) {
+                Expr *prev = e->u.call.args.items[j];
+                int prev_lit = extern_cstr && prev->type
+                               && prev->type->kind == TY_STR
+                               && prev->kind == EX_STR;
+                const char *ty = prev_lit ? "char *" : c_type(cg, prev->type);
+                int id = cg->tmp_id++;
+                if (texts[j].len == 0)
+                    continue;
+                buf_printf(cg->pre, "%s _ca%d = ", ty, id);
+                buf_append(cg->pre, &texts[j]);
+                buf_puts(cg->pre, ";\n");
+                free(texts[j].data);
+                memset(&texts[j], 0, sizeof(texts[j]));
+                buf_printf(&texts[j], "_ca%d", id);
+            }
+            buf_append(cg->pre, &pre);
+            unsaved = i + 1;
+        }
+        free(pre.data);
+        texts[i] = txt;
+        (void)value_cstr;
+    }
+    for (size_t i = 0; i < n; i++) {
+        Expr *arg = e->u.call.args.items[i];
+        if (i)
+            buf_puts(&*cg->cur, ", ");
+        if (extern_cstr && arg->type && arg->type->kind == TY_STR
+            && arg->kind != EX_STR) {
+            buf_puts(&*cg->cur, "(char *)(");
+            buf_append(&*cg->cur, &texts[i]);
+            buf_puts(&*cg->cur, ").data");
+        } else {
+            buf_append(&*cg->cur, &texts[i]);
+        }
+        free(texts[i].data);
+    }
+    free(texts);
+}
+
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
@@ -992,20 +1098,7 @@ static void emit_call(CG *cg, Expr *e)
     } else {
         buf_printf(&*cg->cur, "%s(", mangle_fn(callee->u.ident));
     }
-    for (size_t i = 0; i < e->u.call.args.len; i++) {
-        if (i)
-            buf_puts(&*cg->cur, ", ");
-        Expr *arg = e->u.call.args.items[i];
-        if (extern_cstr && arg->type && arg->type->kind == TY_STR
-            && arg->kind != EX_STR) {
-            // str value into a char* param: pass the fat pointer's data
-            buf_puts(&*cg->cur, "(char *)(");
-            emit_expr(cg, arg, 0);
-            buf_puts(&*cg->cur, ").data");
-        } else {
-            emit_expr(cg, arg, extern_cstr);
-        }
-    }
+    emit_call_args(cg, e, extern_cstr);
     buf_puts(&*cg->cur, ")");
 }
 
@@ -1095,11 +1188,17 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             const char *op = e->u.binary.op == TK_LT ? "<"
                            : e->u.binary.op == TK_LE ? "<="
                            : e->u.binary.op == TK_GT ? ">" : ">=";
-            buf_printf(b, "(zov_str_cmp((");
-            emit_str_view(cg, e->u.binary.lhs);
+            Buf lo = {0};
+            Buf ro = {0};
+            emit_ordered_operands(cg, e->u.binary.lhs, e->u.binary.rhs, &lo,
+                                  &ro);
+            buf_puts(b, "(zov_str_cmp((");
+            emit_view_text(cg, e->u.binary.lhs, &lo, b);
             buf_puts(b, "), (");
-            emit_str_view(cg, e->u.binary.rhs);
+            emit_view_text(cg, e->u.binary.rhs, &ro, b);
             buf_printf(b, ")) %s 0)", op);
+            free(lo.data);
+            free(ro.data);
             break;
         }
         if ((e->u.binary.op == TK_EQ || e->u.binary.op == TK_NEQ)
@@ -1109,12 +1208,18 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             /* native string ==/!=: C99 helper over one evaluation per side */
             cg->needs_string = 1;
             cg->needs_string_eq = 1;
+            Buf lo = {0};
+            Buf ro = {0};
+            emit_ordered_operands(cg, e->u.binary.lhs, e->u.binary.rhs, &lo,
+                                  &ro);
             buf_printf(b, "%szov_str_eq((",
                        e->u.binary.op == TK_EQ ? "" : "!");
-            emit_str_view(cg, e->u.binary.lhs);
+            emit_view_text(cg, e->u.binary.lhs, &lo, b);
             buf_puts(b, "), (");
-            emit_str_view(cg, e->u.binary.rhs);
+            emit_view_text(cg, e->u.binary.rhs, &ro, b);
             buf_puts(b, "))");
+            free(lo.data);
+            free(ro.data);
             break;
         }
         switch (e->u.binary.op) {
@@ -1155,20 +1260,40 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                        "    return a %s b;\n}\n",
                        ct, id, ct, ct,
                        e->u.binary.op == TK_PERCENT ? "%" : "/");
+            Buf lo = {0};
+            Buf ro = {0};
+            emit_ordered_operands(cg, e->u.binary.lhs, e->u.binary.rhs, &lo,
+                                  &ro);
             buf_printf(b, "zov_div_%d(", id);
-            emit_expr(cg, e->u.binary.lhs, 0);
+            buf_append(b, &lo);
             buf_puts(b, ", ");
-            emit_expr(cg, e->u.binary.rhs, 0);
+            buf_append(b, &ro);
             buf_puts(b, ", ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
             buf_printf(b, ", %luu)", (unsigned long)e->span.line);
+            free(lo.data);
+            free(ro.data);
             break;
         }
+        Buf lo = {0};
+        Buf ro = {0};
+        int right_hoisted =
+            emit_ordered_operands(cg, e->u.binary.lhs, e->u.binary.rhs, &lo,
+                                  &ro);
+        if (right_hoisted
+            && (e->u.binary.op == TK_ANDAND
+                || e->u.binary.op == TK_OROR)) {
+            fatal_at(e->span,
+                     "cannot lower '?'/'orelse' inside a short-circuit "
+                     "operand");
+        }
         buf_puts(b, "(");
-        emit_expr(cg, e->u.binary.lhs, 0);
+        buf_append(b, &lo);
         buf_printf(b, " %s ", op);
-        emit_expr(cg, e->u.binary.rhs, 0);
+        buf_append(b, &ro);
         buf_puts(b, ")");
+        free(lo.data);
+        free(ro.data);
         break;
     }
     case EX_UNARY:
@@ -1779,9 +1904,24 @@ static int emit_stmt_body(CG *cg, Stmt *s)
         return 0;
     }
     case ST_WHILE: {
-        buf_puts(&*cg->cur, "while (");
-        emit_expr(cg, s->u.whilee.cond, 0);
-        buf_puts(&*cg->cur, ") {\n");
+        Buf cond = {0};
+        Buf cond_pre = {0};
+        emit_expr_capture(cg, s->u.whilee.cond, &cond, &cond_pre, 0);
+        int wrapped = cond_pre.len > 0;
+        if (wrapped) {
+            /* a hoisted condition prelude must re-run on every iteration */
+            buf_puts(&*cg->cur, "for (;;) {\n");
+            buf_append(&*cg->cur, &cond_pre);
+            buf_puts(&*cg->cur, "if (!(");
+            buf_append(&*cg->cur, &cond);
+            buf_puts(&*cg->cur, ")) break;\n");
+        } else {
+            buf_puts(&*cg->cur, "while (");
+            buf_append(&*cg->cur, &cond);
+            buf_puts(&*cg->cur, ") {\n");
+        }
+        free(cond.data);
+        free(cond_pre.data);
         int id = cg->tmp_id++;
         da_push(&cg->loop_marks, cg->defers.len);
         da_push(&cg->loop_ids, id);

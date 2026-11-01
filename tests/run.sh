@@ -884,6 +884,7 @@ run_exit  18_std_time tests/18_std_time.zov 0
 run_exit  19_std_math tests/19_std_math_and_separators.zov 0
 run_stdout 20_string_ownership tests/20_string_ownership.zov tests/20_string_ownership.expected
 run_stdout 22_strict_c99 tests/22_strict_c99_constructs.zov tests/22_strict_c99_constructs.expected
+run_stdout 23_eval_order tests/23_eval_order.zov tests/23_eval_order.expected
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
