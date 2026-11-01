@@ -1,5 +1,5 @@
 // MUST FAIL: Vec[str] elements borrow the source String
-use std::str as strings;
+use std::strsplit as strings;
 
 export fn main() i32 = {
     let s = String::from("a,b,c");

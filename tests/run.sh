@@ -700,6 +700,42 @@ run_freestanding() {
         pass "freestanding allocation diagnostic"
     fi
 
+    # pure std::math and std::str stay available without a hosted libc
+    printf 'use std::math as math;\nexport fn kmain() i32 = {\n    let r: f64 = math::sqrt(9.0f64);\n    return math::min(1, 2) + math::popcnt(7u32) + math::nextpow2(9u32) as i32 + r as i32;\n};\n' \
+        >"$TMP/fs_math_pure.zov"
+    printf 'use std::str as strlib;\nexport fn kmain() i32 = {\n    let t: str = strlib::trim(" hi ");\n    if (!strlib::starts_with(t, "h")) { return 1; };\n    let r = strlib::find_byte(t, 105u8);\n    let n: usize = match (r) {\n        case let i: usize => i,\n        case strlib::NotFound => 9usize,\n    };\n    return n as i32;\n};\n' \
+        >"$TMP/fs_str_pure.zov"
+    for fs_case in fs_math_pure fs_str_pure; do
+        run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \
+            "$ZOV" --freestanding --emit-c "$TMP/$fs_case.zov"
+        fs_status=$?
+        if [ "$fs_status" -ne 0 ] \
+           || grep -qE 'math\.h|stdlib\.h|stdio\.h' "$TMP/$fs_case.c" \
+           || ! grep -q "zov_kmain" "$TMP/$fs_case.c"; then
+            fail "freestanding $fs_case emission (status $fs_status)"
+            show_file "$TMP/$fs_case.err"
+            return
+        fi
+        if ! run_limited "$TMP/$fs_case.cc.out" "$TMP/$fs_case.cc.err" \
+            cc -ffreestanding -nostdlib -mno-red-zone -fno-pie -std=c99 \
+            -pedantic-errors -Wall -Wextra -Werror -c "$TMP/$fs_case.c" \
+            -o "$TMP/$fs_case.o"; then
+            fail "freestanding $fs_case object compile"
+            show_file "$TMP/$fs_case.cc.err"
+            return
+        fi
+        # memcmp is the documented kernel-provided primitive; zov_panic is
+        # the platform hook.  Anything else is an unexpected hosted symbol.
+        fs_unexpected=$(nm -u "$TMP/$fs_case.o" \
+            | grep -vE 'zov_panic$|memcmp$' || true)
+        if [ -n "$fs_unexpected" ]; then
+            fail "freestanding $fs_case has hosted symbol references"
+            printf '%s\n' "$fs_unexpected" | sed 's/^/    /'
+            return
+        fi
+    done
+    pass "freestanding pure math and str"
+
     # hosted-only standard modules must be rejected at the user's call site
     fs_reject_ok=0
     printf 'use std::fs as fs;\nexport fn kmain() void = {\n    let r = fs::read_str("x");\n};\n' \
@@ -710,9 +746,9 @@ run_freestanding() {
         >"$TMP/fs_time.zov"
     printf 'use std::vec as vec;\nexport fn kmain() void = {\n    let v = vec::new[u8]();\n};\n' \
         >"$TMP/fs_vec.zov"
-    printf 'use std::math as math;\nexport fn kmain() void = {\n    let n = math::min(1, 2);\n};\n' \
+    printf 'use std::math as math;\nexport fn kmain() void = {\n    let r = math::pow(2.0f64, 3.0f64);\n};\n' \
         >"$TMP/fs_math.zov"
-    printf 'use std::str as strlib;\nexport fn kmain() void = {\n    let t = strlib::trim(" x ");\n};\n' \
+    printf 'use std::strsplit as strlib;\nexport fn kmain() void = {\n    let p = strlib::split_byte("a,b", 44u8);\n    p.free();\n};\n' \
         >"$TMP/fs_str.zov"
     for fs_case in fs_fs fs_env fs_time fs_vec fs_math fs_str; do
         run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \

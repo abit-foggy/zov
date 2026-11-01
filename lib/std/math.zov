@@ -87,8 +87,28 @@ export fn fabs(x: f64) f64 = {
     return m::fabs(x);
 };
 
+// Portable square root: scale into [1, 4] by powers of four, run a
+// Newton iteration, then undo the scale.  No libm dependency, so kernels
+// and other freestanding builds can use it.
 export fn sqrt(x: f64) f64 = {
-    return m::sqrt(x);
+    if (x <= 0.0f64) { return 0.0f64; };
+    let mut scaled: f64 = x;
+    let mut scale: f64 = 1.0f64;
+    while (scaled < 1.0f64) {
+        scaled = scaled * 4.0f64;
+        scale = scale * 2.0f64;
+    };
+    while (scaled > 4.0f64) {
+        scaled = scaled / 4.0f64;
+        scale = scale / 2.0f64;
+    };
+    let mut g: f64 = scaled / 2.0f64;
+    let mut i: i32 = 0;
+    while (i < 30) {
+        g = 0.5f64 * (g + scaled / g);
+        i += 1;
+    };
+    return g / scale;
 };
 
 export fn pow(x: f64, y: f64) f64 = {

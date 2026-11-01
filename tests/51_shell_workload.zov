@@ -1,7 +1,7 @@
 // small zovsh-style workload: owned line input, string comparison,
 // command splitting, file round-trip, and deterministic cleanup
 use std::io;
-use std::str as strings;
+use std::strsplit as strings;
 use std::fs as fs;
 
 export fn main() i32 = {

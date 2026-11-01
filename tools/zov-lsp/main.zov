@@ -29,6 +29,7 @@ use <stdio.h> as c;
 use <stdlib.h> as stdlib;
 use <unistd.h> as u;
 use std::str as strlib;
+use std::strsplit as strsplit;
 use std::vec as vec;
 use std::fs as fs;
 use std::map as map;
@@ -405,7 +406,7 @@ export fn publish_diagnostics(uri: str, output: str) void = {
     put_str(&mut sb, ",\"params\":\{\"uri\":");
     put_json_str(&mut sb, uri);
     put_str(&mut sb, ",\"diagnostics\":[");
-    let ls = strlib::lines(output);
+    let ls = strsplit::lines(output);
     defer ls.free();
     let mut first = true;
     for (let idx in 0..(ls.len() as i64)) {
@@ -442,7 +443,7 @@ export fn publish_diagnostics(uri: str, output: str) void = {
 // ---- hover ----
 
 export fn word_at(text: str, line: i64, character: i64) str = {
-    let ls = strlib::lines(text);
+    let ls = strsplit::lines(text);
     defer ls.free();
     if (line < 0i64 || line >= (ls.len() as i64)) {
         return "";

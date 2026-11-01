@@ -1,6 +1,6 @@
 // MUST FAIL: lines() returns views of the input String, even through the
 // split_byte wrapper
-use std::str as strings;
+use std::strsplit as strings;
 
 export fn main() i32 = {
     let s = String::from("a\nb");

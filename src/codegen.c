@@ -2659,6 +2659,40 @@ static void emit_types(CG *cg, Program *prog)
     free(ustate);
 }
 
+/* Freestanding output must not contain declarations whose bodies were
+ * skipped by sema because they need a hosted libc. */
+static int fs_hosted_module(const char *mod)
+{
+    return mod && (zstr_eq(mod, "mem") || zstr_eq(mod, "vec")
+                   || zstr_eq(mod, "map") || zstr_eq(mod, "arena")
+                   || zstr_eq(mod, "fs") || zstr_eq(mod, "env")
+                   || zstr_eq(mod, "time") || zstr_eq(mod, "io")
+                   || zstr_eq(mod, "math") || zstr_eq(mod, "strsplit"));
+}
+
+static int fs_math_hosted_fn(const char *name)
+{
+    if (!name)
+        return 0;
+    return zstr_eq(name, "randint") || zstr_eq(name, "fmin")
+           || zstr_eq(name, "fmax") || zstr_eq(name, "fclamp")
+           || zstr_eq(name, "fabs") || zstr_eq(name, "pow")
+           || zstr_eq(name, "floor") || zstr_eq(name, "ceil")
+           || zstr_eq(name, "round") || zstr_eq(name, "sin")
+           || zstr_eq(name, "cos") || zstr_eq(name, "tan");
+}
+
+static int fs_skip_fn(Program *prog, Decl *d)
+{
+    if (!prog->freestanding || d->kind != DL_FN || !d->modname)
+        return 0;
+    if (zstr_eq(d->modname, "math")) {
+        const char *src = d->u.fn.srcname ? d->u.fn.srcname : d->u.fn.name;
+        return fs_math_hosted_fn(src);
+    }
+    return fs_hosted_module(d->modname);
+}
+
 char *codegen_generate(Program *prog)
 {
     return codegen_generate_mode(prog, 0);
@@ -2694,8 +2728,11 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     }
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
-        if (d->kind == DL_USE && d->u.use.is_c_header)
+        if (d->kind == DL_USE && d->u.use.is_c_header) {
+            if (cg->freestanding && fs_hosted_module(d->modname))
+                continue; /* only hosted declarations needed this header */
             buf_printf(&*cg->cur, "#include <%s>\n", d->u.use.path);
+        }
     }
     buf_puts(&*cg->cur,
              "typedef struct { const uint8_t *data; size_t len; } zov_str;\n");
@@ -2734,6 +2771,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         Decl *d = prog->decls.items[i];
         if (d->kind != DL_FN || d->u.fn.tparams.len > 0)
             continue;
+        if (fs_skip_fn(prog, d))
+            continue;
         if (test_mode && zstr_eq(d->u.fn.name, "main"))
             continue; /* --test replaces the entry point */
         emit_fn(cg, d, 1);
@@ -2741,6 +2780,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
         if (d->kind != DL_FN || d->u.fn.tparams.len > 0)
+            continue;
+        if (fs_skip_fn(prog, d))
             continue;
         if (test_mode && zstr_eq(d->u.fn.name, "main"))
             continue;

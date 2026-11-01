@@ -1243,7 +1243,37 @@ static int hosted_only_module(const char *mod)
                    || zstr_eq(mod, "map") || zstr_eq(mod, "arena")
                    || zstr_eq(mod, "fs") || zstr_eq(mod, "env")
                    || zstr_eq(mod, "time") || zstr_eq(mod, "io")
-                   || zstr_eq(mod, "math") || zstr_eq(mod, "str"));
+                   || zstr_eq(mod, "strsplit"));
+}
+
+/* std::math mixes portable helpers with libm-backed functions.  Only the
+ * libm and rand() callers are unavailable without a hosted libc. */
+static int math_hosted_fn(const char *name)
+{
+    if (!name)
+        return 0;
+    return zstr_eq(name, "randint") || zstr_eq(name, "fmin")
+           || zstr_eq(name, "fmax") || zstr_eq(name, "fclamp")
+           || zstr_eq(name, "fabs") || zstr_eq(name, "pow")
+           || zstr_eq(name, "floor") || zstr_eq(name, "ceil")
+           || zstr_eq(name, "round") || zstr_eq(name, "sin")
+           || zstr_eq(name, "cos") || zstr_eq(name, "tan");
+}
+
+static const char *fn_srcname(Decl *d)
+{
+    if (!d || d->kind != DL_FN)
+        return NULL;
+    return d->u.fn.srcname ? d->u.fn.srcname : d->u.fn.name;
+}
+
+static int decl_is_hosted_only(Decl *d)
+{
+    if (!d || d->kind != DL_FN || !d->modname)
+        return 0;
+    if (zstr_eq(d->modname, "math"))
+        return math_hosted_fn(fn_srcname(d));
+    return zstr_eq(d->modname, "strsplit");
 }
 
 static Decl *find_decl_by_regname(Sema *se, const char *name)
@@ -1291,14 +1321,15 @@ static void reject_hosted_decl(Sema *se, Decl *decl, Span span)
         fatal_at(E0306, span,
                  "std::io requires a platform output interface and is "
                  "unavailable in freestanding builds");
-    if (zstr_eq(mod, "math"))
+    if (zstr_eq(mod, "math") && math_hosted_fn(fn_srcname(decl)))
         fatal_at(E0306, span,
-                 "std::math uses the hosted C math library and is "
-                 "unavailable in freestanding builds");
-    if (zstr_eq(mod, "str"))
+                 "std::math::%s uses the hosted C math library; pure math "
+                 "helpers remain available in freestanding builds",
+                 fn_srcname(decl));
+    if (zstr_eq(mod, "strsplit"))
         fatal_at(E0306, span,
-                 "std::str's splitting API allocates; freestanding builds "
-                 "can compare strings and index bytes directly");
+                 "std::strsplit allocates a Vec; use std::str for "
+                 "zero-copy trim, prefix, suffix, and byte search");
 }
 
 static void reject_hosted_module(Sema *se, Sym *fn, Span span)
@@ -3324,7 +3355,8 @@ void sema_check(Program *prog, int test_mode)
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
         if (prog->freestanding && d->kind == DL_FN
-            && hosted_only_module(d->modname))
+            && (hosted_only_module(d->modname)
+                || decl_is_hosted_only(d)))
             continue;
         if ((d->kind == DL_FN && d->u.fn.tparams.len == 0)
             || d->kind == DL_TEST) {
