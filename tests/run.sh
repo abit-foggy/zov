@@ -931,6 +931,7 @@ run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.ex
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
 run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
 run_panic 38_div_by_zero tests/38_div_by_zero.zov "integer division by zero"
+run_panic 39_bounds_panic tests/39_bounds_panic.zov "index out of bounds"
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
