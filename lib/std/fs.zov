@@ -23,6 +23,9 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 use <stdio.h> as c;
+use <unistd.h> as u;
+use <sys/stat.h> as st;
+use <dirent.h> as d;
 
 use std::mem as mem;
 
@@ -59,10 +62,65 @@ export fn writestr(path: str, content: str) (void | FsError) = {
     return;
 };
 
+// NUL-terminated copy for POSIX calls; the caller frees it.
+fn dupz(s: str) *u8 = {
+    let p: *u8 = mem::alloc[u8](s.len + 1usize);
+    let mut i: usize = 0usize;
+    while (i < s.len) {
+        p[i] = s.data[i];
+        i += 1usize;
+    };
+    p[s.len] = 0u8;
+    return p;
+};
+
 export fn exists(path: str) bool = {
-    let raw: nullable *c::FILE = c::fopen(path, "r");
+    let p: *u8 = dupz(path);
+    let rc: i32 = u::access(p as *void, 0);
+    mem::freeptr[u8](p);
+    return rc == 0;
+};
+
+export fn isdir(path: str) bool = {
+    let p: *u8 = dupz(path);
+    defer mem::freeptr[u8](p);
+    let raw: nullable *d::DIR = d::opendir(p as *void);
     if (raw == null) { return false; };
-    let fp: *c::FILE = raw!;
-    defer c::fclose(fp);
+    let dirp: *d::DIR = raw!;
+    d::closedir(dirp);
     return true;
+};
+
+export fn isfile(path: str) bool = {
+    return exists(path) && !isdir(path);
+};
+
+export fn remove(path: str) bool = {
+    let p: *u8 = dupz(path);
+    let rc: i32 = u::unlink(p as *void);
+    mem::freeptr[u8](p);
+    return rc == 0;
+};
+
+export fn rmdir(path: str) bool = {
+    let p: *u8 = dupz(path);
+    let rc: i32 = u::rmdir(p as *void);
+    mem::freeptr[u8](p);
+    return rc == 0;
+};
+
+export fn mkdir(path: str) bool = {
+    let p: *u8 = dupz(path);
+    let rc: i32 = st::mkdir(p as *void, 493);
+    mem::freeptr[u8](p);
+    return rc == 0;
+};
+
+export fn rename(oldpath: str, newpath: str) bool = {
+    let a: *u8 = dupz(oldpath);
+    let b: *u8 = dupz(newpath);
+    let rc: i32 = c::rename(a as *void, b as *void);
+    mem::freeptr[u8](a);
+    mem::freeptr[u8](b);
+    return rc == 0;
 };
