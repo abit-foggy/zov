@@ -710,7 +710,11 @@ run_freestanding() {
         >"$TMP/fs_time.zov"
     printf 'use std::vec as vec;\nexport fn kmain() void = {\n    let v = vec::new[u8]();\n};\n' \
         >"$TMP/fs_vec.zov"
-    for fs_case in fs_fs fs_env fs_time fs_vec; do
+    printf 'use std::math as math;\nexport fn kmain() void = {\n    let n = math::min(1, 2);\n};\n' \
+        >"$TMP/fs_math.zov"
+    printf 'use std::str as strlib;\nexport fn kmain() void = {\n    let t = strlib::trim(" x ");\n};\n' \
+        >"$TMP/fs_str.zov"
+    for fs_case in fs_fs fs_env fs_time fs_vec fs_math fs_str; do
         run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \
             "$ZOV" --freestanding --check "$TMP/$fs_case.zov"
         fs_status=$?

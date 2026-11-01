@@ -1182,7 +1182,8 @@ static int hosted_only_module(const char *mod)
     return mod && (zstr_eq(mod, "mem") || zstr_eq(mod, "vec")
                    || zstr_eq(mod, "map") || zstr_eq(mod, "arena")
                    || zstr_eq(mod, "fs") || zstr_eq(mod, "env")
-                   || zstr_eq(mod, "time") || zstr_eq(mod, "io"));
+                   || zstr_eq(mod, "time") || zstr_eq(mod, "io")
+                   || zstr_eq(mod, "math") || zstr_eq(mod, "str"));
 }
 
 static Decl *find_decl_by_regname(Sema *se, const char *name)
@@ -1230,6 +1231,14 @@ static void reject_hosted_decl(Sema *se, Decl *decl, Span span)
         fatal_at(E0306, span,
                  "std::io requires a platform output interface and is "
                  "unavailable in freestanding builds");
+    if (zstr_eq(mod, "math"))
+        fatal_at(E0306, span,
+                 "std::math uses the hosted C math library and is "
+                 "unavailable in freestanding builds");
+    if (zstr_eq(mod, "str"))
+        fatal_at(E0306, span,
+                 "std::str's splitting API allocates; freestanding builds "
+                 "can compare strings and index bytes directly");
 }
 
 static void reject_hosted_module(Sema *se, Sym *fn, Span span)

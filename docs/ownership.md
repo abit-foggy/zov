@@ -135,8 +135,10 @@ and `zov_rt_realloc`/`zov_rt_free` in freestanding builds.
 
 Hosted builds can use all of `std`. Freestanding builds reject
 `std::mem`, `std::vec`, `std::map`, `std::arena`, `std::io`, `std::fs`,
-`std::env`, and `std::time` with `E0306` at the call site, plus
-`String::from` and string concatenation. `String::from_owned` remains
+`std::env`, `std::time`, `std::math`, and `std::str` with `E0306` at the
+call site, plus `String::from` and string concatenation. (`std::str` is
+rejected because its splitting helpers allocate; string comparison and
+byte indexing remain available through operators and slices.) `String::from_owned` remains
 available: the platform provides the buffer and `String.free()` calls the
 `zov_rt_free` hook. See [runtime/README.md](../runtime/README.md).
 

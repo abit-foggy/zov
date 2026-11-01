@@ -38,8 +38,10 @@ program uses them when it owns a `String`:
   the platform hands the program a buffer and `String.free()` releases it
   through `zov_rt_free`.
 - `String::from`, string concatenation, `std::io`, `std::mem`,
-  `std::vec`, `std::map`, and `std::arena` are rejected in freestanding
-  mode with a diagnostic: they need an allocator or an operating system.
+  `std::vec`, `std::map`, `std::arena`, `std::fs`, `std::env`,
+  `std::time`, `std::math`, and `std::str` are rejected in freestanding
+  mode with a diagnostic: they need an allocator, a C library, or an
+  operating system.
 - `zov_rt_realloc` is part of the ABI and is used by the String growth
   helper; current freestanding programs cannot reach that helper because
   allocation from a `str` is rejected. Define both hooks so the object
