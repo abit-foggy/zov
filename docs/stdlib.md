@@ -66,7 +66,8 @@ in each environment and what they depend on.
 - `Map[String, V]` adds zero-allocation `str` probes: `findstr`,
   `getstrref`, `containsstr`, `removestr`, and `takestr`. They hash and
   compare the borrowed bytes directly, so `$PATH`-style lookups never
-  allocate a temporary `String`.
+  allocate a temporary `String`. `findstr` and `containsstr` are
+  fallible/boolean; `getstrref` aborts on a missing key like `getref`.
 - Canonical intrinsic spellings are smooshed lowercase:
   `String::fromowned` and `hashval`. `String::from_owned` and `hash_val`
   remain accepted as compatibility aliases.
