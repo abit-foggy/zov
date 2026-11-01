@@ -261,6 +261,37 @@ run_stdin() { # name source input_line expected_stdout
     pass "$name"
 }
 
+run_panic() { # name source expected_stderr_text
+    name=$1
+    source=$2
+    expected=$3
+    output=$TMP/$name
+    compile_zov "$name" "$source" "$output" || return
+    run_program "$name" "$output" /dev/null
+    status=$?
+    if [ "$status" -eq 124 ]; then
+        fail "$name (program timed out after ${TIMEOUT_SECS}s)"
+        show_file "$TMP/$name.err"
+        return
+    fi
+    if [ "$status" -ge 128 ]; then
+        fail "$name (program terminated by signal; status $status)"
+        show_file "$TMP/$name.err"
+        return
+    fi
+    if [ "$status" -ne 101 ]; then
+        fail "$name (program exited $status, want panic status 101)"
+        show_file "$TMP/$name.err"
+        return
+    fi
+    if ! grep -qF "$expected" "$TMP/$name.err"; then
+        fail "$name (panic message missing: $expected)"
+        show_file "$TMP/$name.err"
+        return
+    fi
+    pass "$name"
+}
+
 run_neg() { # absolute source path
     source=$1
     base=${source##*/}
@@ -899,6 +930,7 @@ run_stdout 34_owned_nested tests/34_owned_nested.zov tests/34_owned_nested.expec
 run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.expected
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
 run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
+run_panic 38_div_by_zero tests/38_div_by_zero.zov "integer division by zero"
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 

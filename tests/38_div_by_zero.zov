@@ -1,0 +1,10 @@
+// integer division by zero must panic instead of raising SIGFPE or UB
+use <stdio.h> as c;
+
+export fn main() i32 = {
+    let a: i32 = 7;
+    let b: i32 = 0;
+    c::printf("dividing\n");
+    let x: i32 = a / b;
+    return x;
+};

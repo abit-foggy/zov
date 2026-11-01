@@ -1285,20 +1285,29 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         }
         if ((e->u.binary.op == TK_SLASH || e->u.binary.op == TK_PERCENT)
             && e->type && ty_is_num(e->type->kind)
-            && !ty_is_float(e->type->kind)
-            && cg->debug && !cg->freestanding) {
-            // integer div/mod: debug mode reports the .zov source site
-            cg->needs_io = 1;
-            cg->needs_panic = 1;
+            && !ty_is_float(e->type->kind)) {
+            // integer div/mod: division by zero is never left as C UB
+            const char *fail;
+            if (cg->freestanding) {
+                fail = "zov_panic(\"integer division by zero\", \"?\", 0)";
+            } else if (cg->debug) {
+                cg->needs_io = 1;
+                cg->needs_panic = 1;
+                fail = "__zov_panic(\"integer division by zero\", f, l, "
+                       "0)";
+            } else {
+                cg->needs_abort = 1;
+                fail = "abort()";
+            }
             const char *ct = c_type(cg, e->type);
             int id = cg->tmp_id++;
             buf_printf(&cg->protos,
                        "static %s zov_div_%d(%s a, %s b, "
                        "const char *f, unsigned long l) {\n"
-                       "    if (b == 0) { __zov_panic(\"integer "
-                       "division by zero\", f, l, 0); }\n"
+                       "    (void)f; (void)l;\n"
+                       "    if (b == 0) { %s; }\n"
                        "    return a %s b;\n}\n",
-                       ct, id, ct, ct,
+                       ct, id, ct, ct, fail,
                        e->u.binary.op == TK_PERCENT ? "%" : "/");
             Buf lo = {0};
             Buf ro = {0};
