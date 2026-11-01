@@ -66,3 +66,5 @@
 63_recursive_union_type.zov|2|1|E0410|recursive type 'U'
 64_alias_cycle.zov|2|1|E0416|type alias cycle: X -> Y -> X
 65_recursive_generic_type.zov|2|1|E0410|expands without bound
+66_aliased_field_write.zov|10|5|E0508|cannot mutate 'p': shared borrow is active
+67_whole_value_under_field_loan.zov|10|5|E0508|cannot assign to 'p': shared borrow is active

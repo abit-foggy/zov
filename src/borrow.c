@@ -47,6 +47,7 @@ typedef struct BVar {
 typedef struct Loan {
     const char *holder; /* ref binding owning the loan */
     const char *root;  /* borrowed variable */
+    const char *place; /* first-level field of root; NULL = whole binding */
     int exclusive;      /* &mut */
     int active;
     int last_use; /* statement position; dead once pos > last_use */
@@ -195,23 +196,55 @@ static const char *place_field_name(Expr *e)
     return field;
 }
 
-static int root_shared(Borrow *b, const char *root)
+/* A first-level field loan does not conflict with a disjoint field of the
+ * same binding.  A NULL place means "the whole binding" on either side, so
+ * whole-value uses still conflict with every field loan. */
+static int place_overlaps(const char *a, const char *b)
+{
+    return !a || !b || a == b;
+}
+
+static int place_shared(Borrow *b, const char *root, const char *place)
 {
     int n = 0;
-    for (size_t i = 0; i < b->loans.len; i++)
-        if (b->loans.items[i].active && !b->loans.items[i].exclusive
-            && b->loans.items[i].root == root)
+    for (size_t i = 0; i < b->loans.len; i++) {
+        Loan *l = &b->loans.items[i];
+        if (l->active && !l->exclusive && l->root == root
+            && place_overlaps(l->place, place))
             n++;
+    }
     return n;
+}
+
+static Loan *place_locked(Borrow *b, const char *root, const char *place)
+{
+    for (size_t i = 0; i < b->loans.len; i++) {
+        Loan *l = &b->loans.items[i];
+        if (l->active && l->exclusive && l->root == root
+            && place_overlaps(l->place, place))
+            return l;
+    }
+    return NULL;
+}
+
+static Loan *place_loan(Borrow *b, const char *root, const char *place)
+{
+    for (size_t i = 0; i < b->loans.len; i++) {
+        Loan *l = &b->loans.items[i];
+        if (l->active && l->root == root && place_overlaps(l->place, place))
+            return l;
+    }
+    return NULL;
+}
+
+static int root_shared(Borrow *b, const char *root)
+{
+    return place_shared(b, root, NULL);
 }
 
 static Loan *root_locked(Borrow *b, const char *root)
 {
-    for (size_t i = 0; i < b->loans.len; i++)
-        if (b->loans.items[i].active && b->loans.items[i].exclusive
-            && b->loans.items[i].root == root)
-            return &b->loans.items[i];
-    return NULL;
+    return place_locked(b, root, NULL);
 }
 
 static Loan *holder_loan(Borrow *b, const char *holder)
@@ -224,10 +257,7 @@ static Loan *holder_loan(Borrow *b, const char *holder)
 
 static Loan *root_loan(Borrow *b, const char *root)
 {
-    for (size_t i = 0; i < b->loans.len; i++)
-        if (b->loans.items[i].active && b->loans.items[i].root == root)
-            return &b->loans.items[i];
-    return NULL;
+    return place_loan(b, root, NULL);
 }
 
 /* Linear types: resource structs, composites over resource fields, unions
@@ -565,6 +595,7 @@ static int recorded_last_use(Borrow *b, const char *name)
 
 typedef struct TempLoan {
     const char *root;
+    const char *place;
     int exclusive;
     Span span;
 } TempLoan;
@@ -632,6 +663,7 @@ static void check_borrow(Borrow *b, Expr *e, int borrow_mut)
     const char *root = resolve_root(b, e->u.unary.e);
     if (!root)
         return;
+    const char *place = place_field_name(e->u.unary.e);
     BVar *bv = var_find(b, root);
     if (!bv)
         return;
@@ -639,7 +671,7 @@ static void check_borrow(Borrow *b, Expr *e, int borrow_mut)
         bfatal(E0503, e->span, "cannot borrow '%s': value was moved", root);
     if (bv->freed)
         bfatal(E0504, e->span, "cannot borrow '%s': value was freed", root);
-    Loan *lk = root_locked(b, root);
+    Loan *lk = place_locked(b, root, place);
     if (borrow_mut) {
         if (!bv->mut)
             bfatal(E0516, e->span,
@@ -648,7 +680,7 @@ static void check_borrow(Borrow *b, Expr *e, int borrow_mut)
         if (lk)
             bfatal(E0506, e->span, "'%s' is already mutably borrowed by '%s'",
                    root, lk->holder);
-        if (root_shared(b, root) > 0)
+        if (place_shared(b, root, place) > 0)
             bfatal(E0506, e->span,
                    "cannot mutably borrow '%s': shared borrow is active",
                    root);
@@ -671,10 +703,12 @@ static void check_root_write(Borrow *b, Expr *e, const char *root)
         bfatal(E0504, e->span, "use of freed value '%s'", root);
     if (!bv->mut)
         bfatal(E0516, e->span, "cannot mutate immutable binding '%s'", root);
-    if (root_locked(b, root))
+    const char *place = place_field_name(e);
+    Loan *lk = place_locked(b, root, place);
+    if (lk)
         bfatal(E0508, e->span, "cannot mutate '%s': mutably borrowed by '%s'",
-               root, root_locked(b, root)->holder);
-    if (root_shared(b, root) > 0)
+               root, lk->holder);
+    if (place_shared(b, root, place) > 0)
         bfatal(E0508, e->span, "cannot mutate '%s': shared borrow is active",
                root);
 }
@@ -688,7 +722,7 @@ static void check_root_read(Borrow *b, Expr *e, const char *root)
         bfatal(E0503, e->span, "use of moved value '%s'", root);
     if (bv->freed)
         bfatal(E0504, e->span, "use of freed value '%s'", root);
-    Loan *lk = root_locked(b, root);
+    Loan *lk = place_locked(b, root, place_field_name(e));
     if (lk)
         bfatal(E0507, e->span, "cannot read '%s' while mutably borrowed by '%s'",
                root, lk->holder);
@@ -852,6 +886,7 @@ static void bx_call(Borrow *b, Expr *e)
             check_borrow(b, arg, arg->borrow_mut);
             TempLoan tl;
             tl.root = resolve_root(b, arg->u.unary.e);
+            tl.place = place_field_name(arg->u.unary.e);
             tl.exclusive = arg->borrow_mut;
             tl.span = arg->span;
             if (tl.root)
@@ -868,6 +903,8 @@ static void bx_call(Borrow *b, Expr *e)
     for (size_t i = 0; i < temps.len; i++)
         for (size_t j = i + 1; j < temps.len; j++)
             if (temps.items[i].root == temps.items[j].root
+                && place_overlaps(temps.items[i].place,
+                                  temps.items[j].place)
                 && (temps.items[i].exclusive || temps.items[j].exclusive))
                 bfatal(E0514, temps.items[j].span,
                        "conflicting borrows of '%s' in call arguments",
@@ -879,6 +916,7 @@ static void bx_call(Borrow *b, Expr *e)
 
 typedef struct CallRoot {
     const char *root;
+    const char *place;
     int exclusive;
 } CallRoot;
 
@@ -893,7 +931,7 @@ static Expr *peel_try_unwrap(Expr *e)
 }
 
 static void push_call_root(CallRootList *roots, const char *root,
-                          int exclusive)
+                           int exclusive)
 {
     if (!root)
         return;
@@ -905,8 +943,24 @@ static void push_call_root(CallRootList *roots, const char *root,
         }
     CallRoot cr;
     cr.root = root;
+    cr.place = NULL;
     cr.exclusive = exclusive;
     da_push(roots, cr);
+}
+
+/* A root obtained from a field place keeps that place so later disjoint
+ * field accesses are not blocked by the returned view. */
+static void push_place_root(CallRootList *roots, const char *root,
+                            const char *place, int exclusive)
+{
+    push_call_root(roots, root, exclusive);
+    if (!root || !place)
+        return;
+    for (size_t i = 0; i < roots->len; i++)
+        if (roots->items[i].root == root && !roots->items[i].place) {
+            roots->items[i].place = place;
+            return;
+        }
 }
 
 /* Find the callee declaration for call-site formal parameter types. */
@@ -945,17 +999,20 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
             for (size_t k = 0; recv && k < b->loans.len; k++)
                 if (b->loans.items[k].active
                     && b->loans.items[k].holder == recv)
-                    push_call_root(roots, b->loans.items[k].root,
-                                   b->loans.items[k].exclusive);
+                    push_place_root(roots, b->loans.items[k].root,
+                                    b->loans.items[k].place,
+                                    b->loans.items[k].exclusive);
             continue;
         }
         if (arg->kind == EX_UNARY && arg->u.unary.op == TK_AMP) {
-            push_call_root(roots, resolve_root(b, arg->u.unary.e),
-                           arg->borrow_mut);
+            push_place_root(roots, resolve_root(b, arg->u.unary.e),
+                            place_field_name(arg->u.unary.e),
+                            arg->borrow_mut);
             continue;
         }
         if (arg->kind == EX_SLICE) {
-            push_call_root(roots, resolve_root(b, arg->u.slice.base), 0);
+            push_place_root(roots, resolve_root(b, arg->u.slice.base),
+                            place_field_name(arg->u.slice.base), 0);
             continue;
         }
         if (!method && arg->kind == EX_IDENT && arg->type
@@ -965,7 +1022,7 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
              * value that does not borrow the vector itself. */
             Loan *l = holder_loan(b, arg->u.ident);
             if (l)
-                push_call_root(roots, l->root, l->exclusive);
+                push_place_root(roots, l->root, l->place, l->exclusive);
             continue;
         }
         if (!method && arg->kind == EX_CALL && arg->builtin_str_method == 2) {
@@ -981,7 +1038,7 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
                 continue;
             Loan *l = holder_loan(b, arg->u.ident);
             if (l)
-                push_call_root(roots, l->root, l->exclusive);
+                push_place_root(roots, l->root, l->place, l->exclusive);
         }
     }
 }
@@ -1022,7 +1079,7 @@ static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
     case EX_IDENT: {
         Loan *l = holder_loan(b, e->u.ident);
         if (l)
-            push_call_root(roots, l->root, l->exclusive);
+            push_place_root(roots, l->root, l->place, l->exclusive);
         return;
     }
     case EX_FIELD:
@@ -1031,14 +1088,14 @@ static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
             return;
         const char *root = resolve_root(b, e);
         if (root) {
-            push_call_root(roots, root, 0);
+            push_place_root(roots, root, place_field_name(e), 0);
             return;
         }
         const char *ref = place_ref_root(b, e);
         if (ref) {
             Loan *l = holder_loan(b, ref);
             if (l)
-                push_call_root(roots, l->root, l->exclusive);
+                push_place_root(roots, l->root, l->place, l->exclusive);
             return;
         }
         Expr *base = e->kind == EX_FIELD ? e->u.field.base
@@ -1053,7 +1110,7 @@ static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
         if (ref) {
             Loan *l = holder_loan(b, ref);
             if (l)
-                push_call_root(roots, l->root, l->exclusive);
+                push_place_root(roots, l->root, l->place, l->exclusive);
             return;
         }
         collect_view_roots(b, e->u.deref, roots);
@@ -1066,7 +1123,8 @@ static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
         {
             const char *root = resolve_root(b, e->u.slice.base);
             if (root) {
-                push_call_root(roots, root, 0);
+                push_place_root(roots, root,
+                                place_field_name(e->u.slice.base), 0);
                 return;
             }
             collect_view_roots(b, e->u.slice.base, roots);
@@ -1077,8 +1135,8 @@ static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
         return;
     case EX_UNARY:
         if (e->u.unary.op == TK_AMP) {
-            push_call_root(roots, resolve_root(b, e->u.unary.e),
-                           e->borrow_mut);
+            push_place_root(roots, resolve_root(b, e->u.unary.e),
+                            place_field_name(e->u.unary.e), e->borrow_mut);
             return;
         }
         collect_view_roots(b, e->u.unary.e, roots);
@@ -1143,6 +1201,7 @@ static void rebind_view_loans(Borrow *b, const char *holder, Expr *rhs)
         memset(&l, 0, sizeof(l));
         l.holder = holder;
         l.root = roots.items[i].root;
+        l.place = roots.items[i].place;
         l.exclusive = roots.items[i].exclusive;
         l.active = 1;
         l.last_use = recorded_last_use(b, holder);
@@ -1284,7 +1343,7 @@ static void bx_expr(Borrow *b, Expr *e)
                        "cannot move field '%s' out of a resource container; "
                        "move the whole value instead", e->u.field.name);
             check_root_read(b, e, root);
-            Loan *loan = root_loan(b, root);
+            Loan *loan = place_loan(b, root, field);
             if (loan)
                 bfatal(E0502, e->span,
                        "cannot move '%s.%s': it is still borrowed by '%s'",
@@ -1737,6 +1796,10 @@ static int b_stmt(Borrow *b, Stmt *s)
             bx_borrow_operand(b, init->u.unary.e);
             var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
             const char *root = reborrow_root(b, init->u.unary.e);
+            /* a plain field borrow is field-granular; a reborrow through an
+             * existing reference keeps whole-binding granularity */
+            const char *place = root ? NULL
+                                     : place_field_name(init->u.unary.e);
             if (!root)
                 root = resolve_root(b, init->u.unary.e);
             if (root && s->u.let.ty
@@ -1746,6 +1809,7 @@ static int b_stmt(Borrow *b, Stmt *s)
                 memset(&l, 0, sizeof(l));
                 l.holder = s->u.let.name;
                 l.root = root;
+                l.place = place;
                 l.exclusive = init->borrow_mut;
                 l.active = 1;
                 l.last_use = recorded_last_use(b, s->u.let.name);

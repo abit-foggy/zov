@@ -1,0 +1,34 @@
+// a loan on one struct field must not block disjoint access to another field
+use std::io;
+
+export type P = struct {
+    a: i32,
+    b: i32,
+};
+
+fn pair(x: &i32, y: &mut i32) void = {
+    *y = *x + 1;
+};
+
+export fn main() i32 = {
+    let mut p = P{ a = 1, b = 2 };
+    let ra: &i32 = &p.a;
+    let rb: &i32 = &p.b;
+    assert(*ra == 1);
+    assert(*rb == 2);
+
+    p.b = 5;
+    assert(*ra == 1);
+    if (p.b != 5) { return 1; };
+
+    let rm: &mut i32 = &mut p.a;
+    p.b = 8;
+    *rm = 7;
+    if (p.a != 7 || p.b != 8) { return 2; };
+
+    pair(&p.a, &mut p.b);
+    if (p.b != 8) { return 3; };
+
+    io::println("disjoint a={p.a} b={p.b}");
+    return 0;
+};

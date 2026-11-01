@@ -1,0 +1,13 @@
+// MUST FAIL: p.a is still borrowed when it is written
+export type P = struct {
+    a: i32,
+    b: i32,
+};
+
+export fn main() i32 = {
+    let mut p = P{ a = 1, b = 2 };
+    let ra: &i32 = &p.a;
+    p.a = 5;
+    assert(*ra == 1);
+    return 0;
+};
