@@ -302,8 +302,17 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
         if (d->kind == DL_USE && !d->u.use.is_c_header
             && d->u.use.zsyms.len == 0)
             continue; /* module deps were resolved by recursion */
-        if (d->kind != DL_USE && !d->exported)
+        /* Private Zov decls are compiled under a module-qualified name so
+         * the module can call its own helpers without exporting them. */
+        if (d->kind != DL_USE && !d->exported) {
+            if (d->kind == DL_FN) {
+                d->modname = canon;
+                d->regname = mangled_mod_fn(canon,
+                        d->u.fn.recv ? d->u.fn.mname : d->u.fn.name);
+                da_push(&ld->staged, d);
+            }
             continue;
+        }
         /* staged ahead of importers: registration order is topological */
         d->modname = canon;
         da_push(&ld->staged, d);

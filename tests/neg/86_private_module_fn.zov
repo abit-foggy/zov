@@ -1,0 +1,6 @@
+use std::env as env;
+
+export fn main() i32 = {
+    let p = env::dupz("x");
+    return 0;
+};

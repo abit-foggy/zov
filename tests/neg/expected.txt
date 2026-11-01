@@ -86,3 +86,4 @@
 83_match_missing_case.zov|5|9|E0201|expected 'case' at the start of a match arm, found 'let'
 84_map_findref_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'
 85_hosted_private_c_alias.zov|5|13|E0306|C symbol 'u::read' is private to std::io and unavailable to importers; use an exported Zov wrapper
+86_private_module_fn.zov|4|13|E0403|module 'env' has no function 'dupz'
