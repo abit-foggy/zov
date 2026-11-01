@@ -14,19 +14,19 @@ export fn main() i32 = {
     items.push(String::from("a"));
     items.push(String::from("bb"));
     let b = Bag{ items = items, id = 9 };
-    vec::free_strings(b.items);
+    vec::freestrings(b.items);
     assert(b.id == 9);
 
     let mut m = map::new[i32, String]();
     m.insert(1, String::from("one"));
     m.insert(2, String::from("two"));
     let n = m.len();
-    map::free_string_values[i32](m);
+    map::freestringvalues[i32](m);
     assert(n == 2usize);
 
     let mut m2 = map::new[str, String]();
     m2.insert("key", String::from("value"));
-    map::free_strings(m2);
+    map::freestrings(m2);
 
     io::println("owned nested ok id={b.id}");
     return 0;

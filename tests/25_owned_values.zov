@@ -18,13 +18,13 @@ export fn main() i32 = {
     v.push(String::from("a"));
     v.push(String::from("bb"));
     let n = v.len();
-    vec::free_strings(v);
+    vec::freestrings(v);
 
     let mut m = map::new[str, String]();
     m.insert("one", String::from("first"));
     m.insert("two", String::from("second"));
     let c = m.len();
-    map::free_strings(m);
+    map::freestrings(m);
 
     let mut h = Holder{ name = String::from("held"), id = 7 };
     io::println("name={h.name}");

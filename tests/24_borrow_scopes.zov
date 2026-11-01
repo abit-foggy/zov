@@ -38,7 +38,7 @@ export fn main() i32 = {
     s.free();
 
     let src = String::from("a,b");
-    let parts = strings::split_byte(src.view(), 44u8);
+    let parts = strings::splitbyte(src.view(), 44u8);
     let n = parts.len();
     parts.free();
     src.free();

@@ -28,7 +28,7 @@ use std::fs as fs;
 use std::io;
 
 export fn save(path: str) (i32 | FsError) = {
-    fs::write_str(path, "hello from std::fs\n")?;
+    fs::writestr(path, "hello from std::fs\n")?;
     return 0;
 };
 

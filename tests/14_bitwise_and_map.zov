@@ -52,9 +52,9 @@ export fn main() i32 = {
     io::println("x={x}");
     assert(x == 172);
 
-    let n = env::args_count();
+    let n = env::argscount();
     assert(n >= 1usize);
-    let prog = env::arg_at(0usize);
+    let prog = env::argat(0usize);
     io::println("argv0 non-empty={prog.len > 0usize}");
 
     let mut m = map::new[str, i32]();

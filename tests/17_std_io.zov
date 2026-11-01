@@ -47,7 +47,7 @@ export fn main() i32 = {
     io::println('Z');
     std::io::println("full path works");
     let scratch: *u8 = mem::alloc[u8](4usize);
-    mem::free_ptr(scratch);
+    mem::freeptr(scratch);
     line.free();
     return 0;
 };

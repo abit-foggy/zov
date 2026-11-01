@@ -3,7 +3,7 @@ use std::arena as arena;
 
 export fn main() i32 = {
     let mut a = arena::new(4usize);
-    let p = a.alloc_bytes(8usize);
+    let p = a.allocbytes(8usize);
     a.free();
     return 0;
 };

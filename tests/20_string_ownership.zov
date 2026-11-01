@@ -6,7 +6,7 @@ fn make_label(prefix: str, n: i32) String = {
 };
 
 fn save(path: str, content: str) (i32 | FsError) = {
-    fs::write_str(path, content)?;
+    fs::writestr(path, content)?;
     return 0;
 };
 
@@ -47,7 +47,7 @@ export fn main() i32 = {
     };
     if (saved_code != 0) { return saved_code; };
 
-    let read = fs::read_str(path);
+    let read = fs::readstr(path);
     let loaded: String = match (read) {
         case let s: String => s,
         case FsError => return 11,
