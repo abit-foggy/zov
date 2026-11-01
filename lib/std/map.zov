@@ -94,7 +94,11 @@ export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
         if (st == 1u8) {
             let k: K = (self.keys!)[idx];
             if (k == key) {
+                /* replacement owns the new value and releases the old one;
+                 * the equal key argument is not stored, so it is dropped */
+                mem::drop[V]((self.vals!)[idx]);
                 (self.vals!)[idx] = val;
+                mem::drop[K](key);
                 inserted = true;
                 break;
             };
@@ -134,17 +138,29 @@ export fn (self: &Map[K, V]) contains(key: K) bool = {
     return found;
 };
 
+// Removes the entry and destroys the stored key and value.  The lookup
+// key is owned by the call and is destroyed too.  Use take() when the
+// value must survive the removal.
 export fn (self: &mut Map[K, V]) remove(key: K) bool = {
-    if (self.cap == 0usize) { return false; };
+    if (self.cap == 0usize) {
+        mem::drop[K](key);
+        return false;
+    };
     let h: u64 = hash_val[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
         let st: u8 = (self.states!)[idx];
-        if (st == 0u8) { return false; };
+        if (st == 0u8) {
+            mem::drop[K](key);
+            return false;
+        };
         if (st == 1u8) {
             let k: K = (self.keys!)[idx];
             if (k == key) {
+                mem::drop[K]((self.keys!)[idx]);
+                mem::drop[V]((self.vals!)[idx]);
+                mem::drop[K](key);
                 (self.states!)[idx] = 2u8;
                 self.length -= 1usize;
                 return true;
@@ -153,42 +169,79 @@ export fn (self: &mut Map[K, V]) remove(key: K) bool = {
         idx = (idx + 1usize) % self.cap;
         i += 1usize;
     };
+    mem::drop[K](key);
     return false;
+};
+
+// Removes the entry and returns its value, transferring ownership to the
+// caller.  The stored key is destroyed, as is the lookup key argument.
+export fn (self: &mut Map[K, V]) take(key: K) (V | MapNotFound) = {
+    if (self.cap == 0usize) {
+        mem::drop[K](key);
+        return MapNotFound;
+    };
+    let h: u64 = hash_val[K](key);
+    let mut idx: usize = (h % (self.cap as u64)) as usize;
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        let st: u8 = (self.states!)[idx];
+        if (st == 0u8) {
+            mem::drop[K](key);
+            return MapNotFound;
+        };
+        if (st == 1u8) {
+            let k: K = (self.keys!)[idx];
+            if (k == key) {
+                let v: V = (self.vals!)[idx];
+                mem::drop[K]((self.keys!)[idx]);
+                mem::drop[K](key);
+                (self.states!)[idx] = 2u8;
+                self.length -= 1usize;
+                return v;
+            };
+        };
+        idx = (idx + 1usize) % self.cap;
+        i += 1usize;
+    };
+    mem::drop[K](key);
+    return MapNotFound;
 };
 
 export fn (self: &Map[K, V]) len() usize = {
     return self.length;
 };
 
+// Destroys the owned keys and values of every occupied entry, then the
+// key, value, and state tables.  Tombstones hold no live value and are
+// skipped.  The load factor and capacity are reset so the handle is
+// inert afterwards.
 export fn (self: Map[K, V]) free() void = {
+    if (self.states != null && self.keys != null && self.vals != null) {
+        let keys: *K = self.keys!;
+        let vals: *V = self.vals!;
+        let states: *u8 = self.states!;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            if (states[i] == 1u8) {
+                mem::drop[K](keys[i]);
+                mem::drop[V](vals[i]);
+            };
+            i += 1usize;
+        };
+    };
     if (self.keys != null) { mem::free_ptr[K](self.keys!); };
     if (self.vals != null) { mem::free_ptr[V](self.vals!); };
     if (self.states != null) { mem::free_ptr[u8](self.states!); };
 };
 
-// Explicit destruction for Map[K, String]: every stored String value is
-// released before the tables.  Keys are copied as K values; if K itself
-// owns a resource, free the keys separately before calling this.
+// Kept for callers written before Map.free() destroyed entries.
 export fn free_string_values[K](m: Map[K, String]) void = {
-    if (m.vals != null) {
-        let vals: *String = m.vals!;
-        let states: *u8 = m.states!;
-        let mut i: usize = 0usize;
-        while (i < m.cap) {
-            if (states[i] == 1u8) {
-                vals[i].free();
-            };
-            i += 1usize;
-        };
-        mem::free_ptr[String](vals);
-    };
-    if (m.keys != null) { mem::free_ptr[K](m.keys!); };
-    if (m.states != null) { mem::free_ptr[u8](m.states!); };
+    m.free();
 };
 
 // Borrowed-key convenience wrapper; the source string must outlive the map.
 export fn free_strings(m: Map[str, String]) void = {
-    free_string_values[str](m);
+    m.free();
 };
 
 test "map basics" {

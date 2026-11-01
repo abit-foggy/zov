@@ -1,6 +1,7 @@
 // resource destruction: mem::drop releases owned fields and the active
 // union payload; vector free releases every live element
 use std::vec as vec;
+use std::map as map;
 use std::mem as mem;
 use std::io;
 
@@ -22,6 +23,27 @@ export fn main() i32 = {
 
     let u: (String | Oops) = String::from("union");
     mem::drop(u);
+
+    let mut m = map::new[str, String]();
+    m.insert("a", String::from("one"));
+    m.insert("b", String::from("two"));
+    m.insert("a", String::from("three"));
+    assert(m.len() == 2usize);
+    assert(m.remove("b"));
+    assert(!m.contains("b"));
+    m.free();
+
+    let mut m2 = map::new[str, String]();
+    m2.insert("k", String::from("value"));
+    let r = m2.take("k");
+    let got: String = match (r) {
+        case let s: String => s,
+        case MapNotFound => return 1,
+    };
+    assert(got.view() == "value");
+    got.free();
+    assert(m2.len() == 0usize);
+    m2.free();
 
     let n: i32 = 5;
     mem::drop(n); // trivially destructible values are a no-op
