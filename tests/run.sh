@@ -699,6 +699,31 @@ run_freestanding() {
     else
         pass "freestanding allocation diagnostic"
     fi
+
+    # hosted-only standard modules must be rejected at the user's call site
+    fs_reject_ok=0
+    printf 'use std::fs as fs;\nexport fn kmain() void = {\n    let r = fs::read_str("x");\n};\n' \
+        >"$TMP/fs_fs.zov"
+    printf 'use std::env as env;\nexport fn kmain() void = {\n    let n = env::args_count();\n};\n' \
+        >"$TMP/fs_env.zov"
+    printf 'use std::time as time;\nexport fn kmain() void = {\n    time::sleepms(1u32);\n};\n' \
+        >"$TMP/fs_time.zov"
+    printf 'use std::vec as vec;\nexport fn kmain() void = {\n    let v = vec::new[u8]();\n};\n' \
+        >"$TMP/fs_vec.zov"
+    for fs_case in fs_fs fs_env fs_time fs_vec; do
+        run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \
+            "$ZOV" --freestanding --check "$TMP/$fs_case.zov"
+        fs_status=$?
+        if [ "$fs_status" -ne 1 ] \
+           || ! grep -q "E0306" "$TMP/$fs_case.err" \
+           || ! grep -q "$TMP/$fs_case.zov" "$TMP/$fs_case.err"; then
+            fail "freestanding $fs_case diagnostic (status $fs_status)"
+            show_file "$TMP/$fs_case.err"
+            return
+        fi
+        fs_reject_ok=$((fs_reject_ok + 1))
+    done
+    pass "freestanding hosted-module diagnostics ($fs_reject_ok modules)"
 }
 
 run_freestanding_link() {

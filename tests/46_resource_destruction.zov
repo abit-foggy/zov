@@ -12,6 +12,11 @@ export type Holder = struct {
     id: i32,
 };
 
+export type Outer = struct {
+    inner: Holder,
+    tail: String,
+};
+
 export fn main() i32 = {
     let mut v = vec::new[String]();
     v.push(String::from("alpha"));
@@ -48,6 +53,16 @@ export fn main() i32 = {
 
     let u: (String | Oops) = String::from("union");
     mem::drop(u);
+
+    let o = Outer{
+        inner = Holder{ label = String::from("nested"), id = 8 },
+        tail = String::from("tail"),
+    };
+    mem::drop(o);
+
+    let hu: (Holder | Oops) = Holder{ label = String::from("payload"),
+                                      id = 9 };
+    mem::drop(hu);
 
     let mut m = map::new[str, String]();
     m.insert("a", String::from("one"));

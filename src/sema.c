@@ -1175,8 +1175,71 @@ static Type *infer_tparam(Type *pt, Type *at, const char *tp)
     }
 }
 
+/* Modules that cannot be checked in a freestanding build: their bodies
+ * use hosted facilities, so only call sites are diagnosed. */
+static int hosted_only_module(const char *mod)
+{
+    return mod && (zstr_eq(mod, "mem") || zstr_eq(mod, "vec")
+                   || zstr_eq(mod, "map") || zstr_eq(mod, "arena")
+                   || zstr_eq(mod, "fs") || zstr_eq(mod, "env")
+                   || zstr_eq(mod, "time") || zstr_eq(mod, "io"));
+}
+
+static Decl *find_decl_by_regname(Sema *se, const char *name)
+{
+    if (!name)
+        return NULL;
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind == DL_FN && d->regname && d->regname == name)
+            return d;
+    }
+    return NULL;
+}
+
+/* Hosted-only standard modules fail here with a platform explanation
+ * instead of compiling into an object that cannot link freestanding. */
+static void reject_hosted_decl(Sema *se, Decl *decl, Span span)
+{
+    if (!se->prog->freestanding || !decl || decl->kind != DL_FN
+        || !decl->modname)
+        return;
+    const char *mod = decl->modname;
+    if (zstr_eq(mod, "vec") || zstr_eq(mod, "map")
+        || zstr_eq(mod, "arena"))
+        fatal_at(E0306, span,
+                 "std::%s depends on std::mem and is unavailable in "
+                 "freestanding builds", mod);
+    if (zstr_eq(mod, "mem"))
+        fatal_at(E0306, span,
+                 "std::mem requires a hosted allocator; freestanding builds "
+                 "must provide the allocation hooks in runtime/zov_rt.h");
+    if (zstr_eq(mod, "fs"))
+        fatal_at(E0306, span,
+                 "std::fs requires an operating-system file API and is "
+                 "unavailable in freestanding builds");
+    if (zstr_eq(mod, "env"))
+        fatal_at(E0306, span,
+                 "std::env requires a hosted process and is unavailable "
+                 "in freestanding builds");
+    if (zstr_eq(mod, "time"))
+        fatal_at(E0306, span,
+                 "std::time requires a platform timer and is unavailable "
+                 "in freestanding builds");
+    if (zstr_eq(mod, "io"))
+        fatal_at(E0306, span,
+                 "std::io requires a platform output interface and is "
+                 "unavailable in freestanding builds");
+}
+
+static void reject_hosted_module(Sema *se, Sym *fn, Span span)
+{
+    reject_hosted_decl(se, fn->decl, span);
+}
+
 static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
 {
+    reject_hosted_module(se, fn, e->span);
     if (e->u.call.args.len != fn->params.len)
         fatal_at(E0602, e->span, "'%s' expects %lu argument(s), got %lu",
                  fn_display_name(fn),
@@ -1686,6 +1749,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 se, callee->u.generic.base->u.nident.ns,
                 callee->u.generic.base->u.nident.name);
             if (tgt) {
+                /* reject hosted-only modules before instantiating their
+                 * bodies, so the diagnostic names the user's call site */
+                reject_hosted_decl(se, find_decl_by_regname(se, tgt),
+                                   callee->span);
                 Expr *id = expr_new(EX_IDENT, callee->u.generic.base->span);
                 id->u.ident = tgt;
                 callee->u.generic.base = id;
@@ -3137,6 +3204,9 @@ void sema_check(Program *prog, int test_mode)
     const char *curmod = (const char *)1;
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
+        if (prog->freestanding && d->kind == DL_FN
+            && hosted_only_module(d->modname))
+            continue;
         if ((d->kind == DL_FN && d->u.fn.tparams.len == 0)
             || d->kind == DL_TEST) {
             if (d->modname != curmod) {
