@@ -2421,13 +2421,14 @@ static void collect_drop_types(CG *cg)
     }
 }
 
-static void emit_drop_param(CG *cg, Buf *b, Type *t)
+static void emit_drop_param_named(CG *cg, Buf *b, Type *t,
+                                  const char *name)
 {
     if (t->kind == TY_ARRAY)
-        buf_printf(b, "%s (*)[%lu]", c_type(cg, t->base),
+        buf_printf(b, "%s (*%s)[%lu]", c_type(cg, t->base), name,
                    (unsigned long)t->count);
     else
-        buf_printf(b, "%s *", c_type(cg, t));
+        buf_printf(b, "%s *%s", c_type(cg, t), name);
 }
 
 static void emit_drop_defs(CG *cg, Buf *out)
@@ -2437,14 +2438,14 @@ static void emit_drop_defs(CG *cg, Buf *out)
     collect_drop_types(cg);
     for (size_t i = 0; i < cg->drops.len; i++) {
         buf_printf(out, "static void zov_drop_%lu(", (unsigned long)i);
-        emit_drop_param(cg, out, cg->drops.items[i]);
+        emit_drop_param_named(cg, out, cg->drops.items[i], "");
         buf_puts(out, ");\n");
     }
     for (size_t i = 0; i < cg->drops.len; i++) {
         Type *t = cg->drops.items[i];
         buf_printf(out, "static void zov_drop_%lu(", (unsigned long)i);
-        emit_drop_param(cg, out, t);
-        buf_puts(out, " v) {\n");
+        emit_drop_param_named(cg, out, t, "v");
+        buf_puts(out, ") {\n");
         if (type_is_string(t)) {
             buf_puts(out, "    zov_string_free(v);\n");
         } else if (t->kind == TY_STRUCT && find_free_method(cg, t)) {
