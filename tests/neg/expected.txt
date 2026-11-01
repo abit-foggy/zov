@@ -54,3 +54,4 @@
 51_partial_move_use.zov|10|13|-|cannot move 'b': a field was already moved
 52_nested_double_free.zov|10|23|-|use of moved value 'b.items'
 53_recursive_type.zov|2|26|-|recursive type 'A' has infinite size
+54_branch_view.zov|8|5|-|cannot free 's': it is still borrowed by 'v'

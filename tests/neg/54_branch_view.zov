@@ -1,0 +1,11 @@
+use std::io;
+export fn main() i32 = {
+    let s = String::from("hello");
+    let mut v: str = "static";
+    if (true) {
+        v = s.view();
+    };
+    s.free();
+    io::println(v);
+    return 0;
+};

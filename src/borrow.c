@@ -1527,19 +1527,53 @@ static void merge_branch_marks(Borrow *b, BVar *base, size_t nbase,
     }
 }
 
+static int holder_in_base(BVar *base, size_t nvars, const char *holder)
+{
+    for (size_t i = 0; i < nvars; i++)
+        if (base[i].name == holder)
+            return 1;
+    return 0;
+}
+
+/* Loans made inside a branch survive the join when their holder is still
+ * in scope; branch-local holders and dead/rebound loans are dropped. */
+static void merge_branch_loans(Borrow *b, BVar *base, size_t nvars,
+                               Loan *base_loans, size_t nbase_loans,
+                               int diverged)
+{
+    if (diverged) {
+        if (nbase_loans)
+            memcpy(b->loans.items, base_loans,
+                   nbase_loans * sizeof(Loan));
+        b->loans.len = nbase_loans;
+        return;
+    }
+    size_t w = 0;
+    for (size_t i = 0; i < b->loans.len; i++) {
+        Loan *l = &b->loans.items[i];
+        if (l->active && holder_in_base(base, nvars, l->holder))
+            b->loans.items[w++] = *l;
+    }
+    b->loans.len = w;
+}
+
 static int walk_branch(Borrow *b, Block *body)
 {
     size_t nvars = b->vars.len;
     size_t nloans = b->loans.len;
     BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+    Loan *base_loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
     for (size_t i = 0; i < nvars; i++)
         base[i] = b->vars.items[i];
+    if (nloans)
+        memcpy(base_loans, b->loans.items, nloans * sizeof(Loan));
     int diverged = b_block(b, body);
     merge_branch_marks(b, base, nvars, diverged);
+    merge_branch_loans(b, base, nvars, base_loans, nloans, diverged);
     b->vars.len = nvars;
-    b->loans.len = nloans;
     for (size_t i = 0; i < nvars; i++)
         b->vars.items[i] = base[i];
+    free(base_loans);
     free(base);
     return diverged;
 }
@@ -1549,8 +1583,11 @@ static int walk_arm(Borrow *b, MatchArm *a)
     size_t nvars = b->vars.len;
     size_t nloans = b->loans.len;
     BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+    Loan *base_loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
     for (size_t i = 0; i < nvars; i++)
         base[i] = b->vars.items[i];
+    if (nloans)
+        memcpy(base_loans, b->loans.items, nloans * sizeof(Loan));
     if (a->name && a->ty)
         var_add(b, a->name, a->ty, 0);
     int diverged = 0;
@@ -1560,10 +1597,11 @@ static int walk_arm(Borrow *b, MatchArm *a)
         bx_expr(b, a->val);
     }
     merge_branch_marks(b, base, nvars, diverged);
+    merge_branch_loans(b, base, nvars, base_loans, nloans, diverged);
     b->vars.len = nvars;
-    b->loans.len = nloans;
     for (size_t i = 0; i < nvars; i++)
         b->vars.items[i] = base[i];
+    free(base_loans);
     free(base);
     return diverged;
 }
