@@ -821,8 +821,8 @@ run_freestanding_link() {
     pass "freestanding panic hook"
 }
 
-/* The minimal runtime defines no allocator symbols: linking generated
- * code against it must still succeed, so those hooks stay optional. */
+# The minimal runtime defines no allocator symbols: linking generated
+# code against it must still succeed, so those hooks stay optional.
 run_freestanding_alloc_hook() {
     require_cmd cc || return
     source=$ROOT/tests/16_freestanding_alloc_hook.zov
