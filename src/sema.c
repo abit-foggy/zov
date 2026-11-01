@@ -165,6 +165,33 @@ static int drop_place_kind(Expr *e)
            || e->kind == EX_INDEX || e->kind == EX_DEREF;
 }
 
+/* Dropping through &T/&mut T cannot update the borrower's bookkeeping:
+ * the owner would still appear initialized and could free twice.  Raw
+ * pointer dereferences stay in the unchecked domain. */
+static int drop_through_reference(Expr *e)
+{
+    while (e) {
+        if (e->kind == EX_FIELD) {
+            e = e->u.field.base;
+            continue;
+        }
+        if (e->kind == EX_INDEX) {
+            e = e->u.index.base;
+            continue;
+        }
+        break;
+    }
+    if (!e)
+        return 0;
+    if (e->kind == EX_DEREF)
+        return e->u.deref->type
+               && (e->u.deref->type->kind == TY_REF
+                   || e->u.deref->type->kind == TY_MUTREF);
+    if (e->kind == EX_IDENT && e->type)
+        return e->type->kind == TY_REF || e->type->kind == TY_MUTREF;
+    return 0;
+}
+
 /* A type that contains itself by value has infinite size.  Pointers,
  * slices, references, and owned String (which stores a pointer) break
  * the cycle; arrays, unions, and aliases do not. */
@@ -1683,6 +1710,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(E0605, arg->span,
                          "mem::drop requires a place expression "
                          "(variable, field, index, or dereference)");
+            if (drop_through_reference(arg))
+                fatal_at(E0605, arg->span,
+                         "mem::drop cannot destroy through a reference; "
+                         "drop the owning binding directly");
             /* A type with a by-value free() method releases its own
              * storage; instantiate the generic method now so codegen can
              * call it from the drop helper. */

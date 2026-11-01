@@ -75,3 +75,4 @@
 72_drop_moved_field.zov|9|15|E0503|use of moved value 'h.name'
 73_free_moved_field.zov|7|5|E0503|use of moved value 'h.name'
 74_drop_double_vec.zov|8|15|E0509|value was already freed: 'v'
+75_drop_through_ref.zov|11|15|E0605|mem::drop cannot destroy through a reference

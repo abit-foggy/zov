@@ -1,0 +1,13 @@
+use std::mem as mem;
+use std::vec;
+
+export type Holder = struct {
+    items: Vec[i32],
+};
+
+export fn main() i32 = {
+    let mut h = Holder { items = vec::new[i32]() };
+    let r: &mut Holder = &mut h;
+    mem::drop(*r);
+    return 0;
+};
