@@ -22,9 +22,10 @@ in each environment and what they depend on.
 ## Notes
 
 - Strict C99 portability and operating-system portability are different
-  claims. `std::fs` uses only ISO C, but `std::io` and `std::time` use
-  POSIX functions; hosted builds define `_POSIX_C_SOURCE 200809L` for
-  that reason.
+  claims. `std::fs` uses only ISO C, but `std::io`, `std::time`, and
+  `std::env` use POSIX functions (`read`, `usleep`, `getcwd`, `chdir`,
+  `setenv`); hosted builds define `_POSIX_C_SOURCE 200809L` for that
+  reason.
 - A freestanding build does not emit hosted headers for a module it
   rejects, nor for libm-backed `std::math` declarations that were skipped.
   The diagnostic is `E0306` at the first call site, for example
