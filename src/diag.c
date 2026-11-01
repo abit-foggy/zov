@@ -363,6 +363,24 @@ static const DiagCodeInfo g_codes[] = {
 
     {"E0901", "unsupported construct in code generation",
      "This is a compiler limitation; please report it."},
+
+    /* E1xxx: runtime failures reported by the generated panic path. */
+    {"E1001", "index out of bounds",
+     "Check the index against the collection's length."},
+    {"E1002", "slice out of bounds",
+     "Slice ranges must satisfy start <= end <= len."},
+    {"E1003", "integer division by zero",
+     "Guard the divisor before dividing or taking a remainder."},
+    {"E1004", "unwrap of null pointer",
+     "Check for null with match before forcing the pointer."},
+    {"E1005", "unwrap of error value",
+     "Handle the error variant before forcing a success value."},
+    {"E1006", "assertion failed",
+     "The asserted condition evaluated to false."},
+    {"E1007", "allocation failure",
+     "The allocator returned no memory; reduce or bound the allocation."},
+    {"E1008", "invalid owned String construction",
+     "String::from_owned requires len <= cap and a non-null buffer."},
     {"E0902", "internal compiler error",
      "This is a compiler bug; please report it."},
 

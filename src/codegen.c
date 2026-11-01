@@ -899,41 +899,50 @@ static void emit_match(CG *cg, Expr *e, int want_value)
     cg->switch_depth--;
 }
 
+/* Failure expression for a runtime check: code, message, source site. */
+static void emit_panic_call(CG *cg, Buf *b, const char *code,
+                            const char *msg_prefix, Span *site)
+{
+    if (cg->freestanding) {
+        buf_printf(b, "zov_panic(\"%s\", \"%s", code, msg_prefix);
+    } else {
+        cg->needs_io = 1;
+        cg->needs_panic = 1;
+        buf_printf(b, "__zov_panic(\"%s\", \"%s", code, msg_prefix);
+    }
+    if (site && site->start && site->end && site->end > site->start) {
+        append_fmt_str(b, site->start, (size_t)(site->end - site->start));
+        buf_puts(b, "\", ");
+        emit_str_lit(b, site->file, strlen(site->file));
+        buf_printf(b, ", %luu, %luu)", (unsigned long)site->line,
+                   (unsigned long)site->col);
+    } else if (site) {
+        buf_puts(b, "\", ");
+        emit_str_lit(b, site->file, strlen(site->file));
+        buf_printf(b, ", %luu, %luu)", (unsigned long)site->line,
+                   (unsigned long)site->col);
+    } else {
+        buf_puts(b, "\", \"?\", 0, 0)");
+    }
+}
+
 static void emit_assert(CG *cg, Expr *e, int as_stmt)
 {
     Buf *b = &*cg->cur;
-    cg->needs_abort = 1;
     Expr *cond = e->u.call.args.items[0];
+    /* identifier arguments can carry a zero-width span; fall back to the
+     * whole assertion so the panic site is still accurate */
+    Span *site = &cond->span;
+    if (!site->start || !site->end || site->end <= site->start)
+        site = &e->span;
     if (!as_stmt) {
         int id = cg->tmp_id++;
         Buf ct = {0};
         emit_expr_into(cg, cond, &ct, 0);
         buf_printf(&cg->protos, "static int zov_assert_%d(bool ok) {\n", id);
         buf_puts(&cg->protos, "    if (ok) return 0;\n    ");
-        if (cg->freestanding) {
-            buf_puts(&cg->protos, "zov_panic(\"assert failed: ");
-            append_fmt_str(&cg->protos, cond->span.start,
-                           (size_t)(cond->span.end - cond->span.start));
-            buf_puts(&cg->protos, "\", ");
-            emit_str_lit(&cg->protos, cond->span.file,
-                         strlen(cond->span.file));
-            buf_printf(&cg->protos, ", %luu);\n",
-                       (unsigned long)cond->span.line);
-        } else if (cg->debug) {
-            cg->needs_io = 1;
-            cg->needs_panic = 1;
-            buf_puts(&cg->protos, "__zov_panic(\"assert failed: ");
-            append_fmt_str(&cg->protos, cond->span.start,
-                           (size_t)(cond->span.end - cond->span.start));
-            buf_puts(&cg->protos, "\", ");
-            emit_str_lit(&cg->protos, cond->span.file,
-                         strlen(cond->span.file));
-            buf_printf(&cg->protos, ", %luu, 0);\n",
-                       (unsigned long)cond->span.line);
-        } else {
-            buf_puts(&cg->protos, "abort();\n");
-        }
-        buf_puts(&cg->protos, "    return 0;\n}\n");
+        emit_panic_call(cg, &cg->protos, "E1006", "assert failed: ", site);
+        buf_puts(&cg->protos, ";\n    return 0;\n}\n");
         buf_printf(b, "zov_assert_%d(", id);
         buf_append(b, &ct);
         buf_puts(b, ")");
@@ -942,26 +951,9 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
     }
     buf_puts(b, "if (!(");
     emit_expr(cg, cond, 0);
-    if (cg->freestanding) {
-        buf_puts(b, ")) { zov_panic(\"assert failed: ");
-        append_fmt_str(b, cond->span.start,
-                       (size_t)(cond->span.end - cond->span.start));
-        buf_puts(b, "\", ");
-        emit_str_lit(b, cond->span.file, strlen(cond->span.file));
-        buf_printf(b, ", %luu); }\n", (unsigned long)cond->span.line);
-    } else if (cg->debug) {
-        cg->needs_io = 1;
-        cg->needs_panic = 1;
-        buf_puts(b, ")) { __zov_panic(\"assert failed: ");
-        append_fmt_str(b, cond->span.start,
-                       (size_t)(cond->span.end - cond->span.start));
-        buf_puts(b, "\", ");
-        emit_str_lit(b, cond->span.file, strlen(cond->span.file));
-        buf_printf(b, ", %luu, 0); }\n", (unsigned long)cond->span.line);
-    } else {
-        cg->needs_abort = 1;
-        buf_puts(b, ")) { abort(); }\n");
-    }
+    buf_puts(b, ")) { ");
+    emit_panic_call(cg, b, "E1006", "assert failed: ", site);
+    buf_puts(b, "; }\n");
 }
 
 /* Evaluate call arguments left-to-right.  A later argument that hoists a
@@ -1290,22 +1282,20 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             // integer div/mod: division by zero is never left as C UB
             const char *fail;
             if (cg->freestanding) {
-                fail = "zov_panic(\"integer division by zero\", \"?\", 0)";
-            } else if (cg->debug) {
+                fail = "zov_panic(\"E1003\", \"integer division by "
+                       "zero\", f, (int)l, (int)c)";
+            } else {
                 cg->needs_io = 1;
                 cg->needs_panic = 1;
-                fail = "__zov_panic(\"integer division by zero\", f, l, "
-                       "0)";
-            } else {
-                cg->needs_abort = 1;
-                fail = "abort()";
+                fail = "__zov_panic(\"E1003\", \"integer division by "
+                       "zero\", f, (int)l, (int)c)";
             }
             const char *ct = c_type(cg, e->type);
             int id = cg->tmp_id++;
             buf_printf(&cg->protos,
                        "static %s zov_div_%d(%s a, %s b, "
-                       "const char *f, unsigned long l) {\n"
-                       "    (void)f; (void)l;\n"
+                       "const char *f, unsigned long l, "
+                       "unsigned long c) {\n"
                        "    if (b == 0) { %s; }\n"
                        "    return a %s b;\n}\n",
                        ct, id, ct, ct, fail,
@@ -1320,7 +1310,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_append(b, &ro);
             buf_puts(b, ", ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
-            buf_printf(b, ", %luu)", (unsigned long)e->span.line);
+            buf_printf(b, ", %luu, %luu)", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
             free(lo.data);
             free(ro.data);
             break;
@@ -1485,9 +1476,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             cg->needs_slice = 1;
             buf_printf(&cg->protos,
                        "static zov_str zov_strsub_%d(zov_str s, size_t a, "
-                       "size_t b, const char *f, unsigned long l) {\n"
+                       "size_t b, const char *f, unsigned long l, "
+                       "unsigned long c) {\n"
                        "    if (b == SIZE_MAX) b = s.len;\n"
-                       "    zov_slice_check(a, b, s.len, f, l);\n"
+                       "    zov_slice_check(a, b, s.len, f, l, (int)c);\n"
                        "    return (zov_str){ s.data + a, b - a };\n}\n",
                        id);
             buf_printf(b, "zov_strsub_%d((", id);
@@ -1504,7 +1496,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                 buf_puts(b, "SIZE_MAX");
             buf_puts(b, "), ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
-            buf_printf(b, ", %luu)", (unsigned long)e->span.line);
+            buf_printf(b, ", %luu, %luu)", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
             break;
         }
         if (bt->kind == TY_SLICE) {
@@ -1512,9 +1505,9 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             cg->needs_slice = 1;
             buf_printf(&cg->protos,
                        "static %s zov_subslice_%d(%s s, size_t a, size_t b, "
-                       "const char *f, unsigned long l) {\n"
+                       "const char *f, unsigned long l, unsigned long c) {\n"
                        "    if (b == SIZE_MAX) b = s.len;\n"
-                       "    zov_slice_check(a, b, s.len, f, l);\n"
+                       "    zov_slice_check(a, b, s.len, f, l, (int)c);\n"
                        "    return (%s){ s.data + a, b - a };\n}\n",
                        st, id, st, st);
             buf_printf(b, "zov_subslice_%d((", id);
@@ -1531,7 +1524,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                 buf_puts(b, "SIZE_MAX");
             buf_puts(b, "), ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
-            buf_printf(b, ", %luu)", (unsigned long)e->span.line);
+            buf_printf(b, ", %luu, %luu)", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
             break;
         }
         if (bt->kind == TY_ARRAY) {
@@ -1540,9 +1534,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             cg->needs_slice = 1;
             buf_printf(&cg->protos,
                        "static %s zov_arrslice_%d(%s *p, size_t n, "
-                       "size_t a, size_t b, const char *f, unsigned long l) {\n"
+                       "size_t a, size_t b, const char *f, unsigned long l, "
+                       "unsigned long c) {\n"
                        "    if (b == SIZE_MAX) b = n;\n"
-                       "    zov_slice_check(a, b, n, f, l);\n"
+                       "    zov_slice_check(a, b, n, f, l, (int)c);\n"
                        "    return (%s){ p + a, b - a };\n}\n",
                        st, id, et, st);
             buf_printf(b, "zov_arrslice_%d((", id);
@@ -1559,7 +1554,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                 buf_puts(b, "SIZE_MAX");
             buf_puts(b, "), ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
-            buf_printf(b, ", %luu)", (unsigned long)e->span.line);
+            buf_printf(b, ", %luu, %luu)", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
             break;
         }
         if (bt->kind == TY_PTR) {
@@ -1609,7 +1605,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             emit_expr(cg, e->u.index.base, 0);
             buf_puts(b, ") / sizeof((");
             emit_expr(cg, e->u.index.base, 0);
-            buf_puts(b, ")[0]))]");
+            buf_puts(b, ")[0]), ");
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %luu, %luu)]", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
         } else if (ty_is_owned_string(bt)) {
             cg->needs_string = 1;
             cg->needs_str_index = 1;
@@ -1618,7 +1617,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             emit_str_view(cg, e->u.index.base);
             buf_puts(b, "), (size_t)(");
             emit_expr(cg, e->u.index.index, 0);
-            buf_puts(b, "))");
+            buf_puts(b, "), ");
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %luu, %luu)", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
         } else {
             /* slices are fat pointers: hoist the base so a side-effecting
              * expression is evaluated once for both .data and .len */
@@ -1632,7 +1634,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             free(bx.data);
             buf_printf(b, "_ix%d.data[zov_bounds((size_t)(", id);
             emit_expr(cg, e->u.index.index, 0);
-            buf_printf(b, "), _ix%d.len)]", id);
+            buf_printf(b, "), _ix%d.len, ", id);
+            emit_str_lit(b, e->span.file, strlen(e->span.file));
+            buf_printf(b, ", %luu, %luu)]", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
         }
         break;
     }
@@ -1750,48 +1755,51 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             int ok = cg_union_idx(t, union_ok_member(t));
             buf_printf(&cg->protos,
                        "static %s zov_unwrapu_%d(%s u, const char *f, "
-                       "int l) {\n"
-                       "    (void)f; (void)l;\n"
+                       "int l, int c) {\n"
                        "    if (u.tag != %du) {\n",
                        un, id, un, ok);
             if (cg->freestanding)
                 buf_puts(&cg->protos,
-                         "        zov_panic(\"unwrap of error value\", f, l);\n");
+                         "        zov_panic(\"E1005\", \"unwrap of error "
+                         "value\", f, l, c);\n");
             else {
-                cg->needs_abort = 1;
-                buf_puts(&cg->protos, "        abort();\n");
+                cg->needs_io = 1;
+                cg->needs_panic = 1;
+                buf_puts(&cg->protos,
+                         "        __zov_panic(\"E1005\", \"unwrap of error "
+                         "value\", f, l, c);\n");
             }
             buf_puts(&cg->protos, "    }\n    return u;\n}\n");
             buf_printf(b, "zov_unwrapu_%d((", id);
             emit_expr(cg, e->u.unwrap, 0);
             buf_puts(b, "), ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
-            buf_printf(b, ", %lu).u.v%d", (unsigned long)e->span.line, ok);
+            buf_printf(b, ", %lu, %lu).u.v%d", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col, ok);
         } else {
             const char *pt = c_type(cg, t->base);
             buf_printf(&cg->protos,
                        "static void *zov_unwrapp_%d(void *p, const char *f, "
-                       "int l) {\n"
-                       "    (void)f; (void)l;\n"
+                       "int l, int c) {\n"
                        "    if (p == NULL) {\n", id);
             if (cg->freestanding)
                 buf_puts(&cg->protos,
-                         "        zov_panic(\"unwrap of null\", f, l);\n");
-            else if (cg->debug) {
+                         "        zov_panic(\"E1004\", \"unwrap of null\", "
+                         "f, l, c);\n");
+            else {
                 cg->needs_io = 1;
                 cg->needs_panic = 1;
                 buf_puts(&cg->protos,
-                         "        __zov_panic(\"unwrap of null\", f, l, 0);\n");
-            } else {
-                cg->needs_abort = 1;
-                buf_puts(&cg->protos, "        abort();\n");
+                         "        __zov_panic(\"E1004\", \"unwrap of "
+                         "null\", f, l, c);\n");
             }
             buf_puts(&cg->protos, "    }\n    return p;\n}\n");
             buf_printf(b, "((%s *)zov_unwrapp_%d((void *)(", pt, id);
             emit_expr(cg, e->u.unwrap, 0);
             buf_puts(b, "), ");
             emit_str_lit(b, e->span.file, strlen(e->span.file));
-            buf_printf(b, ", %lu))", (unsigned long)e->span.line);
+            buf_printf(b, ", %lu, %lu))", (unsigned long)e->span.line,
+                       (unsigned long)e->span.col);
         }
         break;
     }
@@ -2421,8 +2429,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     } else {
         /* declared before every helper; kernels own the definition */
         buf_puts(&*cg->cur,
-                 "extern void zov_panic(const char *msg, "
-                 "const char *file, int line);\n");
+                 "extern void zov_panic(const char *code, const char *msg, "
+                 "const char *file, int line, int col);\n");
     }
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
@@ -2509,46 +2517,42 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         }
         buf_puts(&out, "default: return \"<invalid>\"; } }\n");
     }
-    if (!cg->freestanding && cg->debug
+    /* Runtime failures keep their code and source site in every hosted
+     * build: optimization level must not change diagnosability. */
+    if (!cg->freestanding
         && (cg->needs_panic || cg->needs_bounds || cg->needs_slice)) {
         buf_puts(&out,
                  "#include <stdio.h>\n#include <stdlib.h>\n"
-                 "static void __zov_panic(const char *msg, "
-                 "const char *file, int line, int col) {\n"
-                 "    fprintf(stderr, \"thread 'main' panicked at "
-                 "'%s'\\n  --> %s:%d:%d\\n\", msg, file, line, col);\n"
+                 "static void __zov_panic(const char *code, "
+                 "const char *msg, const char *file, int line, "
+                 "int col) {\n"
+                 "    fprintf(stderr, \"Zov runtime error\\n\\n"
+                 "error[%s]: %s\\n  --> %s:%d:%d\\n\",\n"
+                 "            code, msg, file, line, col);\n"
                  "    exit(101);\n"
                  "}\n");
     }
     if (cg->needs_bounds) {
         if (cg->freestanding) {
-            cg->needs_abort = 1;
             buf_puts(&out,
                      "static inline size_t zov_bounds(size_t i, "
-                     "size_t n) {\n"
+                     "size_t n, const char *f, int l, int c) {\n"
                      "    if (i >= n) {\n"
-                     "        zov_panic(\"index out of bounds\", \"?\", "
-                     "0);\n"
+                     "        zov_panic(\"E1001\", \"index out of bounds\", "
+                     "f, l, c);\n"
                      "    }\n"
                      "    return i;\n"
                      "}\n");
-        } else if (cg->debug) {
-            buf_puts(&out, "#include <stdlib.h>\n"
-                           "static size_t zov_bounds(size_t i, size_t n) {\n"
-                           "    if (i >= n) {\n"
-                           "        __zov_panic(\"index out of bounds\", "
-                           "\"?\", 0, 0);\n"
-                           "    }\n"
-                           "    return i;\n"
-                           "}\n");
         } else {
-            buf_puts(&out, "#include <stdlib.h>\n"
-                           "static size_t zov_bounds(size_t i, size_t n) {\n"
-                           "    if (i >= n) {\n"
-                           "        abort();\n"
-                           "    }\n"
-                           "    return i;\n"
-                           "}\n");
+            buf_puts(&out,
+                     "static size_t zov_bounds(size_t i, size_t n, "
+                     "const char *f, int l, int c) {\n"
+                     "    if (i >= n) {\n"
+                     "        __zov_panic(\"E1001\", \"index out of bounds\", "
+                     "f, l, c);\n"
+                     "    }\n"
+                     "    return i;\n"
+                     "}\n");
         }
     }
     for (size_t i = 0; i < cg->slices.len; i++) {
@@ -2563,9 +2567,10 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         if (cg->needs_slice)
             buf_puts(&out,
                      "static inline size_t zov_slice_check(size_t a, "
-                     "size_t b, size_t n, const char *f, int l) {\n"
+                     "size_t b, size_t n, const char *f, int l, int c) {\n"
                      "    if (a > b || b > n) {\n"
-                     "        zov_panic(\"slice out of bounds\", f, l);\n"
+                     "        zov_panic(\"E1002\", \"slice out of bounds\", "
+                     "f, l, c);\n"
                      "    }\n"
                      "    return a;\n"
                      "}\n");
@@ -2581,35 +2586,24 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "}\n");
         if (cg->needs_str_index)
             buf_puts(&out,
-                     "static uint8_t zov_str_byte(zov_str s, size_t i) {\n"
-                     "    return s.data[zov_bounds(i, s.len)];\n"
+                     "static uint8_t zov_str_byte(zov_str s, size_t i, "
+                     "const char *f, int l, int c) {\n"
+                     "    return s.data[zov_bounds(i, s.len, f, l, c)];\n"
                      "}\n");
     } else {
         if (cg->needs_abort)
             buf_puts(&out, "#include <stdlib.h>\n");
         if (cg->needs_slice) {
-            if (cg->debug) {
             buf_puts(&out, "#include <string.h>\n");
             buf_puts(&out,
                      "static size_t zov_slice_check(size_t a, size_t b, "
-                     "size_t n, const char *f, unsigned long l) {\n"
+                     "size_t n, const char *f, unsigned long l, int c) {\n"
                      "    if (a > b || b > n) {\n"
-                     "        __zov_panic(\"slice out of bounds\", f, "
-                     "(int)l, 0);\n"
+                     "        __zov_panic(\"E1002\", \"slice out of bounds\", "
+                     "f, (int)l, c);\n"
                      "    }\n"
                      "    return a;\n"
                      "}\n");
-            } else {
-            buf_puts(&out, "#include <string.h>\n");
-            buf_puts(&out,
-                     "static size_t zov_slice_check(size_t a, size_t b, "
-                     "size_t n, const char *f, unsigned long l) {\n"
-                     "    if (a > b || b > n) {\n"
-                     "        abort();\n"
-                     "    }\n"
-                     "    return a;\n"
-                     "}\n");
-            }
         }
         if (cg->needs_string_eq || cg->needs_string) {
             buf_puts(&out, "#include <string.h>\n");
@@ -2623,8 +2617,9 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         }
         if (cg->needs_str_index)
             buf_puts(&out,
-                     "static uint8_t zov_str_byte(zov_str s, size_t i) {\n"
-                     "    return s.data[zov_bounds(i, s.len)];\n"
+                     "static uint8_t zov_str_byte(zov_str s, size_t i, "
+                     "const char *f, int l, int c) {\n"
+                     "    return s.data[zov_bounds(i, s.len, f, l, c)];\n"
                      "}\n");
     }
     if (cg->needs_strcmp) {
@@ -2704,15 +2699,16 @@ char *codegen_generate_mode(Program *prog, int test_mode)
             if (cg->freestanding) {
                 buf_puts(&out,
                          "static void zov_string_oom(void) {\n"
-                         "    zov_panic(\"string allocation failed\", "
-                         "\"?\", 0);\n"
+                         "    zov_panic(\"E1007\", \"string allocation "
+                         "failed\", \"?\", 0, 0);\n"
                          "    for (;;) { }\n"
                          "}\n");
             } else {
                 buf_puts(&out,
                          "#include <string.h>\n#include <stdio.h>\n"
                          "static void zov_string_oom(void) {\n"
-                         "    fprintf(stderr, \"zov: out of memory\\n\");\n"
+                         "    fprintf(stderr, \"Zov runtime error\\n\\n"
+                         "error[E1007]: out of memory\\n\");\n"
                          "    abort();\n"
                          "}\n");
             }
@@ -2732,12 +2728,13 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "    if ((data == NULL && len != 0u) || len > cap) {\n");
             if (cg->freestanding)
                 buf_puts(&out,
-                         "        zov_panic(\"invalid String::from_owned\", "
-                         "\"?\", 0);\n"
+                         "        zov_panic(\"E1008\", "
+                         "\"invalid String::from_owned\", \"?\", 0, 0);\n"
                          "        for (;;) { }\n");
             else
                 buf_puts(&out,
-                         "        fprintf(stderr, \"zov: invalid "
+                         "        fprintf(stderr, \"Zov runtime "
+                         "error\\n\\nerror[E1008]: invalid "
                          "String::from_owned\\n\");\n"
                          "        abort();\n");
             buf_puts(&out,

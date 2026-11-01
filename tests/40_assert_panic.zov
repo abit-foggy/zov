@@ -1,0 +1,6 @@
+// runtime panics carry a code and the original Zov source location
+export fn main() i32 = {
+    let ok: bool = false;
+    assert(ok);
+    return 0;
+};

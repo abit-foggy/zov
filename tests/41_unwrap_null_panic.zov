@@ -1,0 +1,6 @@
+// forcing a null pointer panics with the unwrap site, not "?:0:0"
+export fn main() i32 = {
+    let p: nullable *i32 = null;
+    let q: *i32 = p!;
+    return *q;
+};

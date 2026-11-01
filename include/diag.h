@@ -140,6 +140,14 @@ typedef struct {
 #define E0806 "E0806"
 #define E0901 "E0901"
 #define E0902 "E0902"
+#define E1001 "E1001"
+#define E1002 "E1002"
+#define E1003 "E1003"
+#define E1004 "E1004"
+#define E1005 "E1005"
+#define E1006 "E1006"
+#define E1007 "E1007"
+#define E1008 "E1008"
 #define W0001 "W0001"
 
 const DiagCodeInfo *diag_code_lookup(const char *code);

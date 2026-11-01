@@ -261,10 +261,39 @@ run_stdin() { # name source input_line expected_stdout
     pass "$name"
 }
 
-run_panic() { # name source expected_stderr_text
+check_panic_report() { # name code message_log
+    name=$1
+    code=$2
+    message=$3
+    log=$4
+    if [ "$(head -1 "$log" 2>/dev/null)" != "Zov runtime error" ]; then
+        fail "$name (missing runtime error header)"
+        show_file "$log"
+        return 1
+    fi
+    if ! grep -qF "error[$code]: $message" "$log"; then
+        fail "$name (missing runtime diagnostic [$code]: $message)"
+        show_file "$log"
+        return 1
+    fi
+    if ! grep -qE '^  --> .*\.zov:[0-9]+:[0-9]+$' "$log"; then
+        fail "$name (runtime panic lost its source location)"
+        show_file "$log"
+        return 1
+    fi
+    if grep -q '?:0:0' "$log"; then
+        fail "$name (runtime panic used a fake source location)"
+        show_file "$log"
+        return 1
+    fi
+    return 0
+}
+
+run_panic() { # name source expected_code expected_stderr_text
     name=$1
     source=$2
-    expected=$3
+    code=$3
+    expected=$4
     output=$TMP/$name
     compile_zov "$name" "$source" "$output" || return
     run_program "$name" "$output" /dev/null
@@ -284,12 +313,35 @@ run_panic() { # name source expected_stderr_text
         show_file "$TMP/$name.err"
         return
     fi
-    if ! grep -qF "$expected" "$TMP/$name.err"; then
-        fail "$name (panic message missing: $expected)"
-        show_file "$TMP/$name.err"
+    check_panic_report "$name" "$code" "$expected" "$TMP/$name.err" || return
+    pass "$name"
+}
+
+run_panic_release() { # name source expected_code expected_stderr_text
+    label=$1
+    source=$2
+    code=$3
+    expected=$4
+    output=$TMP/$label-release
+    run_limited "$TMP/$label-release.compile.out" \
+        "$TMP/$label-release.compile.err" \
+        "$ZOV" --release "$source" -o "$output"
+    status=$?
+    if [ "$status" -ne 0 ] || [ ! -x "$output" ]; then
+        fail "$label (release compile exited $status)"
+        show_file "$TMP/$label-release.compile.err"
         return
     fi
-    pass "$name"
+    run_program "$label-release" "$output" /dev/null
+    status=$?
+    if [ "$status" -ne 101 ]; then
+        fail "$label (release run exited $status, want 101)"
+        show_file "$TMP/$label-release.err"
+        return
+    fi
+    check_panic_report "${label}-release" "$code" "$expected" \
+        "$TMP/$label-release.err" || return
+    pass "$label release"
 }
 
 run_neg() { # absolute source path
@@ -1014,8 +1066,12 @@ run_stdout 34_owned_nested tests/34_owned_nested.zov tests/34_owned_nested.expec
 run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.expected
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
 run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
-run_panic 38_div_by_zero tests/38_div_by_zero.zov "integer division by zero"
-run_panic 39_bounds_panic tests/39_bounds_panic.zov "index out of bounds"
+run_panic 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero"
+run_panic 39_bounds_panic tests/39_bounds_panic.zov E1001 "index out of bounds"
+run_panic 40_assert_panic tests/40_assert_panic.zov E1006 "assert failed:"
+run_panic 41_unwrap_null_panic tests/41_unwrap_null_panic.zov E1004 "unwrap of null"
+run_panic_release 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero"
+run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index out of bounds"
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
