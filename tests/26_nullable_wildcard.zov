@@ -1,8 +1,7 @@
 // nullable wildcard arms cover both the null and non-null paths
 use <stdio.h> as c;
-use <stdlib.h> as s;
 
-export fn classify(p: nullable *i8) i32 = {
+export fn classify(p: nullable *c::FILE) i32 = {
     let tag: i32 = match (p) {
         case null => -1,
         case _ => 1,
@@ -10,7 +9,7 @@ export fn classify(p: nullable *i8) i32 = {
     return tag;
 };
 
-export fn wildcard_only(p: nullable *i8) i32 = {
+export fn wildcard_only(p: nullable *c::FILE) i32 = {
     let tag: i32 = match (p) {
         case _ => 5,
     };
@@ -18,8 +17,10 @@ export fn wildcard_only(p: nullable *i8) i32 = {
 };
 
 export fn main() i32 = {
-    let missing = s::getenv("ZOV_SURELY_UNSET_VAR_123");
-    let present = s::getenv("PATH");
+    let missing = c::fopen("/zov/definitely/missing/file", "r");
+    let present = c::tmpfile();
+    let fp: *c::FILE = present!;
+    defer c::fclose(fp);
     let a = classify(missing);
     let b = classify(present);
     let d = wildcard_only(missing);
