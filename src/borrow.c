@@ -1213,6 +1213,22 @@ static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
         if (e->u.slice.base->type
             && e->u.slice.base->type->kind == TY_PTR)
             return; /* raw-pointer slices have no tracked owner */
+        if (e->u.slice.base->type
+            && e->u.slice.base->type->kind == TY_STR) {
+            /* slicing a local str copies its data pointer; the local
+             * binding itself owns no bytes.  Inherit the loans the view
+             * already carries (for example a view of a local String). */
+            const char *vr = resolve_root(b, e->u.slice.base);
+            if (vr && root_is_local(b, vr)) {
+                for (size_t i = 0; i < b->loans.len; i++) {
+                    Loan *l = &b->loans.items[i];
+                    if (l->active && l->holder == vr)
+                        push_place_root(roots, l->root, l->place,
+                                        l->exclusive);
+                }
+                return;
+            }
+        }
         {
             const char *root = resolve_root(b, e->u.slice.base);
             if (root) {
