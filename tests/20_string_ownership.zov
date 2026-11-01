@@ -1,0 +1,66 @@
+use std::fs as fs;
+use std::io;
+
+fn make_label(prefix: str, n: i32) String = {
+    return prefix + n;
+};
+
+fn save(path: str, content: str) (i32 | FsError) = {
+    fs::write_str(path, content)?;
+    return 0;
+};
+
+export fn main() i32 = {
+    let long: str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+    let big = long + long + long + long;
+    assert(big.len == 1200usize);
+
+    let nested = ("a" + 1) + ("b" + 2);
+    assert(nested.view() == "a1b2");
+
+    let n = 7;
+    let interp = "n={n} len={big.len}";
+    assert(interp.view() == "n=7 len=1200");
+
+    let empty = "";
+    let made = make_label("id-", 42);
+    assert(made.view() == "id-42");
+    let made_view: str = made.view();
+    assert(made_view == "id-42");
+
+    let nul = String::from("A\0B");
+    assert(nul.len == 3usize);
+    let nulv: str = nul.view();
+    assert(nulv.len == 3usize);
+    assert(nulv.ptr[0usize] == 65u8);
+    assert(nulv.ptr[1usize] == 0u8);
+    assert(nulv.ptr[2usize] == 66u8);
+
+    let path: str = "zov_string_ownership.txt";
+    let content = long + "END";
+    let saved = save(path, content.view());
+    let saved_code: i32 = match (saved) {
+        case let rc: i32 => rc,
+        case FsError => return 10,
+    };
+    if (saved_code != 0) { return saved_code; };
+
+    let read = fs::read_str(path);
+    let loaded: String = match (read) {
+        case let s: String => s,
+        case FsError => return 11,
+    };
+    assert(loaded.len == content.len);
+    assert(loaded.view() == content.view());
+
+    io::println("strings ok {big.len} {nul.len} empty={empty.len}");
+    loaded.free();
+    content.free();
+    nul.free();
+    made.free();
+    interp.free();
+    nested.free();
+    big.free();
+    return 0;
+};

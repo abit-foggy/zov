@@ -56,5 +56,6 @@ export fn main() i32 = {
     let before = s.len();
     s.free();
     if (before != 1) { return 1; };
+    v.free();
     return 0;
 };

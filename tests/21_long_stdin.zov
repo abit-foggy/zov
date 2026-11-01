@@ -1,0 +1,13 @@
+use std::io;
+
+export fn main() i32 = {
+    let r = io::readline();
+    let line: String = match (r) {
+        case let s: String => s,
+        case Eof => return 2,
+        case IoError => return 3,
+    };
+    io::println("len={line.len}");
+    line.free();
+    return 0;
+};
