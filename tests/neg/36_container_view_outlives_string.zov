@@ -1,0 +1,10 @@
+// MUST FAIL: Vec[str] elements borrow the source String
+use std::str as strings;
+
+export fn main() i32 = {
+    let s = String::from("a,b,c");
+    let parts = strings::split_byte(s.view(), 44u8);
+    s.free();
+    parts.free();
+    return 0;
+};

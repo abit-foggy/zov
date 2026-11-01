@@ -1,0 +1,49 @@
+// borrow scopes: reborrows, shared-ref copies, block-local loans, and
+// tracked views through containers
+use std::io;
+use std::str as strings;
+
+fn id_view(s: str) str = {
+    return s;
+};
+
+fn bump(r: &mut i32) void = {
+    *r = *r + 1;
+};
+
+fn reborrow(r: &mut i32) void = {
+    let b: &mut i32 = &mut *r;
+    *b = *b + 1;
+    bump(r);
+};
+
+export fn main() i32 = {
+    let mut x: i32 = 0;
+    reborrow(&mut x);
+
+    let s1: &i32 = &x;
+    let s2: &i32 = s1;
+    let sum: i32 = *s1 + *s2;
+
+    {
+        let r: &mut i32 = &mut x;
+        *r = 10;
+    };
+    bump(&mut x);
+
+    let s = String::from("hello");
+    let v: str = s.view();
+    let w: str = v;
+    io::println("len={w.len}");
+    s.free();
+
+    let src = String::from("a,b");
+    let parts = strings::split_byte(src.view(), 44u8);
+    let n = parts.len();
+    parts.free();
+    src.free();
+
+    let hv: str = id_view("ok");
+    io::println("n={n} sum={sum} x={x} hv={hv}");
+    return 0;
+};

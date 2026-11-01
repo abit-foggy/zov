@@ -1,0 +1,8 @@
+// MUST FAIL: a shared reference cannot be used to mutate its pointee
+export fn clobber(p: &i32) void = {
+    *p = 5;
+};
+
+export fn main() i32 = {
+    return 0;
+};

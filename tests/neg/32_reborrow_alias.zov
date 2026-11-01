@@ -1,0 +1,10 @@
+// MUST FAIL: r is frozen while b reborrows it
+export fn outer(r: &mut i32) void = {
+    let b: &mut i32 = &mut *r;
+    *r = 1;
+    *b = 2;
+};
+
+export fn main() i32 = {
+    return 0;
+};

@@ -11,7 +11,7 @@
 08_ref_in_struct_field.zov|2|28|-|borrowed reference cannot be stored
 09_aliasing_call_args.zov|10|23|-|conflicting borrows of 'x'
 10_mutate_under_shared.zov|7|5|-|shared borrow is active
-11_return_ref_to_local.zov|4|5|-|cannot return reference to local
+11_return_ref_to_local.zov|4|12|-|cannot return reference to local
 12_unprintable_concat.zov|32|17|-|cannot concatenate str with S
 13_push_after_free.zov|8|5|-|value was moved
 14_push_on_immutable.zov|6|5|-|requires a mutable binding
@@ -30,3 +30,10 @@
 27_copied_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 'w'
 28_trim_view_outlives_string.zov|9|5|-|cannot free 's': it is still borrowed by 't'
 29_nested_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 't'
+30_write_through_shared.zov|3|5|-|cannot write through shared reference 'p'
+31_copy_mut_ref.zov|7|5|-|use of moved value 'r'
+32_reborrow_alias.zov|4|5|-|mutably borrowed by 'b'
+33_return_ref_binding.zov|5|12|-|cannot return borrowed data from local 'x'
+34_move_resource_field.zov|7|20|-|cannot move field 'inner'
+35_return_local_view.zov|4|12|-|cannot return borrowed data from local 's'
+36_container_view_outlives_string.zov|7|5|-|cannot free 's': it is still borrowed by 'parts'

@@ -1,0 +1,9 @@
+// MUST FAIL: partial moves of resource fields are rejected
+export type Inner = resource struct { fd: i32 };
+export type Outer = struct { inner: Inner, tag: i32 };
+
+export fn main() i32 = {
+    let o = Outer{ inner = Inner{ fd = 1 }, tag = 2 };
+    let p: Inner = o.inner;
+    return 0;
+};

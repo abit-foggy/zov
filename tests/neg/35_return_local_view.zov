@@ -1,0 +1,9 @@
+// MUST FAIL: the returned view outlives its local owner
+fn leak() str = {
+    let s = String::from("dangling");
+    return s.view();
+};
+
+export fn main() i32 = {
+    return 0;
+};

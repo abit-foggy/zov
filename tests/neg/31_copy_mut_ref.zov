@@ -1,0 +1,9 @@
+// MUST FAIL: a &mut reference is moved, not copied
+export fn main() i32 = {
+    let mut x: i32 = 1;
+    let r: &mut i32 = &mut x;
+    let s: &mut i32 = r;
+    *s = 2;
+    *r = 3;
+    return 0;
+};

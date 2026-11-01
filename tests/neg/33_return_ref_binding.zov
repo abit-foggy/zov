@@ -1,0 +1,10 @@
+// MUST FAIL: the reference binding still points at a stack local
+fn pick() &i32 = {
+    let x: i32 = 7;
+    let r: &i32 = &x;
+    return r;
+};
+
+export fn main() i32 = {
+    return 0;
+};
