@@ -5,7 +5,7 @@ use std::io;
 export fn main() i32 = {
     let mut v = vec::new[String]();
     v.push(String::from("a"));
-    let r: &String = v.get_ref(0usize);
+    let r: &String = v.getref(0usize);
     v.free();
     io::println(r.view());
     return 0;

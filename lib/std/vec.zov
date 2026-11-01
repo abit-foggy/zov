@@ -35,7 +35,7 @@ export type Vec[T] = resource struct {
 
 export type Empty = !void;
 
-// New vectors own a one-slot buffer so as_slice() never has to conjure a
+// New vectors own a one-slot buffer so asslice() never has to conjure a
 // pointer for the empty case.  Capacity grows geometrically from there.
 export fn new[T]() Vec[T] = {
     return Vec[T]{ data = mem::alloc[T](1usize), length = 0usize,
@@ -54,7 +54,7 @@ export fn (self: &mut Vec[T]) reserve(extra: usize) void = {
         cap = cap * 2usize + 1usize;
     };
     let p: *T = self.data!;
-    self.data = mem::realloc_buf[T](p, cap);
+    self.data = mem::reallocbuf[T](p, cap);
     self.cap = cap;
 };
 
@@ -73,7 +73,7 @@ export fn (self: &Vec[T]) get(idx: usize) T = {
 
 // Borrowed element access: safe for owned elements because the returned
 // reference keeps the vector borrowed for its lifetime.
-export fn (self: &Vec[T]) get_ref(idx: usize) &T = {
+export fn (self: &Vec[T]) getref(idx: usize) &T = {
     if (idx >= self.length) { c::abort(); };
     return &((self.data!)[idx]);
 };
@@ -156,7 +156,7 @@ export fn (self: &Vec[T]) len() usize = {
     return self.length;
 };
 
-export fn (self: &Vec[T]) as_slice() []T = {
+export fn (self: &Vec[T]) asslice() []T = {
     let d: *T = self.data!;
     return d[0..self.length];
 };
@@ -172,11 +172,11 @@ export fn (self: Vec[T]) free() void = {
         mem::drop[T](d[i]);
         i += 1usize;
     };
-    mem::free_ptr[T](d);
+    mem::freeptr[T](d);
 };
 
 // Kept for callers written before Vec.free() destroyed elements; it now
 // just delegates so there is one destruction path.
-export fn free_strings(v: Vec[String]) void = {
+export fn freestrings(v: Vec[String]) void = {
     v.free();
 };

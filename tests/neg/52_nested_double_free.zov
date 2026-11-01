@@ -6,7 +6,7 @@ export fn main() i32 = {
     let mut items = vec::new[String]();
     items.push(String::from("x"));
     let b = Bag{ items = items, id = 1 };
-    vec::free_strings(b.items);
-    vec::free_strings(b.items);
+    vec::freestrings(b.items);
+    vec::freestrings(b.items);
     return b.id;
 };

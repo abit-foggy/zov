@@ -703,7 +703,7 @@ run_freestanding() {
     # pure std::math and std::str stay available without a hosted libc
     printf 'use std::math as m;\nexport fn kmain() i32 = {\n    let r: f64 = m::sqrt(9.0f64);\n    return m::min(1, 2) + m::popcnt(7u32) + m::nextpow2(9u32) as i32 + r as i32;\n};\n' \
         >"$TMP/fs_math_pure.zov"
-    printf 'use std::str as strlib;\nexport fn kmain() i32 = {\n    let t: str = strlib::trim(" hi ");\n    if (!strlib::starts_with(t, "h")) { return 1; };\n    let r = strlib::find_byte(t, 105u8);\n    let n: usize = match (r) {\n        case let i: usize => i,\n        case strlib::NotFound => 9usize,\n    };\n    return n as i32;\n};\n' \
+    printf 'use std::str as strlib;\nexport fn kmain() i32 = {\n    let t: str = strlib::trim(" hi ");\n    if (!strlib::startswith(t, "h")) { return 1; };\n    let r = strlib::findbyte(t, 105u8);\n    let n: usize = match (r) {\n        case let i: usize => i,\n        case strlib::NotFound => 9usize,\n    };\n    return n as i32;\n};\n' \
         >"$TMP/fs_str_pure.zov"
     for fs_case in fs_math_pure fs_str_pure; do
         run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \
@@ -738,9 +738,9 @@ run_freestanding() {
 
     # hosted-only standard modules must be rejected at the user's call site
     fs_reject_ok=0
-    printf 'use std::fs as fs;\nexport fn kmain() void = {\n    let r = fs::read_str("x");\n};\n' \
+    printf 'use std::fs as fs;\nexport fn kmain() void = {\n    let r = fs::readstr("x");\n};\n' \
         >"$TMP/fs_fs.zov"
-    printf 'use std::env as env;\nexport fn kmain() void = {\n    let n = env::args_count();\n};\n' \
+    printf 'use std::env as env;\nexport fn kmain() void = {\n    let n = env::argscount();\n};\n' \
         >"$TMP/fs_env.zov"
     printf 'use std::time as time;\nexport fn kmain() void = {\n    time::sleepms(1u32);\n};\n' \
         >"$TMP/fs_time.zov"
@@ -748,7 +748,7 @@ run_freestanding() {
         >"$TMP/fs_vec.zov"
     printf 'use std::math as math;\nexport fn kmain() void = {\n    let r = math::pow(2.0f64, 3.0f64);\n};\n' \
         >"$TMP/fs_math.zov"
-    printf 'use std::strsplit as strlib;\nexport fn kmain() void = {\n    let p = strlib::split_byte("a,b", 44u8);\n    p.free();\n};\n' \
+    printf 'use std::strsplit as strlib;\nexport fn kmain() void = {\n    let p = strlib::splitbyte("a,b", 44u8);\n    p.free();\n};\n' \
         >"$TMP/fs_str.zov"
     for fs_case in fs_fs fs_env fs_time fs_vec fs_math fs_str; do
         run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \

@@ -27,7 +27,7 @@
 use std::vec as vec;
 
 // zero-copy split: pieces are sub-slices of the original
-export fn split_byte(s: str, delim: u8) vec::Vec[str] = {
+export fn splitbyte(s: str, delim: u8) vec::Vec[str] = {
     let mut out = vec::new[str]();
     let mut start: usize = 0usize;
     let mut i: usize = 0usize;
@@ -44,7 +44,7 @@ export fn split_byte(s: str, delim: u8) vec::Vec[str] = {
 
 // splits on LF, stripping one trailing CR per line
 export fn lines(s: str) vec::Vec[str] = {
-    let mut out = split_byte(s, 10u8);
+    let mut out = splitbyte(s, 10u8);
     let mut i: usize = 0usize;
     while (i < out.len()) {
         let line: str = out.get(i);

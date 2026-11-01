@@ -3,7 +3,7 @@ use std::strsplit as strings;
 
 export fn main() i32 = {
     let s = String::from("a,b,c");
-    let parts = strings::split_byte(s.view(), 44u8);
+    let parts = strings::splitbyte(s.view(), 44u8);
     s.free();
     parts.free();
     return 0;

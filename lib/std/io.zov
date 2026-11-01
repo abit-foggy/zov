@@ -44,7 +44,7 @@ export fn readline() (String | Eof | IoError) = {
     while (true) {
         let n = u::read(0, (&one[0usize]) as *void, 1usize);
         if (n < 0i64) {
-            mem::free_ptr[u8](buf);
+            mem::freeptr[u8](buf);
             return 1;
         };
         if (n == 0i64) {
@@ -56,17 +56,17 @@ export fn readline() (String | Eof | IoError) = {
         };
         if (len == cap) {
             if (cap > 1073741824usize) {
-                mem::free_ptr[u8](buf);
+                mem::freeptr[u8](buf);
                 return 2;
             };
             cap = cap * 2usize;
-            buf = mem::realloc_buf[u8](buf, cap);
+            buf = mem::reallocbuf[u8](buf, cap);
         };
         buf[len] = one[0usize];
         len += 1usize;
     };
     if (!got) {
-        mem::free_ptr[u8](buf);
+        mem::freeptr[u8](buf);
         return Eof;
     };
     if (len > 0usize && buf[len - 1usize] == 13u8) {

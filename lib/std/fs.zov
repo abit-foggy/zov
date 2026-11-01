@@ -29,7 +29,7 @@ use std::mem as mem;
 export type FsError = !i32;
 
 // Reads the whole file into an owned String.  The caller must free it.
-export fn read_str(path: str) (String | FsError) = {
+export fn readstr(path: str) (String | FsError) = {
     let raw: nullable *c::FILE = c::fopen(path, "rb");
     let fp: *c::FILE = match (raw) {
         case null => return 1,
@@ -48,7 +48,7 @@ export fn read_str(path: str) (String | FsError) = {
     return String::from_owned(buf, n, cap);
 };
 
-export fn write_str(path: str, content: str) (void | FsError) = {
+export fn writestr(path: str, content: str) (void | FsError) = {
     let raw: nullable *c::FILE = c::fopen(path, "w");
     let fp: *c::FILE = match (raw) {
         case null => return 1,

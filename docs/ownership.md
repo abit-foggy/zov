@@ -142,7 +142,7 @@ type owns resources (`String`, `Vec`, `Map`, `Arena`, `&mut T`, or a
 resource-containing struct/union) is rejected with `E0611`, because the
 returned copy would alias the container's allocation.
 
-Use `Vec.get_ref(idx)` / `Map.get_ref(key)` for borrowed reads: they
+Use `Vec.getref(idx)` / `Map.getref(key)` for borrowed reads: they
 return `&T` / `&V`, keep the container borrowed while the reference is
 live, and abort on an out-of-bounds/missing key. Use `pop`, `remove`,
 `replace`, or `take` when ownership must move out of the container.
@@ -154,7 +154,7 @@ a second owner of a resource.
 An arena owns one byte buffer. Values placed inside it keep their own
 ownership rules: resetting or freeing the arena does not call
 `mem::drop` on anything stored in the bump region. Drop owned values
-first, then reset or free. `alloc_bytes` checks alignment and capacity
+first, then reset or free. `allocbytes` checks alignment and capacity
 with `E1006` rather than wrapping the offset.
 
 ## Allocation
@@ -164,7 +164,7 @@ with `E1006` rather than wrapping the offset.
 - `alloc[T](count)` zeroes memory and rejects `count * sizeof(T)`
   overflow (`E1006`).
 - A zero count allocates one element, so the result is never null.
-- `realloc_buf[T]` rejects size overflow and stores the result only after
+- `reallocbuf[T]` rejects size overflow and stores the result only after
   success, so a failed growth never loses the original pointer.
 - Allocation failure aborts the process; there is no recoverable
   allocation-error type.
@@ -180,7 +180,7 @@ Hosted builds can use all of `std`. Freestanding builds reject
 `std::env`, `std::time`, and `std::strsplit` with `E0306` at the call
 site, plus `String::from` and string concatenation. Pure `std::math`
 helpers (`min`, `max`, `clamp`, `abs`, `sqrt`, `popcnt`, `nextpow2`) and
-all of `std::str` (`trim`, `starts_with`, `ends_with`, `find_byte`,
+all of `std::str` (`trim`, `startswith`, `endswith`, `findbyte`,
 `eq`) work freestanding; the libm-backed math functions and allocating
 splitting helpers are gated individually (`math::pow`, `strsplit::lines`,
 ...). `String::from_owned` remains available: the platform provides the

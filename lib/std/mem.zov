@@ -47,7 +47,7 @@ export fn alloc[T](count: usize) *T = {
     return (raw!) as *T;
 };
 
-export fn realloc_buf[T](ptr: *T, new_count: usize) *T = {
+export fn reallocbuf[T](ptr: *T, new_count: usize) *T = {
     let elem: usize = sizeof[T]();
     assert(new_count <= ((~0usize) / elem));
     let mut n: usize = new_count;
@@ -57,6 +57,6 @@ export fn realloc_buf[T](ptr: *T, new_count: usize) *T = {
     return (raw!) as *T;
 };
 
-export fn free_ptr[T](ptr: *T) void = {
+export fn freeptr[T](ptr: *T) void = {
     c::free(ptr as *void);
 };

@@ -38,7 +38,7 @@ export fn new(cap: usize) Arena = {
 
 // Bump allocation with 8-byte alignment.  Capacity exhaustion and size
 // overflow are diagnostics (E1006) rather than a wrapped offset.
-export fn (self: &mut Arena) alloc_bytes(size: usize) *u8 = {
+export fn (self: &mut Arena) allocbytes(size: usize) *u8 = {
     assert(self.offset <= ((~0usize) - 7usize));
     let start: usize = (self.offset + 7usize) & (~7usize);
     assert(start <= self.cap);
@@ -58,14 +58,14 @@ export fn (self: &mut Arena) reset() void = {
 export fn (self: Arena) free() void = {
     if (self.buf == null) { return; };
     let d: *u8 = self.buf!;
-    mem::free_ptr[u8](d);
+    mem::freeptr[u8](d);
 };
 
 test "arena bump and reset" {
     let mut a = new(1024usize);
-    let p = a.alloc_bytes(5usize);
+    let p = a.allocbytes(5usize);
     let first: usize = a.offset;
-    let q = a.alloc_bytes(3usize);
+    let q = a.allocbytes(3usize);
     let second: usize = a.offset;
     assert(second > first);
     assert(q != p);

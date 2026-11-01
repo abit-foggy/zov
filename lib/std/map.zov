@@ -64,9 +64,9 @@ export fn (self: &mut Map[K, V]) grow() void = {
         };
         i += 1usize;
     };
-    if (self.keys != null) { mem::free_ptr[K](self.keys!); };
-    if (self.vals != null) { mem::free_ptr[V](self.vals!); };
-    if (self.states != null) { mem::free_ptr[u8](self.states!); };
+    if (self.keys != null) { mem::freeptr[K](self.keys!); };
+    if (self.vals != null) { mem::freeptr[V](self.vals!); };
+    if (self.states != null) { mem::freeptr[u8](self.states!); };
     self.keys = nk;
     self.vals = nv;
     self.states = ns;
@@ -112,9 +112,9 @@ export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
     if (!inserted) { c::abort(); };
 };
 
-// Borrowed value access.  Missing keys abort, matching Vec.get_ref;
+// Borrowed value access.  Missing keys abort, matching Vec.getref;
 // use get() for the fallible copy form (trivial values only).
-export fn (self: &Map[K, V]) get_ref(key: K) &V = {
+export fn (self: &Map[K, V]) getref(key: K) &V = {
     if (self.cap == 0usize) { c::abort(); };
     let h: u64 = hash_val[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
@@ -330,18 +330,18 @@ export fn (self: Map[K, V]) free() void = {
             i += 1usize;
         };
     };
-    if (self.keys != null) { mem::free_ptr[K](self.keys!); };
-    if (self.vals != null) { mem::free_ptr[V](self.vals!); };
-    if (self.states != null) { mem::free_ptr[u8](self.states!); };
+    if (self.keys != null) { mem::freeptr[K](self.keys!); };
+    if (self.vals != null) { mem::freeptr[V](self.vals!); };
+    if (self.states != null) { mem::freeptr[u8](self.states!); };
 };
 
 // Kept for callers written before Map.free() destroyed entries.
-export fn free_string_values[K](m: Map[K, String]) void = {
+export fn freestringvalues[K](m: Map[K, String]) void = {
     m.free();
 };
 
 // Borrowed-key convenience wrapper; the source string must outlive the map.
-export fn free_strings(m: Map[str, String]) void = {
+export fn freestrings(m: Map[str, String]) void = {
     m.free();
 };
 

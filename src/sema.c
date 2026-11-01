@@ -1994,7 +1994,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                         }
                 fatal_at(E0611, e->span,
                          "std::%s::get would shallow-copy %s; use "
-                         "get_ref() for borrowed access or an "
+                         "getref() for borrowed access or an "
                          "ownership-transferring API",
                          m->decl->modname, type_spelling(shown));
             }

@@ -17,7 +17,7 @@ in each environment and what they depend on.
 | `std::time` | yes | no (`E0306`) | POSIX `usleep` |
 | `std::math` | yes | partly: pure helpers yes, libm functions no (`E0306`) | pure Zov; `math.h`/`stdlib.h` only for hosted functions |
 | `std::str` | yes | yes | nothing: zero-copy queries only |
-| `std::strsplit` | yes | no (`E0306`) | `std::vec` for `split_byte`/`lines` |
+| `std::strsplit` | yes | no (`E0306`) | `std::vec` for `splitbyte`/`lines` |
 
 ## Notes
 
@@ -30,9 +30,9 @@ in each environment and what they depend on.
   The diagnostic is `E0306` at the first call site, for example
   `std::vec depends on std::mem and is unavailable in freestanding
   builds` or `std::math::pow uses the hosted C math library`.
-- `std::str` is pure: `eq`, `starts_with`, `ends_with`, `find_byte`, and
+- `std::str` is pure: `eq`, `startswith`, `endswith`, `findbyte`, and
   `trim` are zero-allocation sub-slice queries and work in kernels.
-  Allocating `split_byte` and `lines` live in `std::strsplit`, which is
+  Allocating `splitbyte` and `lines` live in `std::strsplit`, which is
   hosted-only because it returns `Vec[str]`.
 - `std::math` keeps the established single-module API but gates each
   function. Pure helpers (`min`, `max`, `clamp`, `abs`, `sqrt`, `popcnt`,

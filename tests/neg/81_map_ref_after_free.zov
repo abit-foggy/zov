@@ -5,7 +5,7 @@ use std::io;
 export fn main() i32 = {
     let mut m = map::new[str, String]();
     m.insert("k", String::from("v"));
-    let r: &String = m.get_ref("k");
+    let r: &String = m.getref("k");
     m.free();
     io::println(r.view());
     return 0;

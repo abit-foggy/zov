@@ -29,20 +29,20 @@ export fn eq(a: str, b: str) bool = {
     return a == b;
 };
 
-export fn starts_with(s: str, prefix: str) bool = {
+export fn startswith(s: str, prefix: str) bool = {
     if (s.len < prefix.len) { return false; };
     let head: str = s[0..prefix.len];
     return head == prefix;
 };
 
-export fn ends_with(s: str, suffix: str) bool = {
+export fn endswith(s: str, suffix: str) bool = {
     if (s.len < suffix.len) { return false; };
     let start: usize = s.len - suffix.len;
     let tail: str = s[start..];
     return tail == suffix;
 };
 
-export fn find_byte(s: str, ch: u8) (usize | NotFound) = {
+export fn findbyte(s: str, ch: u8) (usize | NotFound) = {
     for (let i in 0..s.len) {
         if (s.ptr[i] == ch) { return i; };
     };
@@ -71,17 +71,17 @@ export fn trim(s: str) str = {
     return s[start..end];
 };
 
-test "starts_with and trim" {
+test "startswith and trim" {
     let s: str = "  hello  ";
     let t = trim(s);
     assert(t == "hello");
-    assert(starts_with("zovlang", "zov"));
-    assert(ends_with("zovlang", "lang"));
+    assert(startswith("zovlang", "zov"));
+    assert(endswith("zovlang", "lang"));
 };
 
-test "find_byte" {
+test "findbyte" {
     let path: str = "main.zov";
-    let r = find_byte(path, 46u8);
+    let r = findbyte(path, 46u8);
     let dot: usize = match (r) {
         case let i: usize => i,
         case NotFound => 99usize,

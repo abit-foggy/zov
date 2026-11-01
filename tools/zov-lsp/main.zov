@@ -332,7 +332,7 @@ export fn json_get_int(json: str, key: str, out: &mut i64) bool = {
 // ---- diagnostics ----
 
 export fn uri_to_path(uri: str) str = {
-    if (strlib::starts_with(uri, "file://")) {
+    if (strlib::startswith(uri, "file://")) {
         return uri[7..];
     };
     return uri;
@@ -368,20 +368,20 @@ export fn run_check(path: str) str = {
 // extracts <line>, <col>, and message from one zovc diagnostic row
 export fn parse_diag(line: str, ln: &mut i64, col: &mut i64,
                      msg: &mut str) bool = {
-    let r1 = strlib::find_byte(line, 58u8);
+    let r1 = strlib::findbyte(line, 58u8);
     let i1: usize = match (r1) {
         case let v: usize => v,
         case strlib::NotFound => return false,
     };
     let rest1: str = line[(i1 + 1usize)..];
-    let r2 = strlib::find_byte(rest1, 58u8);
+    let r2 = strlib::findbyte(rest1, 58u8);
     let i2: usize = match (r2) {
         case let v: usize => v,
         case strlib::NotFound => return false,
     };
     *ln = parse_i64(rest1[0..i2]);
     let rest2: str = rest1[(i2 + 1usize)..];
-    let r3 = strlib::find_byte(rest2, 58u8);
+    let r3 = strlib::findbyte(rest2, 58u8);
     let i3: usize = match (r3) {
         case let v: usize => v,
         case strlib::NotFound => return false,
@@ -548,7 +548,7 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)
-    let fns: [22]str = ["push", "pop", "len", "as_slice", "sort",
+    let fns: [22]str = ["push", "pop", "len", "asslice", "sort",
                         "insert", "get", "free", "sizeof", "hash_val",
                         "sleep", "sleepms", "min", "max", "clamp", "abs",
                         "sqrt", "pow", "floor", "ceil", "round",
@@ -584,15 +584,15 @@ export fn main() i32 = {
     docs.insert("sizeof", "`sizeof[T]()` — byte size of `T` as `usize`");
     docs.insert("orelse", "`expr orelse fallback` — coalesces `nullable *T` / tagged unions; `orelse return x` diverges");
     docs.insert("resource", "`resource struct` — move-only type; the borrow checker prevents use-after-move and double-frees");
-    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: push, pop, get, set, len, as_slice, sort, free");
+    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: push, pop, get, set, len, asslice, sort, free");
     docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: insert, get, contains, remove, len, free");
-    docs.insert("std::str", "zero-copy str utilities: eq, starts_with, ends_with, find_byte, trim");
-    docs.insert("std::strsplit", "hosted splitting helpers returning Vec[str]: split_byte, lines");
-    docs.insert("std::arena", "`Arena` — bump allocator: new, alloc_bytes, reset, free");
-    docs.insert("std::fs", "file helpers: write_str, read_str, exists");
+    docs.insert("std::str", "zero-copy str utilities: eq, startswith, endswith, findbyte, trim");
+    docs.insert("std::strsplit", "hosted splitting helpers returning Vec[str]: splitbyte, lines");
+    docs.insert("std::arena", "`Arena` — bump allocator: new, allocbytes, reset, free");
+    docs.insert("std::fs", "file helpers: writestr, readstr, exists");
     docs.insert("std::io", "terminal I/O module: print, println, readline as `(String | Eof | IoError)`, flush");
     docs.insert("std::time", "sleep for fractional seconds or whole milliseconds: sleep(secs: f64), sleepms(ms: u32)");
-    docs.insert("std::env", "CLI + environment: args_count, arg_at, get");
+    docs.insert("std::env", "CLI + environment: argscount, argat, get");
 
     let mut running = true;
     while (running) {
@@ -608,7 +608,7 @@ export fn main() i32 = {
             if (line == "") {
                 break;
             };
-            if (strlib::starts_with(line, "Content-Length:")) {
+            if (strlib::startswith(line, "Content-Length:")) {
                 let tail: str = line[15..];
                 length = parse_i64(tail) as usize;
                 have_len = true;
@@ -653,11 +653,11 @@ export fn main() i32 = {
             if (has_text && text != "") {
                 doc_text.free();
                 doc_text = String::from(text);
-                let _ = fs::write_str(".zov-lsp-buffer.zov", text);
+                let _ = fs::writestr(".zov-lsp-buffer.zov", text);
                 check_path = ".zov-lsp-buffer.zov";
             } else {
                 doc_text.free();
-                doc_text = fs::read_str(path)
+                doc_text = fs::readstr(path)
                     orelse String::new();
             };
             let output: str = run_check(check_path);

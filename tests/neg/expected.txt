@@ -52,7 +52,7 @@
 49_return_match_view.zov|3|12|E0512|cannot return borrowed data from local 's'
 50_match_init_view.zov|8|5|E0502|cannot free 's': it is still borrowed by 'v'
 51_partial_move_use.zov|10|13|E0510|cannot move 'b': a field was already moved
-52_nested_double_free.zov|10|23|E0503|use of moved value 'b.items'
+52_nested_double_free.zov|10|22|E0503|use of moved value 'b.items'
 53_recursive_type.zov|2|26|E0410|recursive type 'A' has infinite size
 54_branch_view.zov|8|5|E0502|cannot free 's': it is still borrowed by 'v'
 55_lines_view_outlives_string.zov|8|5|E0502|cannot free 's': it is still borrowed by 'ls'
