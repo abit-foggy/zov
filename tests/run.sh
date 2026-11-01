@@ -819,6 +819,76 @@ run_freestanding_link() {
 
 /* The minimal runtime defines no allocator symbols: linking generated
  * code against it must still succeed, so those hooks stay optional. */
+run_freestanding_alloc_hook() {
+    require_cmd cc || return
+    source=$ROOT/tests/16_freestanding_alloc_hook.zov
+    require_file "$source" || return
+    cat >"$TMP/rt_hook.c" <<'EOF'
+#include "zov_rt.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+static int frees;
+
+void zov_panic(const char *code, const char *msg, const char *file,
+               int line, int col)
+{
+    fprintf(stderr, "panic %s %s at %s:%d:%d\n", code, msg, file, line, col);
+    exit(101);
+}
+
+void *zov_rt_realloc(void *ptr, size_t size)
+{
+    if (size == 0) { free(ptr); return NULL; }
+    return realloc(ptr, size);
+}
+
+void zov_rt_free(void *ptr)
+{
+    if (ptr) frees++;
+}
+
+int main(void)
+{
+    zov_kmain();
+    if (frees != 1) {
+        fprintf(stderr, "zov_rt_free calls: %d\n", frees);
+        return 3;
+    }
+    printf("hook ok\n");
+    return 0;
+}
+EOF
+    run_limited "$TMP/hook.c" "$TMP/hook.emit.err" \
+        "$ZOV" --freestanding --emit-c "$source"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding alloc hook (emit exited $status)"
+        show_file "$TMP/hook.emit.err"
+        return
+    fi
+    if ! cc -std=c99 -pedantic-errors -Wall -Wextra -Werror -ffreestanding \
+        -I"$ROOT/runtime" "$TMP/hook.c" "$TMP/rt_hook.c" \
+        -o "$TMP/hook.bin" >"$TMP/hook.cc.out" 2>"$TMP/hook.cc.err"; then
+        fail "freestanding alloc hook (build failed)"
+        show_file "$TMP/hook.cc.err"
+        return
+    fi
+    run_program "freestanding_alloc_hook" "$TMP/hook.bin" /dev/null
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding alloc hook (run exited $status)"
+        show_file "$TMP/freestanding_alloc_hook.err"
+        return
+    fi
+    if ! grep -q "hook ok" "$TMP/freestanding_alloc_hook.out"; then
+        fail "freestanding alloc hook (zov_rt_free was not called)"
+        show_file "$TMP/freestanding_alloc_hook.out"
+        return
+    fi
+    pass "freestanding allocator hook"
+}
+
 run_freestanding_minimal_runtime() {
     require_cmd cc || return
     require_file "$ROOT/runtime/example/minimal_hosted_runtime.c" || return
@@ -1373,6 +1443,7 @@ run_lsp
 run_zovc_cc
 run_freestanding
 run_freestanding_link
+run_freestanding_alloc_hook
 run_freestanding_minimal_runtime
 run_strict_c99
 run_freestanding_arch
