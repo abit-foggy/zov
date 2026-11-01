@@ -6,15 +6,16 @@ in each environment and what they depend on.
 
 | Module | Hosted | Freestanding | Depends on |
 |---|---|---|---|
-| core language (`str` values, slices, `String::from_owned`) | yes | yes | nothing / platform buffer |
+| core language (`str` values, slices, `String::fromowned`) | yes | yes | nothing / platform buffer |
 | `std::mem` | yes | no (`E0306`) | ISO C `calloc`/`realloc`/`free` |
 | `std::vec` | yes | no (`E0306`) | `std::mem` |
 | `std::map` | yes | no (`E0306`) | `std::mem` |
 | `std::arena` | yes | no (`E0306`) | `std::mem` |
 | `std::io` | yes | no (`E0306`) | ISO C `stdio.h`, POSIX `read` |
-| `std::fs` | yes | no (`E0306`) | ISO C `stdio.h` |
+| `std::fs` | yes | no (`E0306`) | `stdio.h`, POSIX `unistd.h`, `sys/stat.h`, `dirent.h` |
 | `std::env` | yes | no (`E0306`) | hosted process startup, `stdlib.h`, `unistd.h` |
 | `std::time` | yes | no (`E0306`) | POSIX `usleep` |
+| `std::proc` | yes | no (`E0306`) | POSIX `fork`, `execvp`, `waitpid` |
 | `std::math` | yes | partly: pure helpers yes, libm functions no (`E0306`) | pure Zov; `math.h`/`stdlib.h` only for hosted functions |
 | `std::str` | yes | yes | nothing: zero-copy queries only |
 | `std::strsplit` | yes | no (`E0306`) | `std::vec` for `splitbyte`/`lines` |
@@ -50,12 +51,26 @@ in each environment and what they depend on.
 - `std::env` exposes `argscount`, `argat`, zero-copy `get`, owned
   `getstr`, `set`, `unset`, owned `cwd`, and `chdir`. `cwd` grows its
   buffer and returns `EnvNotFound` on failure. `std::fs` exposes
-  `readstr` (owned `String`), `writestr`, and `exists`.
+  `readstr` (owned `String`), `writestr`, `exists`, `isfile`, `isdir`,
+  `mkdir`, `rename`, `remove`, and `rmdir`; every path is copied to a
+  temporary NUL-terminated buffer and released before return.
+- `std::proc::run(prog, args)` forks, `execvp`s the program with a
+  temporary NUL-terminated argv, waits for the child, frees every
+  temporary buffer, and returns the exit code (`128 + signal` when the
+  child was signaled, or `ProcError` for fork/wait failure). It is
+  hosted-only and reports `E0306` in freestanding builds.
 - `Map[K, V]` supports owned `String` keys: keys hash and compare by
   bytes, insertion/replacement/removal/clear/free destroy owned keys and
   values, and the fallible `findref`/aborting `getref` lookups borrow the
   map for the lifetime of the returned reference.
+- `Map[String, V]` adds zero-allocation `str` probes: `findstr`,
+  `getstrref`, `containsstr`, `removestr`, and `takestr`. They hash and
+  compare the borrowed bytes directly, so `$PATH`-style lookups never
+  allocate a temporary `String`.
+- Canonical intrinsic spellings are smooshed lowercase:
+  `String::fromowned` and `hashval`. `String::from_owned` and `hash_val`
+  remain accepted as compatibility aliases.
 - Module-private C imports (`use <unistd.h> as u;` inside `std::io`) are
   not visible to importers in hosted or freestanding builds.
-- Owned `String` buffers obtained from `String::from_owned` are released
+- Owned `String` buffers obtained from `String::fromowned` are released
   through `zov_rt_free`; see [runtime/README.md](../runtime/README.md).

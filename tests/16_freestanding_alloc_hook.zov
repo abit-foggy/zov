@@ -1,5 +1,5 @@
 // freestanding owned String: the platform supplies the buffer through
-// String::from_owned and String.free reaches zov_rt_free
+// compatibility alias String::from_owned and String.free reach zov_rt_free
 export fn kmain() void = {
     let data: [4]u8 = [65u8, 66u8, 67u8, 68u8];
     let view: []u8 = data[..];

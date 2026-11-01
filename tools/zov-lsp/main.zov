@@ -540,11 +540,11 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, prims[i as usize], 14usize, &mut first);
     };
     // std modules (kind 9)
-    let mods: [11]str = ["std::vec", "std::map", "std::str",
+    let mods: [12]str = ["std::vec", "std::map", "std::str",
                          "std::strsplit", "std::arena", "std::fs",
                          "std::env", "std::mem", "std::io", "std::time",
-                         "std::math"];
-    for (let i in 0..11) {
+                         "std::math", "std::proc"];
+    for (let i in 0..12) {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)

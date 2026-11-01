@@ -128,7 +128,7 @@
         },
         {
           "name": "keyword.operator.misc.zov",
-          "match": "\\b(null|true|false|assert|sizeof|hash_val)\\b"
+          "match": "\\b(null|true|false|assert|sizeof|hashval|hash_val|fromowned)\\b"
         }
       ]
     },

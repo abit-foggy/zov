@@ -10,7 +10,7 @@ scope-exit cleanup, and no lifetime syntax.
 |---|---|---|---|
 | scalars, `bool`, `char`, enums | copy | no | plain C values |
 | raw pointers, `&T`, `&mut T`, `str`, slices | copy | no | pointers/views; raw pointers are outside tracked ownership |
-| `String` | move | yes, one heap buffer | `String::new`, `String::from`, `String::from_owned` |
+| `String` | move | yes, one heap buffer | `String::new`, `String::from`, `String::fromowned` |
 | `resource struct` | move | yes, its fields | linear by declaration |
 | struct with a linear field | move | yes | linearity is propagated by the compiler |
 | tagged union with a linear member | move | yes, active payload | tag selects what is destructible |
@@ -25,6 +25,15 @@ A direct field of a resource container may be moved out (a *partial
 move*). The container then cannot be moved or freed as a whole
 (`E0510`), but disjoint fields stay usable. Moving deeper than one field,
 or moving a field out of a non-resource struct, is rejected (`E0511`).
+
+Indexed places (`arr[i]` on a fixed array or slice) are different:
+their initialization is not tracked per element. Moving or directly
+destroying an owned element through an index is rejected (`E0518`) so a
+later element overwrite cannot double-free an already-moved value.
+Borrowing (`&arr[i]`) and overwriting (`arr[i] = value`) remain
+available, and `mem::drop(arr)` destroys the whole array exactly once.
+Use `Vec.replace`, `Vec.remove`, or `Vec.pop` when ownership must leave a
+container element.
 
 ## Assignment and reassignment
 
@@ -75,8 +84,10 @@ Zov has no scope-exit destructors. These operations release resources:
   - trivial values (`i32`, `str`, slices, raw pointers): no-op.
   - `Vec` / `Map` / `Arena`: calls their `free()` method, which releases
     elements and backing storage.
-  `mem::drop` requires a place (variable, field, index, or dereference);
-  it rejects temporaries (`E0605`). If the place is reached through a
+  `mem::drop` requires a place (variable, field, or dereference); it
+  rejects temporaries (`E0605`) and owned elements reached through an
+  array/slice index (`E0518`). Drop the whole array, or use a container
+  transfer API. If the place is reached through a
   reference (`*r`, `r.field`, `r.items[i]`), it is rejected with `E0605`:
   the owner would keep believing it still owns the resources, so a later
   `free()` could double-free. Drop the owning binding instead. Raw-pointer
@@ -194,14 +205,26 @@ helpers (`min`, `max`, `clamp`, `abs`, `sqrt`, `popcnt`, `nextpow2`) and
 all of `std::str` (`trim`, `startswith`, `endswith`, `findbyte`,
 `eq`) work freestanding; the libm-backed math functions and allocating
 splitting helpers are gated individually (`math::pow`, `strsplit::lines`,
-...). `String::from_owned` remains available: the platform provides the
+...). `String::fromowned` remains available (`String::from_owned` is kept as a compatibility alias): the platform provides the
 buffer and `String.free()` calls the `zov_rt_free` hook. See
 [runtime/README.md](../runtime/README.md).
 
 A module's `use <header.h> as alias;` binding is private to that module
 in both hosted and freestanding builds. Importers cannot call through
 `io::`'s private `u` alias, for example; a private alias is rejected with
-`E0306` just like an unexported Zov helper.
+`E0306`, while an unexported Zov function or type is simply absent from
+the module's public name table (`E0403` / `E0408`).
+
+## Module visibility
+
+`export fn` and `export type` are visible to importers. A plain `fn` or
+`type` in a module is private to that module: its body can call and name
+it, while another file gets an "unknown"/"no such function" diagnostic.
+Private functions are emitted under a module-qualified C name, so helper
+names such as `dupz` can exist in several modules without colliding.
+Private types are registered in the module's scope rather than the
+global scope; their C struct names are currently not module-qualified, so
+avoid giving two private helper types the same name.
 
 ## Known limits
 
@@ -209,10 +232,11 @@ in both hosted and freestanding builds. Importers cannot call through
   elements. Assigning through a raw-pointer index or a slice does not
   know the element's ownership; prefer `Vec.set`/`replace` or index
   assignment only for trivial types.
-- Individual array/Vec element moves are not tracked by element index.
-  Moving `arr[i]` out and then assigning a new value to `arr[i]` is not
-  currently proven safe; use `Vec.replace`/`Vec.remove` for owned
-  elements.
+- Individual array/slice element moves are rejected rather than tracked
+  per index (`E0518`). Overwriting `arr[i]` is safe because the element
+  is still initialized; use `Vec.replace`/`Vec.remove` for owned elements
+  when ownership must move out. Assigning through a slice still does not
+  destroy the previous element; use `Vec.set` for owned values.
 - Dropping a raw-pointer value is a no-op: the pointer carries no
   ownership information. Dropping through `*p` is not checked against
   the allocation's real lifetime, so it belongs to the unsafe subset.

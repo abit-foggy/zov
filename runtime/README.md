@@ -34,7 +34,7 @@ These follow `realloc`/`free` semantics (suitably aligned results,
 `free(NULL)` allowed, contents preserved on grow). A freestanding Zov
 program uses them when it owns a `String`:
 
-- `String::from_owned(data, len, cap)` is allowed in freestanding builds;
+- `String::fromowned(data, len, cap)` is allowed in freestanding builds;
   the platform hands the program a buffer and `String.free()` releases it
   through `zov_rt_free`.
 - `String::from`, string concatenation, `std::io`, `std::mem`,
@@ -96,7 +96,7 @@ program compares strings (verified by `nm -u` in the test suite).
   `std::io`, `std::fs`, `std::env`, `std::time`, and `std::strsplit` are
   rejected in freestanding mode with `E0306` instead of a link failure.
   Pure `std::str` and pure `std::math` code compiles into the object.
-- `String::from_owned` is the only way to obtain an owned String; its
+- `String::fromowned` is the only way to obtain an owned String; its
   buffer must satisfy the platform's `zov_rt_free` contract.
 - This is not a claim of kernel readiness: it defines the boundary
   between a Zov program and the platform that runs it.

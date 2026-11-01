@@ -58,7 +58,7 @@ void zov_panic(const char *code, const char *msg, const char *file,
  * Allocation hooks.
  *
  * A freestanding program that owns a String (created with
- * String::from_owned) releases its buffer through zov_rt_free.  The
+ * String::fromowned) releases its buffer through zov_rt_free.  The
  * String growth helper uses zov_rt_realloc; current freestanding builds
  * reject the allocation operations that would reach it, so defining it
  * now is optional but keeps the ABI stable for future growth support.
