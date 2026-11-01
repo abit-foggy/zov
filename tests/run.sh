@@ -1085,6 +1085,89 @@ run_sanitizer() {
     pass "asan smoke ($asan_cc)"
 }
 
+# Opt-in full sweep: ZOV_SANITIZE=1 runs every executable fixture under
+# ASan+UBSan and fails on any sanitizer report.  The default suite keeps
+# only the smoke test above so an ordinary run stays fast.
+run_sanitizer_sweep() {
+    if [ "${ZOV_SANITIZE:-0}" != "1" ]; then
+        return 0
+    fi
+    sweep_cc=
+    for sweep_candidate in clang gcc cc; do
+        command -v "$sweep_candidate" >/dev/null 2>&1 || continue
+        printf 'int main(void){return 0;}\n' >"$TMP/sweep_probe.c"
+        if "$sweep_candidate" -std=c99 -fsanitize=address,undefined \
+            "$TMP/sweep_probe.c" -o "$TMP/sweep_probe" >/dev/null 2>&1; then
+            sweep_cc=$sweep_candidate
+            break
+        fi
+    done
+    if [ -z "$sweep_cc" ]; then
+        fail "sanitizer sweep (no toolchain with -fsanitize=address,undefined)"
+        return
+    fi
+
+    sweep_ok=0
+    sweep_bad=0
+    sweep_skip=0
+    for sweep_src in "$ROOT"/tests/[0-9][0-9]_*.zov; do
+        [ -f "$sweep_src" ] || continue
+        sweep_base=${sweep_src##*/}
+        sweep_base=${sweep_base%.zov}
+        case $sweep_base in
+            16_*) sweep_skip=$((sweep_skip + 1)); continue ;;
+        esac
+        sweep_c=$TMP/san-$sweep_base.c
+        if [ "$sweep_base" = "11_test_blocks" ]; then
+            run_limited "$sweep_c" "$TMP/san-$sweep_base.emit.err" \
+                "$ZOV" --test --emit-c "$sweep_src"
+        else
+            run_limited "$sweep_c" "$TMP/san-$sweep_base.emit.err" \
+                "$ZOV" --emit-c "$sweep_src"
+        fi
+        if [ $? -ne 0 ]; then
+            fail "sanitizer sweep: $sweep_base (emit failed)"
+            show_file "$TMP/san-$sweep_base.emit.err"
+            sweep_bad=$((sweep_bad + 1))
+            continue
+        fi
+        if ! "$sweep_cc" -std=c99 -O1 -g -fsanitize=address,undefined \
+            -fno-omit-frame-pointer "$sweep_c" \
+            -o "$TMP/san-$sweep_base" >"$TMP/san-$sweep_base.cc.out" \
+            2>"$TMP/san-$sweep_base.cc.err"; then
+            fail "sanitizer sweep: $sweep_base (sanitized build failed)"
+            show_file "$TMP/san-$sweep_base.cc.err"
+            sweep_bad=$((sweep_bad + 1))
+            continue
+        fi
+        sweep_dir=$TMP/san-run-$sweep_base
+        rm -rf "$sweep_dir"
+        mkdir -p "$sweep_dir"
+        run_limited "$sweep_dir/stdout" "$sweep_dir/stderr" \
+            sh -c 'cd "$1" && exec "$2" < /dev/null' sh "$sweep_dir" \
+            "$TMP/san-$sweep_base"
+        sweep_status=$?
+        if [ "$sweep_status" -ge 128 ]; then
+            fail "sanitizer sweep: $sweep_base (terminated by signal)"
+            show_file "$sweep_dir/stderr"
+            sweep_bad=$((sweep_bad + 1))
+            continue
+        fi
+        if grep -qE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:' \
+            "$sweep_dir/stderr"; then
+            fail "sanitizer sweep: $sweep_base (sanitizer report)"
+            show_file "$sweep_dir/stderr"
+            sweep_bad=$((sweep_bad + 1))
+            continue
+        fi
+        sweep_ok=$((sweep_ok + 1))
+    done
+    if [ "$sweep_bad" -ne 0 ]; then
+        return
+    fi
+    pass "sanitizer sweep ($sweep_cc, $sweep_ok fixtures, $sweep_skip skipped)"
+}
+
 # ---------------------------------------------------------------------------
 # Preconditions
 # ---------------------------------------------------------------------------
@@ -1220,6 +1303,7 @@ run_strict_c99
 run_freestanding_arch
 run_freestanding_package
 run_sanitizer
+run_sanitizer_sweep
 
 # ---------------------------------------------------------------------------
 # Summary
