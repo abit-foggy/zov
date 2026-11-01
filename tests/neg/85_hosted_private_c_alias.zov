@@ -1,0 +1,7 @@
+// MUST FAIL: std::io's private C alias is not exported to importers
+use std::io;
+
+export fn main() i32 = {
+    let n = u::read(0, null, 0usize);
+    return 0;
+};

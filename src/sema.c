@@ -65,6 +65,8 @@ typedef struct Sema {
     int inst_depth; /* nested generic instantiations; guards recursive types */
     Program *prog;
     DA(struct Meth) methods;
+    DA(Sym) modc;      /* module-private C header aliases */
+    const char *curmod; /* module whose body/signature is being checked */
 } Sema;
 
 typedef struct Meth {
@@ -550,6 +552,29 @@ static const char *zov_ns_target(Sema *se, const char *ns, const char *name){
     return NULL;
 }
 
+/* Module-private C aliases live outside the global scope.  A module body
+ * sees its own bindings; only that module may call through them. */
+static Sym *ns_lookup(Sema *se, const char *name)
+{
+    if (se->curmod)
+        for (size_t i = 0; i < se->modc.len; i++)
+            if (se->modc.items[i].modname == se->curmod
+                && se->modc.items[i].name == name)
+                return &se->modc.items[i];
+    Sym *s = scope_find(se->scope, name);
+    if (s)
+        return s;
+    for (size_t i = 0; i < se->modc.len; i++)
+        if (se->modc.items[i].name == name)
+            return &se->modc.items[i];
+    return NULL;
+}
+
+static int c_ns_private(Sema *se, Sym *ns)
+{
+    return ns && ns->modname && ns->modname != se->curmod;
+}
+
 /* module ns call diagnostics: a missing member or an unimported std
  * module gets an actionable message instead of the C-ns fallback */
 static void ns_call_diag(Sema *se, Expr *callee, Span span)
@@ -584,8 +609,8 @@ static Type *resolve_ns_type(Sema *se, const char *qual)
         return NULL;
     memcpy(nbuf, qual, (size_t)(sep - qual));
     nbuf[sep - qual] = '\0';
-    Sym *ns = scope_find(se->scope, str_intern_c(nbuf));
-    if (!ns || ns->kind != SYM_NS)
+    Sym *ns = ns_lookup(se, str_intern_c(nbuf));
+    if (!ns || ns->kind != SYM_NS || c_ns_private(se, ns))
         return NULL;
     if (ns->is_zov) {
         /* loaded .zov module: member resolves to the global symbol */
@@ -1124,7 +1149,10 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
     while (se->scope->parent)
         se->scope = se->scope->parent;
     push_module_scope(se, sym->decl->modname);
+    const char *saved_mod = se->curmod;
+    se->curmod = sym->decl->modname;
     check_fn(se, d);
+    se->curmod = saved_mod;
     pop_scope(se);
     se->scope = saved_scope;
     return scope_find(se->scope, keyi);
@@ -1430,16 +1458,16 @@ static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
 
 static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
 {
-    Sym *ns = scope_find(se->scope, callee->u.nident.ns);
+    Sym *ns = ns_lookup(se, callee->u.nident.ns);
     if (!ns)
         fatal_at(E0405, callee->span, "unknown namespace '%s'", callee->u.nident.ns);
     if (ns->kind != SYM_NS || !ns->hdr)
         fatal_at(E0405, callee->span, "'%s' is not a C namespace",
                  callee->u.nident.ns);
-    if (se->prog->freestanding && ns->modname)
+    if (c_ns_private(se, ns))
         fatal_at(E0306, callee->span,
                  "C symbol '%s::%s' is private to std::%s and unavailable "
-                 "in freestanding builds; use an exported Zov wrapper",
+                 "to importers; use an exported Zov wrapper",
                  callee->u.nident.ns, callee->u.nident.name, ns->modname);
     CMember *fn = cimport_find(ns->hdr, callee->u.nident.name);
     if (!fn)
@@ -1529,7 +1557,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         return e->type;
     }
     case EX_NS_IDENT: {
-        Sym *ns = scope_find(se->scope, e->u.nident.ns);
+        Sym *ns = ns_lookup(se, e->u.nident.ns);
         if (!ns)
             fatal_at(E0405, e->span, "unknown namespace '%s'", e->u.nident.ns);
         /* enum variant: Color::Red resolves through the type registry */
@@ -1549,6 +1577,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (ns->kind != SYM_NS || !ns->hdr)
             fatal_at(E0405, e->span, "'%s' is not a namespace", e->u.nident.ns);
+        if (c_ns_private(se, ns))
+            fatal_at(E0306, e->span,
+                     "C symbol '%s::%s' is private to std::%s and "
+                     "unavailable to importers; use an exported Zov wrapper",
+                     e->u.nident.ns, e->u.nident.name, ns->modname);
         CMember *m = cimport_find(ns->hdr, e->u.nident.name);
         if (!m)
             fatal_at(E0402, e->span, "unknown symbol '%s::%s'", e->u.nident.ns,
@@ -3121,9 +3154,19 @@ static void register_decl(Sema *se, Decl *d)
         sym.kind = SYM_NS;
         sym.span = d->span;
         sym.hdr = h;
-        /* a C alias declared inside a module is private to that module;
-         * importers must not resolve their own names through it */
+        /* a C alias declared inside a module is private to that module:
+         * keep it out of the global scope so importers cannot see it */
         sym.modname = d->modname;
+        if (d->modname) {
+            int dup = 0;
+            for (size_t i = 0; i < se->modc.len; i++)
+                if (se->modc.items[i].modname == d->modname
+                    && se->modc.items[i].name == sym.name)
+                    dup = 1;
+            if (!dup)
+                da_push(&se->modc, sym);
+            break;
+        }
         scope_add(se, sym);
         break;
     }
@@ -3375,6 +3418,7 @@ void sema_check(Program *prog, int test_mode)
                 curmod = d->modname;
                 push_module_scope(se, curmod);
             }
+            se->curmod = d->modname;
             if (d->kind == DL_FN)
                 check_fn(se, d);
             else
