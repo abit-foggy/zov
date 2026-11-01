@@ -142,6 +142,29 @@ static Decl *find_struct_decl(Sema *se, const char *name)
     return NULL;
 }
 
+/* std::mem::drop is an explicit destruction point.  Its generic
+ * declaration exists so module resolution registers it, but codegen
+ * lowers each call against the concrete argument type. */
+static int is_mem_drop_target(Sema *se, const char *target)
+{
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind != DL_FN || !d->regname || d->regname != target)
+            continue;
+        return d->modname && zstr_eq(d->modname, "mem")
+               && zstr_eq(d->u.fn.name, "drop") && !d->u.fn.recv;
+    }
+    return 0;
+}
+
+/* mem::drop consumes a place: the value stays in storage but the
+ * resources it owns are released. */
+static int drop_place_kind(Expr *e)
+{
+    return e->kind == EX_IDENT || e->kind == EX_FIELD
+           || e->kind == EX_INDEX || e->kind == EX_DEREF;
+}
+
 /* A type that contains itself by value has infinite size.  Pointers,
  * slices, references, and owned String (which stores a pointer) break
  * the cycle; arrays, unions, and aliases do not. */
@@ -1566,6 +1589,32 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
+        /* std::mem::drop: explicit destruction, lowered per argument type.
+         * Accept both drop(v) and drop[T](v); the type argument is
+         * redundant because the place's type is already known. */
+        const char *drop_target = NULL;
+        if (callee->kind == EX_NS_IDENT)
+            drop_target = zov_ns_target(se, callee->u.nident.ns,
+                                        callee->u.nident.name);
+        else if (callee->kind == EX_GENERIC
+                 && callee->u.generic.base->kind == EX_NS_IDENT)
+            drop_target = zov_ns_target(
+                se, callee->u.generic.base->u.nident.ns,
+                callee->u.generic.base->u.nident.name);
+        if (drop_target && is_mem_drop_target(se, drop_target)) {
+            if (e->u.call.args.len != 1)
+                fatal_at(E0602, e->span,
+                         "mem::drop takes exactly one argument");
+            Expr *arg = e->u.call.args.items[0];
+            check_expr(se, arg, NULL);
+            if (!drop_place_kind(arg))
+                fatal_at(E0605, arg->span,
+                         "mem::drop requires a place expression "
+                         "(variable, field, index, or dereference)");
+            e->builtin_drop = 1;
+            e->type = type_prim(TY_VOID);
+            return e->type;
+        }
         if (callee->kind == EX_NS_IDENT
             && zstr_eq(callee->u.nident.ns, "String")) {
             if (zstr_eq(callee->u.nident.name, "new")) {

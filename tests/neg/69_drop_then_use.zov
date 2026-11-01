@@ -1,0 +1,9 @@
+// MUST FAIL: destruction invalidates the place
+use std::mem as mem;
+
+export fn main() i32 = {
+    let s = String::from("x");
+    mem::drop(s);
+    let n = s.view().len;
+    return 0;
+};

@@ -24,6 +24,14 @@
 
 use <stdlib.h> as c;
 
+// Explicit destruction: releases the resources `value` owns (owned
+// strings, nested resource fields, the active payload of a tagged
+// union) without releasing the value's own storage.  It is a no-op for
+// values that own no resources.  The compiler lowers the call against
+// the concrete type, so generic code can release its element type.
+export fn drop[T](_value: T) void = {
+};
+
 export fn alloc[T](count: usize) *T = {
     let raw: nullable *void = c::calloc(count, sizeof[T]());
     if (raw == null) { c::abort(); };

@@ -136,6 +136,8 @@ typedef struct CG {
     Type *fn_ret;    /* enclosing function return type */
     int switch_depth; /* lowered match switch nesting */
     int tmp_id;       /* unique temp/label counter */
+    Program *prog;
+    DA(Type *) drops; /* types needing an emitted zov_drop_N helper */
 } CG;
 
 /* ---- mangling ---- */
@@ -172,6 +174,9 @@ static const char *mangle_type(const char *name)
 /* ---- C type spelling ---- */
 
 static const char *c_type(CG *cg, Type *t);
+static int type_needs_drop(CG *cg, Type *t, int depth);
+static const char *drop_fn_name(CG *cg, Type *t);
+static int type_decl_index(Program *prog, const char *name);
 
 /* Slice lowering: { T *data; size_t len; } via a registered typedef. */
 static const char *slice_name(CG *cg, Type *base)
@@ -1127,6 +1132,19 @@ static void emit_call(CG *cg, Expr *e)
             buf_puts(&*cg->cur, "))");
             return;
         }
+    }
+    if (e->builtin_drop) {
+        Expr *arg = e->u.call.args.len ? e->u.call.args.items[0] : NULL;
+        Type *t = arg ? arg->type : NULL;
+        if (!arg || !type_needs_drop(cg, t, 0)) {
+            /* trivial value: destruction is a no-op */
+            buf_puts(&*cg->cur, "((void)0)");
+            return;
+        }
+        buf_printf(&*cg->cur, "%s(&(", drop_fn_name(cg, t));
+        emit_expr(cg, arg, 0);
+        buf_puts(&*cg->cur, "))");
+        return;
     }
     if (e->builtin_assert) {
         emit_assert(cg, e, 0);
@@ -2261,6 +2279,157 @@ static int type_decl_index(Program *prog, const char *name)
     return -1;
 }
 
+/* ---- explicit destruction (std::mem::drop) ----
+ *
+ * A drop helper releases the resources a value owns without releasing
+ * the value's own storage.  Helpers are emitted per concrete type, so a
+ * generic `mem::drop[T]` inside std becomes the right call for every
+ * instantiation.  Raw pointers are never followed: their target is not
+ * owned by the pointer. */
+
+static int type_is_string(Type *t)
+{
+    return t && t->kind == TY_STRUCT && t->name
+           && zstr_eq(t->name, "String");
+}
+
+static int type_needs_drop(CG *cg, Type *t, int depth)
+{
+    if (!t || depth > 16)
+        return 0;
+    switch (t->kind) {
+    case TY_STRUCT: {
+        if (type_is_string(t))
+            return 1;
+        int di = type_decl_index(cg->prog, t->name);
+        if (di < 0)
+            return 0;
+        Decl *d = cg->prog->decls.items[di];
+        for (size_t i = 0; i < d->u.type.fields.len; i++)
+            if (type_needs_drop(cg, d->u.type.fields.items[i].ty,
+                                depth + 1))
+                return 1;
+        return 0;
+    }
+    case TY_UNION:
+        for (size_t i = 0; i < t->members.len; i++)
+            if (type_needs_drop(cg, t->members.items[i], depth + 1))
+                return 1;
+        return 0;
+    case TY_ARRAY:
+        return type_needs_drop(cg, t->base, depth + 1);
+    default:
+        return 0;
+    }
+}
+
+static const char *drop_fn_name(CG *cg, Type *t)
+{
+    for (size_t i = 0; i < cg->drops.len; i++)
+        if (type_eq(cg->drops.items[i], t)) {
+            char *s = zalloc(40);
+            snprintf(s, 40, "zov_drop_%lu", (unsigned long)i);
+            return s;
+        }
+    da_push(&cg->drops, t);
+    if (type_is_string(t)) {
+        cg->needs_string_owned = 1;
+        cg->needs_string_init = 1;
+        cg->needs_string_free = 1;
+    }
+    char *s = zalloc(40);
+    snprintf(s, 40, "zov_drop_%lu", (unsigned long)(cg->drops.len - 1));
+    return s;
+}
+
+/* Close the drop set: helper definitions may call helpers for nested
+ * fields, so every reachable droppable type must be registered first. */
+static void collect_drop_types(CG *cg)
+{
+    for (size_t i = 0; i < cg->drops.len; i++) {
+        Type *t = cg->drops.items[i];
+        if (type_is_string(t))
+            continue;
+        if (t->kind == TY_STRUCT) {
+            int di = type_decl_index(cg->prog, t->name);
+            if (di < 0)
+                continue;
+            Decl *d = cg->prog->decls.items[di];
+            for (size_t j = 0; j < d->u.type.fields.len; j++) {
+                Type *ft = d->u.type.fields.items[j].ty;
+                if (type_needs_drop(cg, ft, 0))
+                    drop_fn_name(cg, ft);
+            }
+        } else if (t->kind == TY_UNION) {
+            for (size_t j = 0; j < t->members.len; j++)
+                if (type_needs_drop(cg, t->members.items[j], 0))
+                    drop_fn_name(cg, t->members.items[j]);
+        } else if (t->kind == TY_ARRAY) {
+            if (type_needs_drop(cg, t->base, 0))
+                drop_fn_name(cg, t->base);
+        }
+    }
+}
+
+static void emit_drop_param(CG *cg, Buf *b, Type *t)
+{
+    if (t->kind == TY_ARRAY)
+        buf_printf(b, "%s (*)[%lu]", c_type(cg, t->base),
+                   (unsigned long)t->count);
+    else
+        buf_printf(b, "%s *", c_type(cg, t));
+}
+
+static void emit_drop_defs(CG *cg, Buf *out)
+{
+    if (!cg->drops.len)
+        return;
+    collect_drop_types(cg);
+    for (size_t i = 0; i < cg->drops.len; i++) {
+        buf_printf(out, "static void zov_drop_%lu(", (unsigned long)i);
+        emit_drop_param(cg, out, cg->drops.items[i]);
+        buf_puts(out, ");\n");
+    }
+    for (size_t i = 0; i < cg->drops.len; i++) {
+        Type *t = cg->drops.items[i];
+        buf_printf(out, "static void zov_drop_%lu(", (unsigned long)i);
+        emit_drop_param(cg, out, t);
+        buf_puts(out, " v) {\n");
+        if (type_is_string(t)) {
+            buf_puts(out, "    zov_string_free(v);\n");
+        } else if (t->kind == TY_STRUCT) {
+            int di = type_decl_index(cg->prog, t->name);
+            Decl *d = di >= 0 ? cg->prog->decls.items[di] : NULL;
+            for (size_t j = 0; d && j < d->u.type.fields.len; j++) {
+                Field *f = &d->u.type.fields.items[j];
+                if (!type_needs_drop(cg, f->ty, 0))
+                    continue;
+                buf_printf(out, "    %s(&v->%s);\n",
+                           drop_fn_name(cg, f->ty), mangle_local(f->name));
+            }
+        } else if (t->kind == TY_UNION) {
+            buf_puts(out, "    switch (v->tag) {\n");
+            for (size_t j = 0; j < t->members.len; j++) {
+                Type *m = t->members.items[j];
+                if (!type_needs_drop(cg, m, 0))
+                    continue;
+                buf_printf(out,
+                           "    case %lu: %s(&v->u.v%lu); break;\n",
+                           (unsigned long)j, drop_fn_name(cg, m),
+                           (unsigned long)j);
+            }
+            buf_puts(out, "    default: break;\n    }\n");
+        } else if (t->kind == TY_ARRAY) {
+            buf_printf(out,
+                       "    size_t i;\n"
+                       "    for (i = 0; i < %lu; i++)\n"
+                       "        %s(&(*v)[i]);\n",
+                       (unsigned long)t->count, drop_fn_name(cg, t->base));
+        }
+        buf_puts(out, "}\n");
+    }
+}
+
 /* Register the tagged union for `u`, returning its index in cg->unions. */
 static size_t union_index(CG *cg, Type *u)
 {
@@ -2427,6 +2596,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
 
     cg->cur = &cg->head;
     cg->pre = &cg->prebuf;
+    cg->prog = prog;
     if (!cg->freestanding)
         /* hosted std::time/fs use POSIX symbols that strict C99 hides */
         buf_puts(&*cg->cur,
@@ -2865,6 +3035,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "}\n");
         }
     }
+    emit_drop_defs(cg, &out);
     buf_puts(&out, cg->str_helpers.data);
     buf_puts(&out, cg->protos.data);
     buf_puts(&out, cg->body.data);

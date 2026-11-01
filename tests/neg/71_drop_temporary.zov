@@ -1,0 +1,7 @@
+// MUST FAIL: destruction needs a place, not a temporary
+use std::mem as mem;
+
+export fn main() i32 = {
+    mem::drop(String::from("x"));
+    return 0;
+};

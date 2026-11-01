@@ -1294,6 +1294,7 @@ run_stdout 34_owned_nested tests/34_owned_nested.zov tests/34_owned_nested.expec
 run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.expected
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
 run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
+run_stdout 46_resource_destruction tests/46_resource_destruction.zov tests/46_resource_destruction.expected
 run_panic 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero" 8:18
 run_panic 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2" 8:19
 run_panic 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4" 6:20

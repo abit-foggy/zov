@@ -68,3 +68,7 @@
 65_recursive_generic_type.zov|2|1|E0410|expands without bound
 66_aliased_field_write.zov|10|5|E0508|cannot mutate 'p': shared borrow is active
 67_whole_value_under_field_loan.zov|10|5|E0508|cannot assign to 'p': shared borrow is active
+68_drop_after_move.zov|7|15|E0503|use of moved value 's'
+69_drop_then_use.zov|7|13|E0504|use of freed value 's'
+70_drop_double.zov|7|15|E0509|value was already freed: 's'
+71_drop_temporary.zov|5|15|E0605|mem::drop requires a place expression

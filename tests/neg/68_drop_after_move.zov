@@ -1,0 +1,9 @@
+// MUST FAIL: a moved String cannot be destroyed through the old binding
+use std::mem as mem;
+
+export fn main() i32 = {
+    let s = String::from("x");
+    let t = s;
+    mem::drop(s);
+    return 0;
+};

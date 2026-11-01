@@ -78,23 +78,22 @@ export fn (self: &Vec[T]) as_slice() []T = {
     return d[0..self.length];
 };
 
+// Releases every initialized element (owned strings and nested resource
+// fields are destroyed) and then the backing array.  Elements are not
+// dropped twice: the length is not used after the loop.
 export fn (self: Vec[T]) free() void = {
     if (self.data == null) { return; };
     let d: *T = self.data!;
+    let mut i: usize = 0usize;
+    while (i < self.length) {
+        mem::drop[T](d[i]);
+        i += 1usize;
+    };
     mem::free_ptr[T](d);
 };
 
-// Explicit destruction for Vec[String]: free each owned element, then the
-// backing array.  Zov has no implicit destructors, so callers must use this
-// (or free elements themselves) instead of plain free() to avoid leaks.
+// Kept for callers written before Vec.free() destroyed elements; it now
+// just delegates so there is one destruction path.
 export fn free_strings(v: Vec[String]) void = {
-    if (v.data != null) {
-        let d: *String = v.data!;
-        let mut i: usize = 0usize;
-        while (i < v.length) {
-            d[i].free();
-            i += 1usize;
-        };
-        mem::free_ptr[String](d);
-    };
+    v.free();
 };

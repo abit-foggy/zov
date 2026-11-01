@@ -1,0 +1,30 @@
+// resource destruction: mem::drop releases owned fields and the active
+// union payload; vector free releases every live element
+use std::vec as vec;
+use std::mem as mem;
+use std::io;
+
+export type Oops = !void;
+
+export type Holder = struct {
+    label: String,
+    id: i32,
+};
+
+export fn main() i32 = {
+    let mut v = vec::new[String]();
+    v.push(String::from("alpha"));
+    v.push(String::from("beta"));
+    v.free();
+
+    let h = Holder{ label = String::from("holder"), id = 4 };
+    mem::drop(h);
+
+    let u: (String | Oops) = String::from("union");
+    mem::drop(u);
+
+    let n: i32 = 5;
+    mem::drop(n); // trivially destructible values are a no-op
+    io::println("resource destruction ok");
+    return 0;
+};

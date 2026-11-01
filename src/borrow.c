@@ -842,6 +842,21 @@ static Decl *find_fn_decl(Borrow *b, const char *name);
 static void bx_call(Borrow *b, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    /* mem::drop releases the resources a place owns: treat it like a
+     * free for linear values, and leave trivial values untouched. */
+    if (e->builtin_drop) {
+        Expr *arg = e->u.call.args.len ? e->u.call.args.items[0] : NULL;
+        if (!arg)
+            return;
+        Type *at = arg->type;
+        if (at && ty_is_move(b, at, 0)
+            && (arg->kind == EX_IDENT || arg->kind == EX_FIELD)) {
+            check_free_receiver(b, arg);
+            return;
+        }
+        bx_expr(b, arg);
+        return;
+    }
     /* builtin String methods read the receiver: using a moved String
      * through .view()/.free() must still be rejected, but the receiver
      * itself is not consumed by the call. */
