@@ -750,7 +750,9 @@ run_freestanding() {
         >"$TMP/fs_math.zov"
     printf 'use std::strsplit as strlib;\nexport fn kmain() void = {\n    let p = strlib::splitbyte("a,b", 44u8);\n    p.free();\n};\n' \
         >"$TMP/fs_str.zov"
-    for fs_case in fs_fs fs_env fs_time fs_vec fs_math fs_str; do
+    printf 'use std::proc as proc;\nexport fn kmain() void = {\n    let a: [1]str = [""];\n    let r = proc::run("/bin/true", a[0..0]);\n};\n' \
+        >"$TMP/fs_proc.zov"
+    for fs_case in fs_fs fs_env fs_time fs_vec fs_math fs_str fs_proc; do
         run_limited "$TMP/$fs_case.c" "$TMP/$fs_case.err" \
             "$ZOV" --freestanding --check "$TMP/$fs_case.zov"
         fs_status=$?
@@ -1333,6 +1335,9 @@ run_sanitizer_sweep() {
             53_zovsh_overwrite)
                 sweep_stdin='echo hello world\nexport FOO=bar\necho $FOO\necho $NOPE\ncd /tmp\npwd\necho done\nexit'
                 sweep_has_stdin=1 ;;
+            56_zovsh_proc_fs)
+                sweep_stdin='echo $GREETING\necho $NOPE\nruntrue\nexit'
+                sweep_has_stdin=1 ;;
             21_long_stdin) sweep_stdin="$LONG_LINE"; sweep_has_stdin=1 ;;
         esac
         if [ "$sweep_has_stdin" -eq 1 ]; then
@@ -1453,6 +1458,7 @@ run_stdout 58_map_str_lookup tests/58_map_str_lookup.zov tests/58_map_str_lookup
 run_stdout 59_intrinsic_names tests/59_intrinsic_names.zov tests/59_intrinsic_names.expected
 run_stdin 51_shell_workload tests/51_shell_workload.zov "echo hello world\necho again\nexit" tests/51_shell_workload.expected
 run_stdin 53_zovsh_overwrite tests/53_zovsh_overwrite.zov 'echo hello world\nexport FOO=bar\necho $FOO\necho $NOPE\ncd /tmp\npwd\necho done\nexit' tests/53_zovsh_overwrite.expected
+run_stdin 56_zovsh_proc_fs tests/56_zovsh_proc_fs.zov 'echo $GREETING\necho $NOPE\nruntrue\nexit' tests/56_zovsh_proc_fs.expected
 run_exit  18_std_time tests/18_std_time.zov 0
 run_exit  19_std_math tests/19_std_math_and_separators.zov 0
 run_stdout 20_string_ownership tests/20_string_ownership.zov tests/20_string_ownership.expected

@@ -1,0 +1,92 @@
+// Shell integration workload: zero-copy environment lookups, filesystem
+// lifecycle, and hosted child processes.
+use std::fs as fs;
+use std::io;
+use std::map as map;
+use std::proc as proc;
+use std::str as text;
+use std::vec as vec;
+
+fn runsh(code: str) i32 = {
+    let mut args = vec::new[str]();
+    args.push("-c");
+    args.push(code);
+    let r = proc::run("/bin/sh", args.asslice());
+    let status: i32 = match (r) {
+        case let n: i32 => n,
+        case proc::ProcError => -1,
+    };
+    args.free();
+    return status;
+};
+
+export fn main() i32 = {
+    let dir: str = "/tmp/zov_p7_shell_fs";
+    let a: str = "/tmp/zov_p7_shell_fs/a.txt";
+    let b: str = "/tmp/zov_p7_shell_fs/b.txt";
+    fs::remove(a);
+    fs::remove(b);
+    fs::rmdir(dir);
+    if (!fs::mkdir(dir)) { return 1; };
+    if (!fs::isdir(dir)) { return 2; };
+    let w = fs::writestr(a, "alpha");
+    match (w) {
+        case FsError => return 3,
+        case _ => {},
+    };
+    if (!fs::isfile(a)) { return 4; };
+    if (!fs::rename(a, b)) { return 5; };
+    let rd = fs::readstr(b);
+    let body: String = match (rd) {
+        case let s: String => s,
+        case FsError => return 6,
+    };
+    io::println("file={body.view()}");
+    body.free();
+    if (!fs::remove(b)) { return 7; };
+    if (!fs::rmdir(dir)) { return 8; };
+    io::println("fs ok");
+
+    let mut targs = vec::new[str]();
+    let tr = proc::run("/bin/true", targs.asslice());
+    targs.free();
+    let tcode: i32 = match (tr) {
+        case let n: i32 => n,
+        case proc::ProcError => return 9,
+    };
+    io::println("true={tcode}");
+    io::println("seven={runsh(\"exit 7\")}");
+
+    let mut vars = map::new[String, String]();
+    vars.insert(String::from("GREETING"), String::from("hello"));
+    while (true) {
+        let r = io::readline();
+        let line: String = match (r) {
+            case let s: String => s,
+            case Eof => break,
+            case IoError => return 10,
+        };
+        let cmd: str = text::trim(line.view());
+        let mut stop = false;
+        if (cmd == "exit") {
+            stop = true;
+        } else if (text::startswith(cmd, "echo ")) {
+            let expr: str = cmd[5..];
+            let key: str = expr[1..];
+            let found = vars.findstr(key);
+            match (found) {
+                case let v: &String => io::println(v.view()),
+                case map::MapNotFound => io::println("<unset>"),
+            };
+        } else if (cmd == "runtrue") {
+            let code: i32 = runsh("exit 0");
+            io::println("true={code}");
+        } else {
+            io::println("unknown");
+        };
+        line.free();
+        if (stop) { break; };
+    };
+    vars.free();
+    return 0;
+};
