@@ -1,0 +1,4 @@
+export fn main() i32 = {
+    let x: i8 = 200;
+    return 0;
+};

@@ -1,0 +1,4 @@
+export fn main() i32 = {
+    let x = 256u8;
+    return 0;
+};

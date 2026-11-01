@@ -1,0 +1,26 @@
+// boundary literals fit their declared widths, including signed minima
+use <stdio.h> as c;
+
+export fn main() i32 = {
+    let a: i8 = -128i8;
+    let b: i8 = 127i8;
+    let d: u8 = 255;
+    let e: i16 = -32768;
+    let f: u16 = 65535u16;
+    let g: i32 = -2147483648;
+    let h: u32 = 4294967295u32;
+    let i: i64 = -9223372036854775808i64;
+    let j: u64 = 18446744073709551615u64;
+    c::printf("a=%d b=%d d=%u e=%d f=%u g=%d h=%u\n",
+              a, b, d, e, f, g, h);
+    if (a != -128i8) { return 1; };
+    if (b != 127i8) { return 2; };
+    if (d != 255u8) { return 3; };
+    if (e != -32768i16) { return 4; };
+    if (f != 65535u16) { return 5; };
+    if (g != -2147483648) { return 6; };
+    if (h != 4294967295u32) { return 7; };
+    if (i != -9223372036854775808i64) { return 8; };
+    if (j != 18446744073709551615u64) { return 9; };
+    return 0;
+};

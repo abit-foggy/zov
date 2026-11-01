@@ -1335,6 +1335,27 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         break;
     }
     case EX_UNARY:
+        /* Signed minima cannot be negated after narrowing: -(int8_t)128
+         * is 128, not -128. Emit the minimum directly instead. */
+        if (e->u.unary.op == TK_MINUS
+            && e->u.unary.e->kind == EX_INT) {
+            uint64_t v = e->u.unary.e->u.ilit.v;
+            uint64_t max = 0;
+            switch (e->type->kind) {
+            case TY_I8: max = 127u; break;
+            case TY_I16: max = 32767u; break;
+            case TY_I32: max = 2147483647u; break;
+            case TY_I64:
+            case TY_ISIZE: max = UINT64_C(9223372036854775807); break;
+            default: break;
+            }
+            if (max && v == max + 1) {
+                buf_printf(b, "((%s)(-%lluLL - 1))",
+                           c_type(cg, e->type),
+                           (unsigned long long)(v - 1));
+                break;
+            }
+        }
         buf_puts(b, "(");
         if (e->u.unary.op == TK_MINUS)
             buf_puts(b, "-");

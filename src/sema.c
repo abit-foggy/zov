@@ -224,6 +224,46 @@ static int is_printable(Type *t)
     }
 }
 
+/* Integer literal typing and range checking. */
+static Type *int_literal_type(Expr *e, Type *hint)
+{
+    Type *suf = type_from_suffix(e->u.ilit.suffix);
+    if (suf)
+        return suf;
+    if (hint && ty_is_int(hint->kind))
+        return hint;
+    return type_default_int();
+}
+
+static int int_bounds(Type *t, uint64_t *max, int *is_signed)
+{
+    *is_signed = 0;
+    switch (t->kind) {
+    case TY_I8: *max = 127u; *is_signed = 1; return 1;
+    case TY_I16: *max = 32767u; *is_signed = 1; return 1;
+    case TY_I32: *max = 2147483647u; *is_signed = 1; return 1;
+    case TY_I64:
+    case TY_ISIZE: *max = UINT64_C(9223372036854775807); *is_signed = 1; return 1;
+    case TY_U8: *max = 255u; return 1;
+    case TY_U16: *max = 65535u; return 1;
+    case TY_U32: *max = 4294967295u; return 1;
+    case TY_U64:
+    case TY_USIZE: *max = UINT64_MAX; return 1;
+    default: return 0;
+    }
+}
+
+static void check_int_literal(Expr *e, Type *ty)
+{
+    uint64_t max;
+    int is_signed;
+    if (!int_bounds(ty, &max, &is_signed))
+        return;
+    if (e->u.ilit.v > max)
+        fatal_at(e->span, "integer literal %llu does not fit in %s",
+                 (unsigned long long)e->u.ilit.v, type_spelling(ty));
+}
+
 static Decl *find_enum_decl(Sema *se, const char *name)
 {
     for (size_t i = 0; i < se->prog->decls.len; i++) {
@@ -1091,13 +1131,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
 {
     switch (e->kind) {
     case EX_INT: {
-        Type *suf = type_from_suffix(e->u.ilit.suffix);
-        if (suf)
-            e->type = suf;
-        else if (hint && ty_is_int(hint->kind))
-            e->type = hint; /* untyped literal coerces to expected width */
-        else
-            e->type = type_default_int();
+        e->type = int_literal_type(e, hint);
+        check_int_literal(e, e->type);
         return e->type;
     }
     case EX_FLOAT: {
@@ -1324,6 +1359,24 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         return e->type;
     }
     case EX_UNARY: {
+        /* fold the sign into a literal so INT_MIN does not overflow its
+         * own positive magnitude check */
+        if (e->u.unary.op == TK_MINUS && e->u.unary.e->kind == EX_INT) {
+            Expr *lit = e->u.unary.e;
+            Type *lt = int_literal_type(lit, hint);
+            uint64_t max;
+            int is_signed;
+            lit->type = lt;
+            e->type = lt;
+            if (int_bounds(lt, &max, &is_signed) && lit->u.ilit.v > max) {
+                if (!(is_signed && max != UINT64_MAX && lit->u.ilit.v == max + 1))
+                    fatal_at(lit->span,
+                             "integer literal %llu does not fit in %s",
+                             (unsigned long long)lit->u.ilit.v,
+                             type_spelling(lt));
+            }
+            return e->type;
+        }
         Type *t = check_expr(se, e->u.unary.e, hint);
         switch (e->u.unary.op) {
         case TK_MINUS:

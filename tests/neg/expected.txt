@@ -43,3 +43,5 @@
 40_use_after_free.zov|7|18|-|use of freed value 's'
 41_missing_return.zov|1|1|-|does not return a value on all paths
 42_missing_return_branch.zov|1|1|-|does not return a value on all paths
+43_int_literal_overflow.zov|2|17|-|does not fit in i8
+44_unsigned_literal_overflow.zov|2|13|-|does not fit in u8
