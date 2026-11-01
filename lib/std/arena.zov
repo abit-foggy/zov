@@ -36,16 +36,21 @@ export fn new(cap: usize) Arena = {
     return Arena{ buf = mem::alloc[u8](cap), cap = cap, offset = 0usize };
 };
 
+// Bump allocation with 8-byte alignment.  Capacity exhaustion and size
+// overflow are diagnostics (E1006) rather than a wrapped offset.
 export fn (self: &mut Arena) alloc_bytes(size: usize) *u8 = {
-    // proper 8-byte alignment: round the end up past the request
+    assert(self.offset <= ((~0usize) - 7usize));
     let start: usize = (self.offset + 7usize) & (~7usize);
-    let end: usize = start + size;
-    if (end > self.cap) { c::abort(); };
-    self.offset = end;
+    assert(start <= self.cap);
+    assert(size <= (self.cap - start));
+    self.offset = start + size;
     let d: *u8 = self.buf!;
     return ((&d[start]) as *u8);
 };
 
+// Arithmetic reset: releases no memory and destroys no resources.  Any
+// owned value stored in the arena must be dropped before reset, or the
+// program will leak it; the arena only owns its backing buffer.
 export fn (self: &mut Arena) reset() void = {
     self.offset = 0usize;
 };

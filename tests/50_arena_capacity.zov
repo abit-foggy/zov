@@ -1,0 +1,9 @@
+// bump allocation must diagnose capacity exhaustion, not wrap the offset
+use std::arena as arena;
+
+export fn main() i32 = {
+    let mut a = arena::new(4usize);
+    let p = a.alloc_bytes(8usize);
+    a.free();
+    return 0;
+};
