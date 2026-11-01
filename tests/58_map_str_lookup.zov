@@ -34,9 +34,10 @@ export fn main() i32 = {
     path.free();
     if (m.containsstr("PATH")) { return 6; };
 
-    let mut n = map::new[String, String]();
-    n.insert(String::from("count"), String::from("7"));
-    io::println(n.getstrref("count").view());
+    let mut n = map::new[String, i32]();
+    n.insert(String::from("count"), 7);
+    let nv: i32 = *n.getstrref("count");
+    io::println(nv);
     n.removestr("count");
     io::println(n.len());
     n.free();

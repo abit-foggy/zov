@@ -560,11 +560,9 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
             da_push(&g->u.generic.targs, type_struct(nm));
             while (at(p, TK_COMMA)) {
                 advance(p);
-                if (!at(p, TK_IDENT))
-                    fatal_at(E0203, tok(p)->span,
-                              "expected type argument identifier");
-                da_push(&g->u.generic.targs, type_struct(tok(p)->name));
-                advance(p);
+                /* full type syntax: primitives, pointers, and nested
+                 * generic instantiations are valid type arguments */
+                da_push(&g->u.generic.targs, parse_type(p));
             }
             expect(p, TK_RBRACKET, "']'");
             return g;
