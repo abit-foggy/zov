@@ -548,12 +548,12 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)
-    let fns: [22]str = ["push", "pop", "len", "asslice", "sort",
-                        "insert", "get", "free", "sizeof", "hash_val",
-                        "sleep", "sleepms", "min", "max", "clamp", "abs",
-                        "sqrt", "pow", "floor", "ceil", "round",
-                        "randint"];
-    for (let i in 0..22) {
+    let fns: [24]str = ["push", "pop", "len", "asslice", "sort",
+                        "insert", "get", "getref", "findref", "free",
+                        "sizeof", "hash_val", "sleep", "sleepms", "min",
+                        "max", "clamp", "abs", "sqrt", "pow", "floor",
+                        "ceil", "round", "randint"];
+    for (let i in 0..24) {
         complete_item(&mut sb, fns[i as usize], 2usize, &mut first);
     };
     put_str(&mut sb, "]}");
@@ -584,8 +584,8 @@ export fn main() i32 = {
     docs.insert("sizeof", "`sizeof[T]()` — byte size of `T` as `usize`");
     docs.insert("orelse", "`expr orelse fallback` — coalesces `nullable *T` / tagged unions; `orelse return x` diverges");
     docs.insert("resource", "`resource struct` — move-only type; the borrow checker prevents use-after-move and double-frees");
-    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: push, pop, get, set, len, asslice, sort, free");
-    docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: insert, get, contains, remove, len, free");
+    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: push, pop, get, getref, findref, set, len, asslice, sort, free");
+    docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: insert, get, getref, findref, contains, remove, len, free");
     docs.insert("std::str", "zero-copy str utilities: eq, startswith, endswith, findbyte, trim");
     docs.insert("std::strsplit", "hosted splitting helpers returning Vec[str]: splitbyte, lines");
     docs.insert("std::arena", "`Arena` — bump allocator: new, allocbytes, reset, free");
