@@ -86,6 +86,7 @@ typedef struct CG {
     Buf body; /* function definitions */
     Buf str_helpers; /* generated C99 concat helpers */
     int needs_string_owned; /* zov_type_String runtime */
+    int needs_string_from_owned; /* validated ownership transfer */
     int needs_string_init;
     int needs_string_view;
     int needs_string_append;
@@ -1027,14 +1028,14 @@ static void emit_call(CG *cg, Expr *e)
     if (e->builtin_str_ctor) {
         cg->needs_string_owned = 1;
         if (e->builtin_str_ctor == 3) {
-            buf_puts(&*cg->cur, "((zov_type_String){ .zv_data = "
-                                "(uint8_t *)(");
+            cg->needs_string_from_owned = 1;
+            buf_puts(&*cg->cur, "zov_string_from_owned((uint8_t *)(");
             emit_expr(cg, e->u.call.args.items[0], 0);
-            buf_puts(&*cg->cur, "), .zv_len = (uintptr_t)(");
+            buf_puts(&*cg->cur, "), (size_t)(");
             emit_expr(cg, e->u.call.args.items[1], 0);
-            buf_puts(&*cg->cur, "), .zv_cap = (uintptr_t)(");
+            buf_puts(&*cg->cur, "), (size_t)(");
             emit_expr(cg, e->u.call.args.items[2], 0);
-            buf_puts(&*cg->cur, ") })");
+            buf_puts(&*cg->cur, "))");
             return;
         }
         cg->needs_string_init = 1;
@@ -2589,6 +2590,30 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "static void zov_string_init(zov_type_String *s) {\n"
                      "    s->zv_data = 0; s->zv_len = 0; s->zv_cap = 0;\n"
                      "}\n");
+        if (cg->needs_string_from_owned) {
+            if (!cg->freestanding)
+                buf_puts(&out, "#include <stdio.h>\n");
+            buf_puts(&out,
+                     "static zov_type_String zov_string_from_owned("
+                     "uint8_t *data, size_t len, size_t cap) {\n"
+                     "    zov_type_String s;\n"
+                     "    if ((data == NULL && len != 0u) || len > cap) {\n");
+            if (cg->freestanding)
+                buf_puts(&out,
+                         "        zov_panic(\"invalid String::from_owned\", "
+                         "\"?\", 0);\n"
+                         "        for (;;) { }\n");
+            else
+                buf_puts(&out,
+                         "        fprintf(stderr, \"zov: invalid "
+                         "String::from_owned\\n\");\n"
+                         "        abort();\n");
+            buf_puts(&out,
+                     "    }\n"
+                     "    s.zv_data = data; s.zv_len = len; s.zv_cap = cap;\n"
+                     "    return s;\n"
+                     "}\n");
+        }
         if (cg->needs_string_free) {
             buf_puts(&out,
                      "static void zov_string_free(zov_type_String *s) {\n"

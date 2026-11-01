@@ -1,0 +1,12 @@
+use std::vec as vec;
+
+export type Bag = resource struct { items: vec::Vec[String], id: i32 };
+
+export fn main() i32 = {
+    let mut items = vec::new[String]();
+    items.push(String::from("x"));
+    let b = Bag{ items = items, id = 1 };
+    vec::free_strings(b.items);
+    let c = b;
+    return c.id;
+};

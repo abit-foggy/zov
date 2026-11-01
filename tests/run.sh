@@ -895,6 +895,7 @@ run_stdout 30_slice_index_once tests/30_slice_index_once.zov tests/30_slice_inde
 run_stdout 31_int_ranges tests/31_int_ranges.zov tests/31_int_ranges.expected
 run_stdout 32_nullable_null tests/32_nullable_null.zov tests/32_nullable_null.expected
 run_stdout 33_borrow_view_rebind tests/33_borrow_view_rebind.zov tests/33_borrow_view_rebind.expected
+run_stdout 34_owned_nested tests/34_owned_nested.zov tests/34_owned_nested.expected
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 

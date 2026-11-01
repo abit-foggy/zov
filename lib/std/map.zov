@@ -166,10 +166,10 @@ export fn (self: Map[K, V]) free() void = {
     if (self.states != null) { mem::free_ptr[u8](self.states!); };
 };
 
-// Explicit destruction for Map[str, String]: every stored String value is
-// released before the tables.  Keys are borrowed str views and are not
-// owned by the map, so the source string must outlive the map usage.
-export fn free_strings(m: Map[str, String]) void = {
+// Explicit destruction for Map[K, String]: every stored String value is
+// released before the tables.  Keys are copied as K values; if K itself
+// owns a resource, free the keys separately before calling this.
+export fn free_string_values[K](m: Map[K, String]) void = {
     if (m.vals != null) {
         let vals: *String = m.vals!;
         let states: *u8 = m.states!;
@@ -182,8 +182,13 @@ export fn free_strings(m: Map[str, String]) void = {
         };
         mem::free_ptr[String](vals);
     };
-    if (m.keys != null) { mem::free_ptr[str](m.keys!); };
+    if (m.keys != null) { mem::free_ptr[K](m.keys!); };
     if (m.states != null) { mem::free_ptr[u8](m.states!); };
+};
+
+// Borrowed-key convenience wrapper; the source string must outlive the map.
+export fn free_strings(m: Map[str, String]) void = {
+    free_string_values[str](m);
 };
 
 test "map basics" {

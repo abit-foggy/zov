@@ -40,6 +40,8 @@ typedef struct BVar {
      * without poisoning unrelated fields. */
     const char *freed_fields[8];
     size_t nfreed_fields;
+    const char *moved_fields[8];
+    size_t nmoved_fields;
 } BVar;
 
 typedef struct Loan {
@@ -129,6 +131,54 @@ static void clear_freed_fields(BVar *v)
         v->nfreed_fields = 0;
 }
 
+static int field_moved(BVar *v, const char *field)
+{
+    if (!v || !field)
+        return 0;
+    for (size_t i = 0; i < v->nmoved_fields; i++)
+        if (v->moved_fields[i] == field)
+            return 1;
+    return 0;
+}
+
+static void mark_field_moved(BVar *v, const char *field)
+{
+    if (!v || !field || field_moved(v, field))
+        return;
+    if (v->nmoved_fields < sizeof(v->moved_fields) / sizeof(*v->moved_fields))
+        v->moved_fields[v->nmoved_fields++] = field;
+}
+
+static void clear_moved_fields(BVar *v)
+{
+    if (v)
+        v->nmoved_fields = 0;
+}
+
+static void unmark_field_freed(BVar *v, const char *field)
+{
+    if (!v || !field)
+        return;
+    for (size_t i = 0; i < v->nfreed_fields; i++)
+        if (v->freed_fields[i] == field) {
+            v->freed_fields[i] = v->freed_fields[v->nfreed_fields - 1];
+            v->nfreed_fields--;
+            return;
+        }
+}
+
+static void unmark_field_moved(BVar *v, const char *field)
+{
+    if (!v || !field)
+        return;
+    for (size_t i = 0; i < v->nmoved_fields; i++)
+        if (v->moved_fields[i] == field) {
+            v->moved_fields[i] = v->moved_fields[v->nmoved_fields - 1];
+            v->nmoved_fields--;
+            return;
+        }
+}
+
 /* Outermost field of a place rooted at a binding: h.a.b -> "a". */
 static const char *place_field_name(Expr *e)
 {
@@ -179,6 +229,20 @@ static Loan *root_loan(Borrow *b, const char *root)
 /* Linear types: resource structs, composites over resource fields, unions
  * carrying them, and &mut T bindings. Depth cap guards cyclic placeholders. */
 static int ty_is_move(Borrow *b, Type *t, int depth);
+
+/* Field-level ownership transfer is opt-in through a `resource` declaration. */
+static int type_is_resource(Borrow *b, Type *t)
+{
+    if (!t || t->kind != TY_STRUCT || !t->name)
+        return 0;
+    for (size_t i = 0; i < b->prog->decls.len; i++) {
+        Decl *d = b->prog->decls.items[i];
+        if (d->kind == DL_TYPE && !d->u.type.alias_ty
+            && d->u.type.name == t->name)
+            return d->u.type.is_resource;
+    }
+    return 0;
+}
 
 static int struct_is_move(Borrow *b, const char *name, int depth)
 {
@@ -647,6 +711,7 @@ static void bx_assign(Borrow *b, Expr *e)
         bv->moved = 0; /* fresh value: MOVED -> OWNED reinitialization */
         bv->freed = 0;
         clear_freed_fields(bv);
+        clear_moved_fields(bv);
         if (type_contains_view(b, bv->ty, 0))
             rebind_view_loans(b, lhs->u.ident, e->u.assign.rhs);
         return;
@@ -673,14 +738,8 @@ static void bx_assign(Borrow *b, Expr *e)
             BVar *bv = var_find(b, root);
             if (bv) {
                 const char *field = place_field_name(lhs);
-                if (field)
-                    for (size_t i = 0; i < bv->nfreed_fields; i++)
-                        if (bv->freed_fields[i] == field) {
-                            bv->freed_fields[i] =
-                                bv->freed_fields[bv->nfreed_fields - 1];
-                            bv->nfreed_fields--;
-                            break;
-                        }
+                unmark_field_freed(bv, field);
+                unmark_field_moved(bv, field);
             }
             /* writing through a raw pointer mutates the pointee, not
              * the binding: no mutability requirement on the pointer */
@@ -728,10 +787,15 @@ static void check_free_receiver(Borrow *b, Expr *recv)
     /* track the direct owner and released fields separately, so freeing
      * h.name does not poison h.id but does catch a second h.name.free() */
     if (recv->kind == EX_IDENT) {
+        if (bv->nmoved_fields > 0)
+            bfatal(recv->span,
+                   "cannot free '%s': a field was already moved", root);
         bv->freed = 1;
         clear_freed_fields(bv);
+        clear_moved_fields(bv);
     } else if (field) {
         mark_field_freed(bv, field);
+        unmark_field_moved(bv, field);
     }
 }
 
@@ -1125,6 +1189,14 @@ static void bx_expr(Borrow *b, Expr *e)
         if (ty_is_move(b, bv->ty, 0)) {
             if (bv->moved)
                 bfatal(e->span, "use of moved value '%s'", bv->name);
+            if (bv->nmoved_fields > 0)
+                bfatal(e->span,
+                       "cannot move '%s': a field was already moved",
+                       bv->name);
+            if (bv->nfreed_fields > 0)
+                bfatal(e->span,
+                       "cannot move '%s': a field was already freed",
+                       bv->name);
             if (bv->defer_used)
                 bfatal(e->span,
                        "cannot move '%s': a deferred cleanup still uses it",
@@ -1194,16 +1266,33 @@ static void bx_expr(Borrow *b, Expr *e)
             check_ref_place_read(b, e, ref);
             return;
         }
-        if (!b->read_only && ty_is_move(b, e->type, 0))
-            bfatal(e->span,
-                   "cannot move field '%s' out of a resource container; "
-                   "move the whole value instead", e->u.field.name);
         const char *root = resolve_root(b, e);
+        const char *field = place_field_name(e);
+        BVar *bv = root ? var_find(b, root) : NULL;
+        if (field && field_moved(bv, field))
+            bfatal(e->span, "use of moved value '%s.%s'", root, field);
+        if (!b->read_only && ty_is_move(b, e->type, 0)) {
+            /* A direct owned field may be moved out, leaving the outer
+             * binding partially moved; deeper or borrowed fields cannot. */
+            if (e->u.field.base->kind != EX_IDENT || !root || !bv
+                || !type_is_resource(b, bv->ty))
+                bfatal(e->span,
+                       "cannot move field '%s' out of a resource container; "
+                       "move the whole value instead", e->u.field.name);
+            check_root_read(b, e, root);
+            Loan *loan = root_loan(b, root);
+            if (loan)
+                bfatal(e->span,
+                       "cannot move '%s.%s': it is still borrowed by '%s'",
+                       root, e->u.field.name, loan->holder);
+            if (field && field_freed(bv, field))
+                bfatal(e->span, "use of freed value '%s.%s'", root, field);
+            mark_field_moved(bv, e->u.field.name);
+            return;
+        }
         if (root) {
             /* reading a field is a use of the root, never a move of it */
             check_root_read(b, e, root);
-            BVar *bv = var_find(b, root);
-            const char *field = place_field_name(e);
             if (field && field_freed(bv, field))
                 bfatal(e->span, "use of freed value '%s.%s'", root, field);
             Expr *base = e->u.field.base;
@@ -1420,13 +1509,20 @@ static void merge_branch_marks(Borrow *b, BVar *base, size_t nbase,
                                int diverged)
 {
     for (size_t i = 0; i < nbase && i < b->vars.len; i++) {
-        if (b->vars.items[i].moved && !diverged)
+        BVar *cur = &b->vars.items[i];
+        if (cur->moved && !diverged)
             base[i].moved = 1;
-        if (b->vars.items[i].freed && !diverged)
+        if (cur->freed && !diverged)
             base[i].freed = 1;
-        if (b->vars.items[i].defer_used)
+        if (!diverged)
+            for (size_t j = 0; j < cur->nmoved_fields; j++)
+                mark_field_moved(&base[i], cur->moved_fields[j]);
+        if (!diverged)
+            for (size_t j = 0; j < cur->nfreed_fields; j++)
+                mark_field_freed(&base[i], cur->freed_fields[j]);
+        if (cur->defer_used)
             base[i].defer_used = 1;
-        if (b->vars.items[i].defer_free)
+        if (cur->defer_free)
             base[i].defer_free = 1;
     }
 }
