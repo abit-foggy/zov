@@ -46,3 +46,4 @@
 43_int_literal_overflow.zov|2|17|-|does not fit in i8
 44_unsigned_literal_overflow.zov|2|13|-|does not fit in u8
 45_nullable_cast.zov|3|20|-|cannot cast nullable *i32 to *i32
+46_call_view_outlives_string.zov|11|5|-|cannot free 's': it is still borrowed by 'v'

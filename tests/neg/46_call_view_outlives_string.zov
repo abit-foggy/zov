@@ -1,0 +1,14 @@
+// MUST FAIL: returning an argument view propagates its loan through calls
+use std::io;
+
+fn idv(s: str) str = {
+    return s;
+};
+
+export fn main() i32 = {
+    let s = String::from("hello");
+    let v = idv(s.view());
+    s.free();
+    io::println(v);
+    return 0;
+};
