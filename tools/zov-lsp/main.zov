@@ -540,10 +540,11 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, prims[i as usize], 14usize, &mut first);
     };
     // std modules (kind 9)
-    let mods: [10]str = ["std::vec", "std::map", "std::str", "std::arena",
-                         "std::fs", "std::env", "std::mem", "std::io",
-                         "std::time", "std::math"];
-    for (let i in 0..10) {
+    let mods: [11]str = ["std::vec", "std::map", "std::str",
+                         "std::strsplit", "std::arena", "std::fs",
+                         "std::env", "std::mem", "std::io", "std::time",
+                         "std::math"];
+    for (let i in 0..11) {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)
@@ -585,7 +586,8 @@ export fn main() i32 = {
     docs.insert("resource", "`resource struct` — move-only type; the borrow checker prevents use-after-move and double-frees");
     docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: push, pop, get, set, len, as_slice, sort, free");
     docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: insert, get, contains, remove, len, free");
-    docs.insert("std::str", "str utilities: eq, starts_with, ends_with, find_byte, trim");
+    docs.insert("std::str", "zero-copy str utilities: eq, starts_with, ends_with, find_byte, trim");
+    docs.insert("std::strsplit", "hosted splitting helpers returning Vec[str]: split_byte, lines");
     docs.insert("std::arena", "`Arena` — bump allocator: new, alloc_bytes, reset, free");
     docs.insert("std::fs", "file helpers: write_str, read_str, exists");
     docs.insert("std::io", "terminal I/O module: print, println, readline as `(String | Eof | IoError)`, flush");
