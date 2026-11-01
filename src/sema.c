@@ -1305,6 +1305,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             return NULL;
         }
         Type *rt = check_expr(se, e->u.assign.rhs, lt);
+        if (!e->comp_op && lt->kind == TY_UNION) {
+            e->u.assign.rhs = maybe_coerce(e->u.assign.rhs, lt);
+            rt = e->u.assign.rhs->type;
+        }
         if (e->comp_op) {
             /* compound forms: the operation must type-check on lt */
             int bit = (e->comp_op == TK_AMP_EQ || e->comp_op == TK_PIPE_EQ
@@ -2083,6 +2087,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(fi->span, "struct '%s' has no field '%s'",
                          st->name, fi->name);
             Type *it = check_expr(se, fi->val, ft);
+            if (ft->kind == TY_UNION) {
+                fi->val = maybe_coerce(fi->val, ft);
+                it = fi->val->type;
+            }
             if (fi->val->kind == EX_NULL && ft->kind == TY_PTR && ft->nullable)
                 continue; /* null widens to any nullable pointer */
             if (ptr_widens(it, ft))
@@ -2663,9 +2671,12 @@ static void check_stmt(Sema *se, Stmt *s)
         break;
     case ST_EXPR: {
         Type *t = check_expr(se, s->u.expr, NULL);
-        // #[must_use]: dropping an error-carrying union is a hard error
-        if (t && (t->kind == TY_ERR
-                  || (t->kind == TY_UNION && union_has_error(t))))
+        // #[must_use]: dropping an error-carrying union is a hard error.
+        // Assignment keeps the value alive in its destination, so it is not
+        // a drop even when the destination is an error-carrying union.
+        if (t && s->u.expr->kind != EX_ASSIGN
+            && (t->kind == TY_ERR
+                || (t->kind == TY_UNION && union_has_error(t))))
             fatal_at(s->span,
                      "error-typed value must be handled: use '?', 'match', "
                      "or 'let _ = ...'");

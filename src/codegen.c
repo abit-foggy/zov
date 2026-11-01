@@ -103,6 +103,7 @@ typedef struct CG {
     int terminated; /* current block ended in an unconditional jump */
     DA(Type *) slices;
     DA(Type *) unions;
+    size_t union_cap; /* registered unions at emit time; guards late additions */
     DA(const char *) enum_names; /* enums needing a name table */
     int needs_bounds;
     int needs_abort;
@@ -2198,22 +2199,6 @@ static void emit_test_main(CG *cg, Program *prog)
                "_zv_passed);\nreturn 0;\n}\n\n");
 }
 
-/* Does a by-value field mention this struct?  Pointers only need the
- * forward typedef, so they do not impose definition ordering. */
-static int type_mentions_struct(Type *t, const char *name)
-{
-    if (!t)
-        return 0;
-    switch (t->kind) {
-    case TY_STRUCT:
-        return t->name == name;
-    case TY_ARRAY:
-        return type_mentions_struct(t->base, name);
-    default:
-        return 0;
-    }
-}
-
 static int decl_is_plain_struct(Decl *d)
 {
     return d->kind == DL_TYPE && d->u.type.tparams.len == 0
@@ -2233,27 +2218,168 @@ static void emit_struct_definition(CG *cg, Decl *d)
     buf_printf(&*cg->cur, "};\n");
 }
 
-/* Emit struct definitions after the structs their by-value fields require. */
-static void emit_type_deps(CG *cg, Program *prog, size_t idx,
-                           unsigned char *state)
+/* Index of the plain-struct declaration for `name`, or -1. */
+static int type_decl_index(Program *prog, const char *name)
 {
-    if (state[idx] != 0)
-        return; /* done, or a by-value cycle C will reject later */
-    state[idx] = 1;
-    Decl *d = prog->decls.items[idx];
-    for (size_t j = 0; j < prog->decls.len; j++) {
-        Decl *dep = prog->decls.items[j];
-        if (!decl_is_plain_struct(dep) || j == idx)
-            continue;
-        for (size_t k = 0; k < d->u.type.fields.len; k++)
-            if (type_mentions_struct(d->u.type.fields.items[k].ty,
-                                     dep->u.type.name)) {
-                emit_type_deps(cg, prog, j, state);
-                break;
-            }
+    for (size_t i = 0; i < prog->decls.len; i++) {
+        Decl *d = prog->decls.items[i];
+        if (decl_is_plain_struct(d) && d->u.type.name == name)
+            return (int)i;
     }
-    state[idx] = 2;
+    return -1;
+}
+
+/* Register the tagged union for `u`, returning its index in cg->unions. */
+static size_t union_index(CG *cg, Type *u)
+{
+    for (size_t i = 0; i < cg->unions.len; i++)
+        if (type_eq(cg->unions.items[i], u))
+            return i;
+    da_push(&cg->unions, u);
+    return cg->unions.len - 1;
+}
+
+static void emit_union_typedef(CG *cg, Type *u)
+{
+    cg->cur = &cg->head;
+    buf_printf(&*cg->cur, "typedef struct { uint32_t tag;");
+    int any_field = 0;
+    for (size_t k = 0; k < u->members.len; k++)
+        if (member_has_payload(u->members.items[k]))
+            any_field = 1;
+    if (any_field) {
+        buf_puts(&*cg->cur, " union {");
+        for (size_t k = 0; k < u->members.len; k++)
+            if (member_has_payload(u->members.items[k])) {
+                buf_puts(&*cg->cur, " ");
+                emit_var(&*cg->cur, cg, u->members.items[k], "");
+                buf_printf(&*cg->cur, "v%lu;", (unsigned long)k);
+            }
+        buf_puts(&*cg->cur, " } u;");
+    }
+    buf_printf(&*cg->cur, " } %s;\n", union_name(cg, u));
+}
+
+static void emit_struct_deps(CG *cg, Program *prog, size_t idx,
+                             unsigned char *sstate, unsigned char *ustate);
+static void emit_union_deps(CG *cg, Program *prog, size_t uidx,
+                            unsigned char *sstate, unsigned char *ustate);
+
+/* Definitions this type needs before it can be spelled by value. */
+static void emit_type_deps(CG *cg, Program *prog, Type *t,
+                           unsigned char *sstate, unsigned char *ustate)
+{
+    if (!t)
+        return;
+    switch (t->kind) {
+    case TY_STRUCT: {
+        int di = type_decl_index(prog, t->name);
+        if (di >= 0)
+            emit_struct_deps(cg, prog, (size_t)di, sstate, ustate);
+        break;
+    }
+    case TY_UNION:
+        emit_union_deps(cg, prog, union_index(cg, t), sstate, ustate);
+        break;
+    case TY_ARRAY:
+        emit_type_deps(cg, prog, t->base, sstate, ustate);
+        break;
+    case TY_PTR:
+        /* pointers need the typedef name, not the complete type */
+        if (t->base && t->base->kind == TY_UNION)
+            emit_union_deps(cg, prog, union_index(cg, t->base), sstate,
+                            ustate);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Emit a tagged union after the structs its payloads need. */
+static void emit_union_deps(CG *cg, Program *prog, size_t uidx,
+                            unsigned char *sstate, unsigned char *ustate)
+{
+    if (uidx >= cg->union_cap)
+        fatal("internal: union typedef registered after emission");
+    if (ustate[uidx] != 0)
+        return; /* done, or a by-value cycle C will reject later */
+    ustate[uidx] = 1;
+    Type *u = cg->unions.items[uidx];
+    for (size_t k = 0; k < u->members.len; k++) {
+        Type *m = u->members.items[k];
+        if (!member_has_payload(m))
+            continue;
+        if (m->kind == TY_UNION)
+            emit_union_deps(cg, prog, union_index(cg, m), sstate, ustate);
+        else
+            emit_type_deps(cg, prog, m, sstate, ustate);
+    }
+    ustate[uidx] = 2;
+    emit_union_typedef(cg, u);
+}
+
+/* Emit a struct definition after everything its fields require. */
+static void emit_struct_deps(CG *cg, Program *prog, size_t idx,
+                             unsigned char *sstate, unsigned char *ustate)
+{
+    if (sstate[idx] != 0)
+        return; /* done, or a by-value cycle C will reject later */
+    sstate[idx] = 1;
+    Decl *d = prog->decls.items[idx];
+    for (size_t k = 0; k < d->u.type.fields.len; k++)
+        emit_type_deps(cg, prog, d->u.type.fields.items[k].ty, sstate,
+                       ustate);
+    sstate[idx] = 2;
     emit_struct_definition(cg, d);
+}
+
+/* Register unions reachable from a struct field so the state arrays can be
+ * sized before emission starts; function bodies may register more unions. */
+static void register_field_unions(CG *cg, Type *t)
+{
+    if (!t)
+        return;
+    switch (t->kind) {
+    case TY_UNION:
+        union_index(cg, t);
+        for (size_t k = 0; k < t->members.len; k++)
+            register_field_unions(cg, t->members.items[k]);
+        break;
+    case TY_ARRAY:
+    case TY_PTR:
+        register_field_unions(cg, t->base);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Emit every type definition in dependency order.  Runs after function
+ * bodies so lazily registered unions are already known. */
+static void emit_types(CG *cg, Program *prog)
+{
+    for (size_t i = 0; i < prog->decls.len; i++)
+        if (decl_is_plain_struct(prog->decls.items[i]))
+            for (size_t k = 0;
+                 k < prog->decls.items[i]->u.type.fields.len; k++)
+                register_field_unions(
+                    cg, prog->decls.items[i]->u.type.fields.items[k].ty);
+    for (size_t i = 0; i < cg->unions.len; i++)
+        for (size_t k = 0; k < cg->unions.items[i]->members.len; k++)
+            register_field_unions(cg, cg->unions.items[i]->members.items[k]);
+
+    cg->union_cap = cg->unions.len;
+    unsigned char *sstate = calloc(prog->decls.len ? prog->decls.len : 1, 1);
+    unsigned char *ustate = calloc(cg->union_cap ? cg->union_cap : 1, 1);
+    if (!sstate || !ustate)
+        fatal("out of memory");
+    for (size_t i = 0; i < prog->decls.len; i++)
+        if (decl_is_plain_struct(prog->decls.items[i]))
+            emit_struct_deps(cg, prog, i, sstate, ustate);
+    for (size_t i = 0; i < cg->unions.len; i++)
+        emit_union_deps(cg, prog, i, sstate, ustate);
+    free(sstate);
+    free(ustate);
 }
 
 char *codegen_generate(Program *prog)
@@ -2324,14 +2450,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                    mangle_type(d->u.type.name),
                    mangle_type(d->u.type.name));
     }
-    unsigned char *type_state = calloc(prog->decls.len, 1);
-    if (!type_state)
-        fatal("out of memory");
-    for (size_t i = 0; i < prog->decls.len; i++)
-        if (decl_is_plain_struct(prog->decls.items[i]))
-            emit_type_deps(cg, prog, i, type_state);
-    free(type_state);
-
+    /* struct and union definitions are emitted after all bodies so lazily
+     * registered unions are known; they are still placed before the code */
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];
         if (d->kind != DL_FN || d->u.fn.tparams.len > 0)
@@ -2350,6 +2470,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     }
     if (test_mode)
         emit_test_main(cg, prog);
+
+    emit_types(cg, prog);
 
     /* assemble final buffer: head + slice typedefs + body */
     Buf out = {0};
@@ -2711,25 +2833,6 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         }
     }
     buf_puts(&out, cg->str_helpers.data);
-    for (size_t i = 0; i < cg->unions.len; i++) {
-        Type *u = cg->unions.items[i];
-        buf_printf(&out, "typedef struct { uint32_t tag;");
-        int any_field = 0;
-        for (size_t k = 0; k < u->members.len; k++)
-            if (member_has_payload(u->members.items[k]))
-                any_field = 1;
-        if (any_field) {
-            buf_puts(&out, " union {");
-            for (size_t k = 0; k < u->members.len; k++)
-                if (member_has_payload(u->members.items[k])) {
-                    buf_puts(&out, " ");
-                    emit_var(&out, cg, u->members.items[k], "");
-                    buf_printf(&out, "v%lu;", (unsigned long)k);
-                }
-            buf_puts(&out, " } u;");
-        }
-        buf_printf(&out, " } zov_union_%lu;\n", (unsigned long)i);
-    }
     buf_puts(&out, cg->protos.data);
     buf_puts(&out, cg->body.data);
     char *result = malloc(out.len + 1);
