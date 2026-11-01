@@ -174,6 +174,224 @@ void diag_emit(Diagnostic *d)
                 d->help);
 }
 
+/* ---- code registry ---- */
+
+/* Codes are grouped by compiler stage:
+ *   E01xx lexer            E05xx borrow / ownership
+ *   E02xx parser           E06xx types
+ *   E03xx modules          E07xx literals, statements, control flow
+ *   E04xx name resolution  E08xx generics
+ *   E09xx code generation / internal
+ * Codes listed here are stable: extend the table, never repurpose an
+ * existing code. */
+static const DiagCodeInfo g_codes[] = {
+    {"E0101", "unterminated block comment",
+     "Close the comment with '*/'."},
+    {"E0102", "invalid \\x escape",
+     "\\x must be followed by exactly two hexadecimal digits."},
+    {"E0103", "unknown escape sequence",
+     "Use a supported escape: \\n \\t \\r \\\\ \\0 \\' \\\" \\xNN."},
+    {"E0104", "unterminated string literal",
+     "Close the string before the end of the line."},
+    {"E0105", "unterminated character literal",
+     "Close the character literal with a single quote."},
+    {"E0106", "invalid numeric suffix",
+     "Use a width suffix such as i8, u32, usize, f64."},
+    {"E0107", "float literal with integer suffix",
+     "Float literals take f32 or f64, or no suffix."},
+    {"E0108", "unexpected character",
+     "Remove the character or write it inside a string literal."},
+
+    {"E0201", "unexpected token",
+     "Remove the token or complete the construct it belongs to."},
+    {"E0202", "expected expression",
+     "Provide a value here."},
+    {"E0203", "expected type",
+     "Write a type name such as i32, str, or Vec[T]."},
+    {"E0204", "malformed string interpolation",
+     "Close the '{' interpolation with '}'."},
+    {"E0205", "malformed match pattern",
+     "Write a variant name, 'case let name: Type', or '_'."},
+    {"E0206", "malformed struct literal",
+     "Write Type{ field = value, ... }."},
+    {"E0207", "expected identifier",
+     "Provide the name this declaration requires."},
+    {"E0208", "malformed path",
+     "Complete the '::' or '.' path with an identifier."},
+    {"E0209", "invalid defer target",
+     "defer may wrap a call or a block, not a declaration."},
+    {"E0210", "malformed declaration",
+     "Check the declaration's parameter and field syntax."},
+    {"E0211", "unsupported syntax",
+     "See the language reference for supported constructs."},
+    {"E0212", "malformed use declaration",
+     "Write 'use std::module;' or 'use <header.h> as alias;'."},
+    {"E0213", "malformed type declaration",
+     "Check the type's variants and fields."},
+    {"E0214", "malformed function declaration",
+     "Check the parameter list and return type."},
+    {"E0215", "expected top-level item",
+     "Only 'use', 'type', 'fn', and 'test' may appear at top level."},
+
+    {"E0301", "module not found",
+     "Check the module path and the standard-library search path."},
+    {"E0302", "import cycle",
+     "Break the cycle by moving shared declarations to a third module."},
+    {"E0303", "C header not available",
+     "Check the header name and the include path."},
+    {"E0304", "malformed import",
+     "Write 'use <header.h> as alias;' for C headers."},
+    {"E0305", "duplicate import",
+     "Remove the repeated use declaration."},
+    {"E0306", "library unavailable in this build",
+     "This standard-library facility needs a hosted runtime."},
+
+    {"E0401", "undefined function",
+     "Check the spelling or import the defining module."},
+    {"E0402", "undefined symbol",
+     "Declare the name before use, or check the spelling."},
+    {"E0403", "module member not found",
+     "Check the module source for the exported spelling."},
+    {"E0404", "module not imported",
+     "Add a use declaration for the module."},
+    {"E0405", "unknown namespace",
+     "Check the namespace name or import it first."},
+    {"E0406", "name is not a value",
+     "This name is a type, module, or function; use it in that position."},
+    {"E0407", "no such member",
+     "Check the field, method, or variant name."},
+    {"E0408", "unknown type",
+     "Check the type name or declare it in this module."},
+    {"E0409", "duplicate definition",
+     "Rename or remove one of the definitions."},
+    {"E0410", "recursive type has infinite size",
+     "Break the cycle with a pointer, slice, or Vec."},
+    {"E0411", "invalid entry point",
+     "A Zov entry point takes no parameters and returns i32 or void."},
+    {"E0412", "unresolved module symbol",
+     "Qualify the symbol with a module that exports it."},
+    {"E0413", "value is not callable",
+     "Call a function or method instead of a plain value."},
+    {"E0414", "invalid method receiver",
+     "A method receiver must be a struct type, written as (self: &T)."},
+    {"E0415", "field is private",
+     "Use the type's accessor methods instead of its raw fields."},
+
+    {"E0502", "move while borrowed",
+     "Consume the borrow before moving or freeing the value."},
+    {"E0503", "use of moved value",
+     "Resource values are linear; each value has exactly one owner."},
+    {"E0504", "use of freed value",
+     "Do not read a value after free(); reorder the cleanup."},
+    {"E0505", "write through shared reference",
+     "Use '&mut T' to mutate through a reference."},
+    {"E0506", "conflicting borrow",
+     "End the first borrow before starting a second overlapping one."},
+    {"E0507", "read while mutably borrowed",
+     "Stop using the mutable borrow before reading the value."},
+    {"E0508", "cannot assign through borrow",
+     "The destination is borrowed; end that borrow first."},
+    {"E0509", "value already freed",
+     "Remove the second free(); each resource is freed once."},
+    {"E0510", "cannot move value",
+     "The value is borrowed, deferred, or partially moved."},
+    {"E0511", "cannot move field out of container",
+     "Move the whole value, or make the container a resource struct."},
+    {"E0512", "returning reference to local",
+     "Return an owned value, or a view of a parameter instead."},
+    {"E0513", "value moved in loop",
+     "Reassign the value at the end of each iteration."},
+    {"E0514", "conflicting borrows in call arguments",
+     "Split the call so only one argument borrows mutably."},
+    {"E0515", "deferred cleanup conflict",
+     "A deferred block still uses this value; move the defer earlier."},
+    {"E0516", "mutation of immutable binding",
+     "Declare the binding with 'let mut'."},
+
+    {"E0601", "mismatched types",
+     "Use an explicit 'as' cast when a conversion is intended."},
+    {"E0602", "wrong number of arguments",
+     "Match the function's declared parameters."},
+    {"E0603", "invalid cast",
+     "Only numeric, pointer, and error conversions may be cast."},
+    {"E0604", "invalid operand type",
+     "Check the operand types accepted by this operator."},
+    {"E0605", "type cannot be used here",
+     "This position requires a different kind of value."},
+    {"E0606", "missing field in literal",
+     "Resource literals must initialize every field."},
+    {"E0607", "nullable value used directly",
+     "Narrow with match, '?', or '!' before use."},
+    {"E0608", "non-exhaustive match",
+     "Cover every variant, or add a '_' arm."},
+    {"E0609", "duplicate match arm",
+     "Remove the repeated arm."},
+    {"E0610", "invalid pattern",
+     "Check the pattern against the matched type."},
+
+    {"E0701", "integer literal out of range",
+     "Use a wider type or a smaller literal."},
+    {"E0702", "missing return value",
+     "Return a value of the declared type."},
+    {"E0703", "function may fall through",
+     "Return a value on every path, or return void."},
+    {"E0704", "unhandled error value",
+     "Handle the error with '?', match, or 'let _ = ...'."},
+    {"E0705", "break outside loop",
+     "break and continue require an enclosing loop."},
+    {"E0706", "void function cannot return a value",
+     "Remove the returned expression."},
+    {"E0707", "invalid assignment target",
+     "Assign to a variable, field, index, or dereference."},
+    {"E0708", "invalid initializer",
+     "Provide an initializer or an explicit complete type."},
+    {"E0709", "compound assignment on non-integer",
+     "Compound operators require an integer or numeric lvalue."},
+
+    {"E0801", "not a generic function",
+     "Remove the type arguments, or use a generic function."},
+    {"E0802", "wrong number of type arguments",
+     "Match the declared type parameters."},
+    {"E0803", "explicit type arguments required",
+     "Write f[T](...) to instantiate a generic function."},
+    {"E0804", "invalid generic instantiation",
+     "Instantiate through a call or struct literal."},
+    {"E0805", "type nesting too deep",
+     "Simplify deeply nested generic or pointer types."},
+    {"E0806", "unsupported generic form",
+     "Check the builtin's accepted generic signature."},
+
+    {"E0901", "unsupported construct in code generation",
+     "This is a compiler limitation; please report it."},
+    {"E0902", "internal compiler error",
+     "This is a compiler bug; please report it."},
+
+    {"W0001", "unused variable",
+     "Prefix the name with '_' if the binding is intentional."},
+};
+
+const DiagCodeInfo *diag_code_lookup(const char *code)
+{
+    if (!code)
+        return NULL;
+    for (size_t i = 0; i < sizeof(g_codes) / sizeof(g_codes[0]); i++)
+        if (strcmp(g_codes[i].code, code) == 0)
+            return &g_codes[i];
+    return NULL;
+}
+
+const char *diag_code_title(const char *code)
+{
+    const DiagCodeInfo *info = diag_code_lookup(code);
+    return info ? info->title : NULL;
+}
+
+void diag_list_codes(FILE *out)
+{
+    for (size_t i = 0; i < sizeof(g_codes) / sizeof(g_codes[0]); i++)
+        fprintf(out, "%s  %s\n", g_codes[i].code, g_codes[i].title);
+}
+
 /* ---- explain ---- */
 
 struct diag_explain {
@@ -240,6 +458,7 @@ static const struct diag_explain g_explains[] = {
 
 int diag_print_explanation(const char *code)
 {
+    const DiagCodeInfo *info = diag_code_lookup(code);
     for (size_t i = 0; i < sizeof(g_explains) / sizeof(g_explains[0]); i++) {
         if (strcmp(g_explains[i].code, code) != 0)
             continue;
@@ -249,6 +468,12 @@ int diag_print_explanation(const char *code)
             printf("\n  good: %s\n", g_explains[i].good);
         if (g_explains[i].bad)
             printf("  bad:  %s\n", g_explains[i].bad);
+        return 0;
+    }
+    if (info) {
+        printf("%s[%s]: %s\n\n%s\n",
+               code[0] == 'W' ? "warning" : "error", code, info->title,
+               info->help);
         return 0;
     }
     fprintf(stderr, "zovc: no explanation for code '%s'\n", code);
@@ -340,5 +565,23 @@ void ZOV_NORETURN diag_fatal_at(const char *code, Span span,
     }
     d.help = help;
     diag_emit(&d);
+    exit(1);
+}
+
+void ZOV_NORETURN diag_fatal_global(const char *code, const char *fmt, ...)
+{
+    char msg[1024];
+    const DiagCodeInfo *info = diag_code_lookup(code);
+    if (!info)
+        fatal("unknown diagnostic code '%s' emitted for: %s",
+              code ? code : "(null)", fmt);
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    fprintf(stderr, "error[%s]: %s\n", code, msg);
+    if (info->help && info->help[0])
+        fprintf(stderr, " = help: %s\n", info->help);
     exit(1);
 }

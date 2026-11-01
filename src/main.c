@@ -42,26 +42,26 @@ static char *read_file(const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fatal("cannot open '%s'", path);
+        failure("cannot open '%s'", path);
         return NULL;
     }
     if (fseek(f, 0, SEEK_END) != 0) {
-        fatal("cannot seek '%s'", path);
+        failure("cannot seek '%s'", path);
         return NULL;
     }
     long n = ftell(f);
     if (n < 0) {
-        fatal("cannot stat '%s'", path);
+        failure("cannot stat '%s'", path);
         return NULL;
     }
     rewind(f);
     char *buf = malloc((size_t)n + 1);
     if (!buf) {
-        fatal("out of memory");
+        failure("out of memory");
         return NULL;
     }
     if (fread(buf, 1, (size_t)n, f) != (size_t)n) {
-        fatal("short read on '%s'", path);
+        failure("short read on '%s'", path);
         return NULL;
     }
     buf[n] = '\0';
@@ -230,6 +230,8 @@ static void usage(const char *prog)
             "entry\n"
             "  --release    use the system cc pipe even with libtcc\n"
             "  --version    print the compiler version\n"
+            "  explain <CODE>     explain a diagnostic code\n"
+            "  diagnostics        list every diagnostic code\n"
             "  -o <path>    output executable path (default a.out)\n",
             prog);
 }
@@ -258,6 +260,10 @@ int main(int argc, char **argv)
             return 1;
         }
         return diag_print_explanation(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "diagnostics") == 0) {
+        diag_list_codes(stdout);
+        return 0;
     }
     if (argc >= 2 && strcmp(argv[1], "cc") == 0)
         return driver_run_cc(argc - 2, argv + 2);
