@@ -1,0 +1,7 @@
+export type H = struct { name: String };
+
+export fn main() i32 = {
+    let arr: [1]String = [String::from("a")];
+    let h = H{ name = arr[0] };
+    return 0;
+};

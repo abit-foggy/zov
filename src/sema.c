@@ -2304,6 +2304,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             elem = hint->base; /* annotation drives element coercion */
         for (size_t i = 0; i < e->u.elems.len; i++) {
             Type *t = check_expr(se, e->u.elems.items[i], elem);
+            reject_indexed_move(se, e->u.elems.items[i]);
             if (!elem)
                 elem = t;
             else if (!is_unknown(t) && !type_eq(elem, t))
@@ -2319,6 +2320,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_ORELSE: {
         Type *lt = check_expr(se, e->u.orelse.lhs, NULL);
+        reject_indexed_move(se, e->u.orelse.lhs);
         Type *result = NULL;
         int payload_idx = -1;
         if (lt->kind == TY_PTR && lt->nullable) {
@@ -2534,6 +2536,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(E0407, fi->span, "struct '%s' has no field '%s'",
                          st->name, fi->name);
             Type *it = check_expr(se, fi->val, ft);
+            reject_indexed_move(se, fi->val);
             if (ft->kind == TY_UNION) {
                 fi->val = maybe_coerce(fi->val, ft);
                 it = fi->val->type;
@@ -2566,6 +2569,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_MATCH: {
         Type *st = check_expr(se, e->u.match.scrutinee, NULL);
+        reject_indexed_move(se, e->u.match.scrutinee);
         if (st->kind == TY_UNION) {
             // exhaustiveness bitmask over deterministic member indices
             size_t cover = 0;
@@ -2831,6 +2835,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_TRY: {
         Type *t = check_expr(se, e->u.tryy, NULL);
+        reject_indexed_move(se, e->u.tryy);
         Type *rt = se->fn_ret;
         if (t->kind == TY_UNION) {
             if (union_has_error(t) && (!rt || rt->kind != TY_UNION))
@@ -2866,6 +2871,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_UNWRAP: {
         Type *t = check_expr(se, e->u.unwrap, NULL);
+        reject_indexed_move(se, e->u.unwrap);
         if (t->kind == TY_UNION) {
             Type *payload = union_payload(t);
             if (!payload)
