@@ -525,6 +525,81 @@ run_freestanding() {
     fi
 }
 
+run_strict_c99() {
+    require_cmd cc || return
+    strict_fail=0
+    strict_count=0
+
+    for src in "$ROOT"/tests/[0-9][0-9]_*.zov; do
+        [ -f "$src" ] || continue
+        base=${src##*/}
+        base=${base%.zov}
+        case $base in
+            11_*|16_*) continue ;;
+        esac
+        strict_count=$((strict_count + 1))
+        cfile=$TMP/strict-$base.c
+        if ! run_limited "$cfile" "$TMP/strict-$base.emit.err" \
+            "$ZOV" --emit-c "$src"; then
+            fail "strict C99 emit: $base"
+            show_file "$TMP/strict-$base.emit.err"
+            strict_fail=1
+            continue
+        fi
+        if grep -q '__builtin_trap' "$cfile"; then
+            fail "strict C99 codegen: $base emits __builtin_trap"
+            strict_fail=1
+        fi
+        if ! run_limited "$TMP/strict-$base.cc.out" \
+            "$TMP/strict-$base.cc.err" \
+            cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+            -c "$cfile" -o "$TMP/strict-$base.o"; then
+            fail "strict C99 compile: $base"
+            sed 's/^/    /' "$TMP/strict-$base.cc.err"
+            strict_fail=1
+        fi
+    done
+
+    # test-mode runner and freestanding output use different entry points
+    if run_limited "$TMP/strict-test11.c" "$TMP/strict-test11.emit.err" \
+        "$ZOV" --test --emit-c "$ROOT/tests/11_test_blocks.zov"; then
+        strict_count=$((strict_count + 1))
+        if ! run_limited "$TMP/strict-test11.cc.out" \
+            "$TMP/strict-test11.cc.err" \
+            cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+            -c "$TMP/strict-test11.c" -o "$TMP/strict-test11.o"; then
+            fail "strict C99 compile: 11_test_blocks (test runner)"
+            sed 's/^/    /' "$TMP/strict-test11.cc.err"
+            strict_fail=1
+        fi
+    else
+        fail "strict C99 emit: 11_test_blocks (test runner)"
+        show_file "$TMP/strict-test11.emit.err"
+        strict_fail=1
+    fi
+
+    if run_limited "$TMP/strict-fs.c" "$TMP/strict-fs.emit.err" \
+        "$ZOV" --freestanding --emit-c \
+        "$ROOT/tests/16_freestanding_smoke.zov"; then
+        strict_count=$((strict_count + 1))
+        if ! run_limited "$TMP/strict-fs.cc.out" "$TMP/strict-fs.cc.err" \
+            cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+            -ffreestanding -c "$TMP/strict-fs.c" -o "$TMP/strict-fs.o"; then
+            fail "strict C99 compile: 16_freestanding_smoke"
+            sed 's/^/    /' "$TMP/strict-fs.cc.err"
+            strict_fail=1
+        fi
+    else
+        fail "strict C99 emit: 16_freestanding_smoke"
+        show_file "$TMP/strict-fs.emit.err"
+        strict_fail=1
+    fi
+
+    if [ "$strict_fail" -eq 0 ]; then
+        pass "strict C99 codegen ($strict_count fixtures)"
+    fi
+}
+
 run_freestanding_arch() {
     source=$ROOT/tests/16_freestanding_smoke.zov
     require_file "$source" || return
@@ -808,6 +883,7 @@ run_stdin 17_std_io tests/17_std_io.zov "first line" tests/17_std_io.expected
 run_exit  18_std_time tests/18_std_time.zov 0
 run_exit  19_std_math tests/19_std_math_and_separators.zov 0
 run_stdout 20_string_ownership tests/20_string_ownership.zov tests/20_string_ownership.expected
+run_stdout 22_strict_c99 tests/22_strict_c99_constructs.zov tests/22_strict_c99_constructs.expected
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
@@ -846,6 +922,7 @@ run_check
 run_lsp
 run_zovc_cc
 run_freestanding
+run_strict_c99
 run_freestanding_arch
 run_freestanding_package
 run_sanitizer
