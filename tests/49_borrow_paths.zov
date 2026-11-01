@@ -1,0 +1,80 @@
+// borrow paths: reborrows restore the parent, NLL releases branch loans,
+// and field loans stay independent across control flow
+use std::io;
+
+export type Pair = struct {
+    left: i32,
+    right: i32,
+};
+
+fn bump(r: &mut i32) void = {
+    *r = *r + 1;
+};
+
+fn bump_twice(r: &mut i32) void = {
+    let inner: &mut i32 = &mut *r;
+    *inner = *inner + 1;
+    bump(r);
+};
+
+fn read_sum(a: &i32, b: &i32) i32 = {
+    return *a + *b;
+};
+
+export fn main() i32 = {
+    let mut x: i32 = 0;
+    bump_twice(&mut x);
+    assert(x == 2);
+
+    let shared: &i32 = &x;
+    let copied: &i32 = shared;
+    assert(read_sum(shared, copied) == 4);
+
+    let mut p = Pair{ left = 1, right = 2 };
+    {
+        let l: &mut i32 = &mut p.left;
+        *l = 10;
+    };
+    p.right = 20;
+    if (p.left != 10 || p.right != 20) { return 1; };
+
+    let mut total: i32 = 0;
+    let mut i: i32 = 0;
+    while (i < 3) {
+        let r: &mut i32 = &mut total;
+        *r = *r + i;
+        i += 1;
+    };
+    assert(total == 3);
+
+    let mut picked: i32 = 0;
+    if (p.left > 0) {
+        let l: &mut i32 = &mut p.left;
+        *l = *l + 1;
+        picked = *l;
+    } else {
+        let r: &mut i32 = &mut p.right;
+        *r = *r + 1;
+        picked = *r;
+    };
+    assert(picked == 11);
+
+    let mut acc: i32 = 0;
+    for (let j in 0..3) {
+        let r: &i32 = &p.right;
+        acc = acc + *r + j;
+    };
+    assert(acc == 63);
+
+    let mut chosen: i32 = 0;
+    match (p.left) {
+        case _ => {
+            let l: &i32 = &p.left;
+            chosen = *l;
+        },
+    };
+    assert(chosen == 11);
+
+    io::println("borrow paths ok x={x} total={total} acc={acc}");
+    return 0;
+};
