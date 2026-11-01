@@ -1418,6 +1418,9 @@ static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
     if (!at || is_unknown(at))
         return;
     if (pt->kind == TY_PTR && !pt->nullable) {
+        /* void * is the C FFI wildcard for any object pointer */
+        if (at->kind == TY_PTR && type_eq(at->base, type_prim(TY_VOID)))
+            return;
         if (at->kind == TY_PTR && !at->nullable && type_eq(at->base, pt->base))
             return;
         if ((at->kind == TY_REF || at->kind == TY_MUTREF)
@@ -1437,6 +1440,8 @@ static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
     }
     if (pt->kind == TY_PTR && pt->nullable) {
         if (null_fits(arg, pt))
+            return;
+        if (at->kind == TY_PTR && type_eq(at->base, type_prim(TY_VOID)))
             return;
         if (at->kind == TY_PTR && type_eq(at->base, pt->base))
             return;
