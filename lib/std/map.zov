@@ -161,6 +161,110 @@ export fn (self: &Map[K, V]) findref(key: K) (&V | MapNotFound) = {
     return MapNotFound;
 };
 
+// Zero-allocation lookups for maps keyed by owned String.  The probe hashes
+// and compares the borrowed str bytes directly; no temporary String is built.
+export fn (self: &Map[String, V]) findstr(key: str) (&V | MapNotFound) = {
+    if (self.cap != 0usize) {
+        let h: u64 = hash_val[str](key);
+        let mut idx: usize = (h % (self.cap as u64)) as usize;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            let st: u8 = (self.states!)[idx];
+            if (st == 0u8) { break; }
+            if (st == 1u8) {
+                let k: String = (self.keys!)[idx];
+                if (k == key) {
+                    return &((self.vals!)[idx]);
+                }
+            };
+            idx = (idx + 1usize) % self.cap;
+            i += 1usize;
+        };
+    };
+    return MapNotFound;
+};
+
+export fn (self: &Map[String, V]) getstrref(key: str) &V = {
+    let r = self.findstr(key);
+    let v: &V = match (r) {
+        case let p: &V => p,
+        case MapNotFound => {
+            c::abort();
+            return &((self.vals!)[0usize]);
+        },
+    };
+    return v;
+};
+
+export fn (self: &Map[String, V]) containsstr(key: str) bool = {
+    if (self.cap != 0usize) {
+        let h: u64 = hash_val[str](key);
+        let mut idx: usize = (h % (self.cap as u64)) as usize;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            let st: u8 = (self.states!)[idx];
+            if (st == 0u8) { return false; }
+            if (st == 1u8) {
+                let k: String = (self.keys!)[idx];
+                if (k == key) { return true; }
+            };
+            idx = (idx + 1usize) % self.cap;
+            i += 1usize;
+        };
+    };
+    return false;
+};
+
+export fn (self: &mut Map[String, V]) removestr(key: str) bool = {
+    if (self.cap != 0usize) {
+        let h: u64 = hash_val[str](key);
+        let mut idx: usize = (h % (self.cap as u64)) as usize;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            let st: u8 = (self.states!)[idx];
+            if (st == 0u8) { break; }
+            if (st == 1u8) {
+                let k: String = (self.keys!)[idx];
+                if (k == key) {
+                    mem::drop[String]((self.keys!)[idx]);
+                    mem::drop[V]((self.vals!)[idx]);
+                    (self.states!)[idx] = 2u8;
+                    self.length -= 1usize;
+                    return true;
+                }
+            };
+            idx = (idx + 1usize) % self.cap;
+            i += 1usize;
+        };
+    };
+    return false;
+};
+
+export fn (self: &mut Map[String, V]) takestr(key: str) (V | MapNotFound) = {
+    if (self.cap != 0usize) {
+        let h: u64 = hash_val[str](key);
+        let mut idx: usize = (h % (self.cap as u64)) as usize;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            let st: u8 = (self.states!)[idx];
+            if (st == 0u8) { break; }
+            if (st == 1u8) {
+                let k: String = (self.keys!)[idx];
+                if (k == key) {
+                    let v: V = (self.vals!)[idx];
+                    mem::drop[String]((self.keys!)[idx]);
+                    (self.states!)[idx] = 2u8;
+                    self.length -= 1usize;
+                    return v;
+                }
+            };
+            idx = (idx + 1usize) % self.cap;
+            i += 1usize;
+        };
+    };
+    return MapNotFound;
+};
+
 export fn (self: &Map[K, V]) get(key: K) (V | MapNotFound) = {
     if (self.cap == 0usize) {
         mem::drop[K](key);

@@ -777,6 +777,10 @@ static void collect_recv_tparams(Sema *se, Type *t, StrList *out)
             collect_recv_tparams(se, t->members.items[i], out);
         return;
     case TY_STRUCT:
+        /* Concrete builtin types in a receiver are not method type params:
+         * Map[String, V] binds only V. */
+        if (t->name && zstr_eq(t->name, "String"))
+            return;
         if (t->name && !strstr(t->name, "::")
             && !scope_find(se->scope, t->name)) {
             for (size_t i = 0; i < out->len; i++)

@@ -74,8 +74,7 @@ export fn main() i32 = {
                 if (!first) { io::print(" "); };
                 let word: str = parts.get(i);
                 if (word.len > 0usize && word.ptr[0] == 36u8) {
-                    let key = String::from(word[1..]);
-                    let found = vars.findref(key);
+                    let found = vars.findstr(word[1..]);
                     match (found) {
                         case let v: &String => io::print(v.view()),
                         case map::MapNotFound => io::print("<unset>"),

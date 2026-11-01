@@ -1,0 +1,45 @@
+// Zero-allocation str lookups on Map[String, V].
+use std::io;
+use std::map as map;
+
+export fn main() i32 = {
+    let mut m = map::new[String, String]();
+    m.insert(String::from("PATH"), String::from("/bin"));
+    m.insert(String::from("HOME"), String::from("/home/zov"));
+
+    {
+        let r = m.findstr("PATH");
+        let v: &String = match (r) {
+            case let p: &String => p,
+            case map::MapNotFound => return 1,
+        };
+        io::println(v.view());
+    };
+    if (!m.containsstr("HOME")) { return 2; };
+    if (m.containsstr("NOPE")) { return 3; };
+
+    let h = m.findstr("HOME");
+    let hp: &String = match (h) {
+        case let p: &String => p,
+        case map::MapNotFound => return 4,
+    };
+    io::println(hp.view());
+
+    let t = m.takestr("PATH");
+    let path: String = match (t) {
+        case let s: String => s,
+        case map::MapNotFound => return 5,
+    };
+    io::println(path.view());
+    path.free();
+    if (m.containsstr("PATH")) { return 6; };
+
+    let mut n = map::new[String, String]();
+    n.insert(String::from("count"), String::from("7"));
+    io::println(n.getstrref("count").view());
+    n.removestr("count");
+    io::println(n.len());
+    n.free();
+    m.free();
+    return 0;
+};
