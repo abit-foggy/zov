@@ -1,0 +1,10 @@
+// a bounds failure inside a generic instantiation keeps the generic body site
+export fn at[T](s: []T, i: usize) T = {
+    return s[i];
+};
+
+export fn main() i32 = {
+    let a: [2]i32 = [1, 2];
+    let x: i32 = at[i32](a[..], 5usize);
+    return x;
+};
