@@ -48,10 +48,20 @@ export fn main() i32 = {
     // fixed arrays destroy the old element before storing a replacement
     let mut arr: [2]String = [String::from("a"), String::from("b")];
     arr[0] = String::from("c");
+    arr[0] = String::from("d");
     io::println(arr[0].view());
     io::println(arr[1].view());
     arr[0].free();
     arr[1].free();
+
+    // zero-initialized arrays hold empty String handles, so the first
+    // element assignment destroys a null buffer safely
+    let mut zeroed: [2]String;
+    zeroed[0] = String::from("x");
+    zeroed[1] = String::from("y");
+    io::println(zeroed[1].view());
+    zeroed[0].free();
+    zeroed[1].free();
     return 0;
 };
 
