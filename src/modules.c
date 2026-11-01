@@ -329,7 +329,9 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
     }
     da_push(&ld->visited, ld->loading.items[ld->loading.len - 1]);
     ld->loading.len--;
-    free(src);
+    /* Spans in the AST point into this buffer and its file name, and
+     * diagnostics/panic messages read them after parsing.  Keep both
+     * alive for the rest of the compiler run. */
     free(subdir);
 }
 
@@ -380,8 +382,7 @@ void modules_load(Program *prog, const char *main_file, struct Pkg *pkg)
                     da_push(&d->u.use.ztargets, nm);
             }
         }
-        free(src);
-        free(file);
+        /* file and src back span diagnostics; keep them alive */
     }
     free(srcdir);
     /* imports precede importers so pass-1 type resolution is topological */
