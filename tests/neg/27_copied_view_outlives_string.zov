@@ -1,0 +1,11 @@
+// MUST FAIL: a copied str view keeps the String borrowed
+use std::io;
+
+export fn main() i32 = {
+    let s = String::from("borrowed");
+    let v: str = s.view();
+    let w: str = v;
+    s.free();
+    io::println(w);
+    return 0;
+};

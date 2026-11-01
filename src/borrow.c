@@ -50,6 +50,7 @@ typedef struct Borrow {
     DA(BVar) vars;
     DA(Loan) loans;
     int pos;
+    int read_only; /* String operands of concat/print are borrowed, not moved */
     DA(struct UseRec) uses; /* pre-scanned last-use position per name */
 } Borrow;
 
@@ -164,6 +165,8 @@ static int ty_is_move(Borrow *b, Type *t, int depth)
     case TY_MUTREF:
         return 1;
     case TY_STRUCT:
+        if (t->name && zstr_eq(t->name, "String"))
+            return 1; /* owned string: moving copies the handle, not the bytes */
         return t->name ? struct_is_move(b, t->name, depth) : 0;
     case TY_UNION:
         for (size_t i = 0; i < t->members.len; i++)
@@ -516,8 +519,42 @@ static void bx_assign(Borrow *b, Expr *e)
     }
 }
 
+/* String.free() mutates the backing allocation, so it must reject both
+ * moved receivers and any live borrow (a str view from .view()). */
+static void check_free_receiver(Borrow *b, Expr *recv)
+{
+    const char *root = resolve_root(b, recv);
+    if (!root) {
+        bx_expr(b, recv);
+        return;
+    }
+    BVar *bv = var_find(b, root);
+    if (!bv)
+        return;
+    if (bv->moved)
+        bfatal(recv->span, "use of moved value '%s'", root);
+    Loan *l = root_loan(b, root);
+    if (l)
+        bfatal(recv->span,
+               "cannot free '%s': it is still borrowed by '%s'", root,
+               l->holder);
+}
+
 static void bx_call(Borrow *b, Expr *e)
 {
+    /* builtin String methods read the receiver: using a moved String
+     * through .view()/.free() must still be rejected, but the receiver
+     * itself is not consumed by the call. */
+    if (e->str_recv) {
+        if (e->builtin_str_method == 1)
+            check_free_receiver(b, e->str_recv);
+        else {
+            int prev = b->read_only;
+            b->read_only = 1;
+            bx_expr(b, e->str_recv);
+            b->read_only = prev;
+        }
+    }
     /* print/println args are printable (hence Copy) per sema, so they
      * can never move; inline consuming calls inside args still move */
     DA(TempLoan) temps = {0};
@@ -535,7 +572,11 @@ static void bx_call(Borrow *b, Expr *e)
             bx_borrow_operand(b, arg->u.unary.e);
             continue;
         }
+        int prev = b->read_only;
+        if (e->builtin_print)
+            b->read_only = 1;
         bx_expr(b, arg);
+        b->read_only = prev;
     }
     for (size_t i = 0; i < temps.len; i++)
         for (size_t j = i + 1; j < temps.len; j++)
@@ -586,6 +627,9 @@ static void push_call_root(CallRootList *roots, const char *root,
  * chained through their own holder loans. */
 static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
 {
+    if (call->str_recv)
+        push_call_root(roots, resolve_root(b, call->str_recv), 0);
+    int method = call->method_call;
     for (size_t i = 0; i < call->u.call.args.len; i++) {
         Expr *arg = call->u.call.args.items[i];
         if (arg->kind == EX_UNARY && arg->u.unary.op == TK_AMP) {
@@ -595,6 +639,21 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
         }
         if (arg->kind == EX_SLICE) {
             push_call_root(roots, resolve_root(b, arg->u.slice.base), 0);
+            continue;
+        }
+        if (!method && arg->kind == EX_IDENT && arg->type
+            && arg->type->kind == TY_STR) {
+            /* free functions returning str may return a view of this arg;
+             * method receivers are excluded because Vec.get returns a
+             * value that does not borrow the vector itself. */
+            Loan *l = holder_loan(b, arg->u.ident);
+            if (l)
+                push_call_root(roots, l->root, l->exclusive);
+            continue;
+        }
+        if (!method && arg->kind == EX_CALL && arg->builtin_str_method == 2) {
+            /* trim(s.view()) borrows the String behind the temporary view */
+            push_call_root(roots, resolve_root(b, arg->str_recv), 0);
             continue;
         }
         if (arg->kind == EX_IDENT) {
@@ -612,7 +671,8 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
 
 static int is_borrowed_view(Type *t)
 {
-    /* raw pointers are owned; str stays exempt for ergonomics */
+    /* raw pointers are owned; plain str stays exempt for ergonomics, but
+     * String.view() is tracked explicitly at its binding site. */
     return t && (t->kind == TY_REF || t->kind == TY_MUTREF
                  || t->kind == TY_SLICE);
 }
@@ -657,6 +717,11 @@ static void bx_expr(Borrow *b, Expr *e)
             return;
         if (bv->ty->kind == TY_REF || bv->ty->kind == TY_MUTREF)
             return; /* using a reference binding is never a move */
+        if (b->read_only && bv->ty->kind == TY_STRUCT && bv->ty->name
+            && zstr_eq(bv->ty->name, "String")) {
+            check_root_read(b, e, e->u.ident);
+            return;
+        }
         if (ty_is_move(b, bv->ty, 0)) {
             if (bv->moved)
                 bfatal(e->span, "use of moved value '%s'", bv->name);
@@ -744,10 +809,32 @@ static void bx_expr(Borrow *b, Expr *e)
     case EX_CALL:
         bx_call(b, e);
         return;
-    case EX_BINARY:
+    case EX_BINARY: {
+        int stringish = e->type && e->type->kind == TY_STRUCT
+                        && e->type->name && zstr_eq(e->type->name, "String");
+        if (!stringish && (e->u.binary.op == TK_EQ
+                           || e->u.binary.op == TK_NEQ
+                           || e->u.binary.op == TK_LT
+                           || e->u.binary.op == TK_LE
+                           || e->u.binary.op == TK_GT
+                           || e->u.binary.op == TK_GE)) {
+            Type *lt = e->u.binary.lhs->type;
+            Type *rt = e->u.binary.rhs->type;
+            stringish = (lt && (lt->kind == TY_STR
+                                || (lt->kind == TY_STRUCT && lt->name
+                                    && zstr_eq(lt->name, "String"))))
+                     || (rt && (rt->kind == TY_STR
+                                || (rt->kind == TY_STRUCT && rt->name
+                                    && zstr_eq(rt->name, "String"))));
+        }
+        int prev = b->read_only;
+        if (stringish)
+            b->read_only = 1;
         bx_expr(b, e->u.binary.lhs);
         bx_expr(b, e->u.binary.rhs);
+        b->read_only = prev;
         return;
+    }
     case EX_INDEX:
         bx_expr(b, e->u.index.base);
         bx_expr(b, e->u.index.index);
@@ -1048,9 +1135,10 @@ static int b_stmt(Borrow *b, Stmt *s)
             }
             return 0;
         }
-        bx_expr(b, init);
         if (init->kind == EX_MATCH)
             walk_match(b, init);
+        else
+            bx_expr(b, init);
         BVar *bv0 = var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
         (void)bv0;
         if (init->kind == EX_SLICE) {
@@ -1068,13 +1156,37 @@ static int b_stmt(Borrow *b, Stmt *s)
                 da_push(&b->loans, l);
             }
         }
-        if (is_borrowed_view(s->u.let.ty)) {
-            /* v.as_slice() and friends: the returned view borrows every
-             * root the callee received, held until this binding's last
-             * lexical use */
-            Expr *call = peel_try_unwrap(init);
-            if (call && call->kind == EX_CALL)
-                transfer_call_loans(b, s->u.let.name, call);
+        Expr *view_call = peel_try_unwrap(init);
+        if (view_call && view_call->kind == EX_IDENT && s->u.let.ty
+            && (s->u.let.ty->kind == TY_STR
+                || s->u.let.ty->kind == TY_SLICE)) {
+            /* copying a borrowed view must copy its provenance too, or the
+             * original can be freed while the copy is still live */
+            Loan *src = holder_loan(b, view_call->u.ident);
+            if (src && src->active) {
+                Loan l;
+                memset(&l, 0, sizeof(l));
+                l.holder = s->u.let.name;
+                l.root = src->root;
+                l.exclusive = src->exclusive;
+                l.active = 1;
+                l.last_use = recorded_last_use(b, s->u.let.name);
+                l.origin = src->origin;
+                da_push(&b->loans, l);
+            }
+        }
+        int str_from_call = view_call && view_call->kind == EX_CALL
+                            && !view_call->method_call;
+        if (is_borrowed_view(s->u.let.ty)
+            || (s->u.let.ty && s->u.let.ty->kind == TY_STR
+                && ((view_call && view_call->kind == EX_CALL
+                     && view_call->builtin_str_method == 2)
+                    || str_from_call))) {
+            /* v.as_slice() and String.view(): the returned view borrows
+             * every root the callee received, held until this binding's
+             * last lexical use */
+            if (view_call && view_call->kind == EX_CALL)
+                transfer_call_loans(b, s->u.let.name, view_call);
         }
         return 0;
     }

@@ -1,0 +1,32 @@
+# Expected compiler diagnostics for tests/neg/*.zov.
+# Format: fixture|line|column|error-code-or-dash|message-substring
+# The code field is "-" when the current diagnostic has no stable code yet.
+01_nullable_into_fclose.zov|6|15|-|cannot pass nullable
+02_nonexhaustive_union.zov|7|18|-|missing variant Eof
+03_missing_case_null.zov|6|23|-|must cover 'null'
+04_must_use_error_union.zov|7|5|-|error-typed value must be handled
+05_try_without_ret_variant.zov|8|12|-|error variant Eof
+06_use_after_move.zov|9|10|-|use of moved value 'r'
+07_move_in_one_branch.zov|11|10|-|use of moved value 'r'
+08_ref_in_struct_field.zov|2|28|-|borrowed reference cannot be stored
+09_aliasing_call_args.zov|10|23|-|conflicting borrows of 'x'
+10_mutate_under_shared.zov|7|5|-|shared borrow is active
+11_return_ref_to_local.zov|4|5|-|cannot return reference to local
+12_unprintable_concat.zov|32|17|-|cannot concatenate str with S
+13_push_after_free.zov|8|5|-|value was moved
+14_push_on_immutable.zov|6|5|-|requires a mutable binding
+15_assert_non_bool.zov|7|12|-|assert requires bool
+16_borrow_violation_in_test.zov|11|10|-|use of moved value 'r'
+17_enum_match_missing_variant.zov|6|5|-|missing variant Light::Broken
+18_scalar_match_missing_wildcard.zov|4|5|-|requires a case _ => arm
+19_mutate_array_under_slice.zov|31|8|-|cannot mutate 'arr'
+20_map_use_after_free.zov|8|5|-|value was moved
+21_slice_use_after_vec_free.zov|34|5|E0502|cannot move 'v'
+22_vec_push_while_slice_live.zov|34|5|-|cannot mutably borrow 'v'
+23_qualified_call_missing_import.zov|27|5|-|module 'io' is not imported
+24_module_fn_arity.zov|30|5|-|expects 1 argument(s), got 0
+25_string_use_after_move.zov|8|5|-|use of moved value 'a'
+26_view_outlives_string.zov|7|5|-|cannot free 's': it is still borrowed by 'v'
+27_copied_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 'w'
+28_trim_view_outlives_string.zov|9|5|-|cannot free 's': it is still borrowed by 't'
+29_nested_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 't'

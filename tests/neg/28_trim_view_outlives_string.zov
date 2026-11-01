@@ -1,0 +1,12 @@
+// MUST FAIL: std::str helpers return views of their input
+use std::io;
+use std::str as strlib;
+
+export fn main() i32 = {
+    let s = String::from(" x ");
+    let v: str = s.view();
+    let t: str = strlib::trim(v);
+    s.free();
+    io::println(t);
+    return 0;
+};

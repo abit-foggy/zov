@@ -1,0 +1,10 @@
+// MUST FAIL: freeing an owned String while a borrowed str view is live
+use std::io;
+
+export fn main() i32 = {
+    let s = String::from("borrowed");
+    let v: str = s.view();
+    s.free();
+    io::println(v);
+    return 0;
+};

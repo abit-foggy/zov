@@ -1,0 +1,11 @@
+// MUST FAIL: a temporary view passed to a str helper still borrows the String
+use std::io;
+use std::str as strlib;
+
+export fn main() i32 = {
+    let s = String::from(" x ");
+    let t: str = strlib::trim(s.view());
+    s.free();
+    io::println(t);
+    return 0;
+};

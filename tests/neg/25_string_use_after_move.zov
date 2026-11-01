@@ -1,0 +1,10 @@
+// MUST FAIL: an owned String moved into a binding cannot be released again
+use std::io;
+
+export fn main() i32 = {
+    let a = String::from("x");
+    let b = a;
+    io::println(b.view());
+    a.free();
+    return 0;
+};
