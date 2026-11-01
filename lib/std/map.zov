@@ -124,7 +124,10 @@ export fn (self: &Map[K, V]) get_ref(key: K) &V = {
         if (st == 0u8) { c::abort(); };
         if (st == 1u8) {
             let k: K = (self.keys!)[idx];
-            if (k == key) { return &((self.vals!)[idx]); };
+            if (k == key) {
+                mem::drop[K](key);
+                return &((self.vals!)[idx]);
+            };
         };
         idx = (idx + 1usize) % self.cap;
         i += 1usize;
@@ -133,42 +136,86 @@ export fn (self: &Map[K, V]) get_ref(key: K) &V = {
     return &((self.vals!)[0usize]);
 };
 
+// Fallible borrowed lookup: missing keys return MapNotFound instead of
+// aborting, and a hit keeps the map borrowed for the reference's lifetime.
+export fn (self: &Map[K, V]) findref(key: K) (&V | MapNotFound) = {
+    if (self.cap != 0usize) {
+        let h: u64 = hash_val[K](key);
+        let mut idx: usize = (h % (self.cap as u64)) as usize;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            let st: u8 = (self.states!)[idx];
+            if (st == 0u8) { break; };
+            if (st == 1u8) {
+                let k: K = (self.keys!)[idx];
+                if (k == key) {
+                    mem::drop[K](key);
+                    return &((self.vals!)[idx]);
+                };
+            };
+            idx = (idx + 1usize) % self.cap;
+            i += 1usize;
+        };
+    };
+    mem::drop[K](key);
+    return MapNotFound;
+};
+
 export fn (self: &Map[K, V]) get(key: K) (V | MapNotFound) = {
-    if (self.cap == 0usize) { return MapNotFound; };
+    if (self.cap == 0usize) {
+        mem::drop[K](key);
+        return MapNotFound;
+    };
     let h: u64 = hash_val[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
         let st: u8 = (self.states!)[idx];
-        if (st == 0u8) { return MapNotFound; };
+        if (st == 0u8) {
+            mem::drop[K](key);
+            return MapNotFound;
+        };
         if (st == 1u8) {
             let k: K = (self.keys!)[idx];
             if (k == key) {
-                return (self.vals!)[idx];
+                let out: V = (self.vals!)[idx];
+                mem::drop[K](key);
+                return out;
             };
         };
         idx = (idx + 1usize) % self.cap;
         i += 1usize;
     };
+    mem::drop[K](key);
     return MapNotFound;
 };
 
 export fn (self: &Map[K, V]) contains(key: K) bool = {
     /* probe without copying the value: get() is copy-only for trivial V */
-    if (self.cap == 0usize) { return false; };
+    if (self.cap == 0usize) {
+        mem::drop[K](key);
+        return false;
+    };
     let h: u64 = hash_val[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
         let st: u8 = (self.states!)[idx];
-        if (st == 0u8) { return false; };
+        if (st == 0u8) {
+            mem::drop[K](key);
+            return false;
+        };
         if (st == 1u8) {
             let k: K = (self.keys!)[idx];
-            if (k == key) { return true; };
+            if (k == key) {
+                mem::drop[K](key);
+                return true;
+            };
         };
         idx = (idx + 1usize) % self.cap;
         i += 1usize;
     };
+    mem::drop[K](key);
     return false;
 };
 

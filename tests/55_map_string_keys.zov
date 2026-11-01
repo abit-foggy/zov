@@ -1,0 +1,76 @@
+// Map[String, String] key/value ownership and fallible borrowed lookups
+use std::io;
+use std::map;
+use std::vec;
+
+export fn main() i32 = {
+    let mut env = map::new[String, String]();
+    env.insert(String::from("PATH"), String::from("/bin"));
+    env.insert(String::from("HOME"), String::from("/tmp"));
+    // replacing an equal key destroys both the old value and the duplicate
+    // lookup key passed to insert
+    env.insert(String::from("PATH"), String::from("/usr/bin"));
+
+    let path = env.findref(String::from("PATH"));
+    let pv: str = match (path) {
+        case let p: &String => p.view(),
+        case map::MapNotFound => return 10,
+    };
+    io::println(pv);
+
+    let missing = env.findref(String::from("NOPE"));
+    match (missing) {
+        case let p: &String => {
+            io::println(p.view());
+            return 11;
+        },
+        case map::MapNotFound => io::println("missing"),
+    };
+
+    // force several rehashes while keys and values are owned strings
+    let mut i: i32 = 0;
+    while (i < 60) {
+        env.insert("K" + i, "V" + i);
+        i += 1;
+    };
+    io::println(env.len());
+    let k7 = env.findref(String::from("K7"));
+    match (k7) {
+        case let p: &String => io::println(p.view()),
+        case map::MapNotFound => return 12,
+    };
+
+    let removed = env.remove(String::from("HOME"));
+    io::println(removed);
+    let taken = env.take(String::from("PATH"));
+    let tv: String = match (taken) {
+        case let s: String => s,
+        case map::MapNotFound => return 13,
+    };
+    io::println(tv.view());
+    tv.free();
+
+    env.clear();
+    io::println(env.len());
+    env.insert(String::from("LAST"), String::from("value"));
+    env.free();
+
+    let mut nums = vec::new[i32]();
+    nums.push(41);
+    let hit = nums.findref(0usize);
+    let hv: i32 = match (hit) {
+        case let p: &i32 => *p + 1,
+        case vec::Empty => -1,
+    };
+    io::println(hv);
+    let miss = nums.findref(9usize);
+    match (miss) {
+        case let p: &i32 => {
+            io::println(*p);
+            return 14;
+        },
+        case vec::Empty => io::println("empty"),
+    };
+    nums.free();
+    return 0;
+};

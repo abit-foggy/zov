@@ -84,3 +84,4 @@
 81_map_ref_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'
 82_match_missing_parens.zov|4|19|E0201|expected '(' after 'match', found identifier 'x'
 83_match_missing_case.zov|5|9|E0201|expected 'case' at the start of a match arm, found 'let'
+84_map_findref_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'

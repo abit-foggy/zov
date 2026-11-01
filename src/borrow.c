@@ -456,6 +456,29 @@ static int type_contains_view(Borrow *b, Type *t, int depth)
     }
 }
 
+/* A return type that hands out a reference (including a union variant)
+ * borrows the receiver; a by-value str/slice copy only inherits the
+ * receiver's existing view loans. */
+static int type_contains_ref(Type *t, int depth)
+{
+    if (!t || depth > 8)
+        return 0;
+    switch (t->kind) {
+    case TY_REF:
+    case TY_MUTREF:
+        return 1;
+    case TY_UNION:
+        for (size_t i = 0; i < t->members.len; i++)
+            if (type_contains_ref(t->members.items[i], depth + 1))
+                return 1;
+        return 0;
+    case TY_ARRAY:
+        return type_contains_ref(t->base, depth + 1);
+    default:
+        return 0;
+    }
+}
+
 static int root_is_local(Borrow *b, const char *root)
 {
     BVar *v = var_find(b, root);
@@ -961,6 +984,11 @@ static void bx_call(Borrow *b, Expr *e)
         int prev = b->read_only;
         if (e->builtin_print)
             b->read_only = 1;
+        /* hash_val hashes an owned String key by reading its bytes; the
+         * Map helpers store the key afterwards, so this is a borrow */
+        if (e->hash_ty && e->hash_ty->kind == TY_STRUCT
+            && e->hash_ty->name && zstr_eq(e->hash_ty->name, "String"))
+            b->read_only = 1;
         bx_expr(b, arg);
         b->read_only = prev;
     }
@@ -1056,7 +1084,8 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
             && arg->u.unary.op == TK_AMP
             && call->type && call->type->kind != TY_REF
             && call->type->kind != TY_MUTREF
-            && call->type->kind != TY_SLICE) {
+            && call->type->kind != TY_SLICE
+            && !type_contains_ref(call->type, 0)) {
             /* method returning an element copy (Vec[str].get): the copy
              * inherits loans held by the receiver, not a borrow of it */
             const char *recv = resolve_root(b, arg->u.unary.e);

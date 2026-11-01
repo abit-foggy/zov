@@ -1,0 +1,14 @@
+// MUST FAIL: findref's reference keeps the map borrowed
+use std::map;
+use std::io;
+
+export fn main() i32 = {
+    let mut m = map::new[String, String]();
+    m.insert(String::from("k"), String::from("v"));
+    let r = m.findref(String::from("k"));
+    m.free();
+    return match (r) {
+        case let p: &String => (p.len() as i32),
+        case map::MapNotFound => -1,
+    };
+};

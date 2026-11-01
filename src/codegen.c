@@ -1098,6 +1098,16 @@ static void emit_call(CG *cg, Expr *e)
             buf_puts(&*cg->cur, "))");
             return;
         }
+        if (ty_is_owned_string(e->hash_ty)) {
+            /* owned String keys hash by their bytes, which matches the
+             * str lookup path used by Map's borrowed helpers */
+            cg->needs_hash_str = 1;
+            cg->needs_string_view = 1;
+            buf_puts(&*cg->cur, "zov_hash_str(zov_string_view(");
+            emit_expr(cg, e->u.call.args.items[0], 0);
+            buf_puts(&*cg->cur, "))");
+            return;
+        }
         cg->needs_hash = 1;
         buf_puts(&*cg->cur, "zov_hash_u64((uint64_t)(");
         emit_expr(cg, e->u.call.args.items[0], 0);

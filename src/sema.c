@@ -2012,10 +2012,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(E0806, e->span, "hash_val[T] hashes exactly one value");
             Type *at = check_expr(se, e->u.call.args.items[0], kt);
             if (kt->kind != TY_STR && kt->kind != TY_ENUM
-                && !ty_is_int(kt->kind))
+                && !ty_is_int(kt->kind) && !is_string_type(kt))
                 fatal_at(E0806, callee->span,
-                         "hash_val supports str, integers, and enums, "
-                         "not %s", type_spelling(kt));
+                         "hash_val supports str, String, integers, and "
+                         "enums, not %s", type_spelling(kt));
             if (!is_unknown(at) && !type_eq(at, kt))
                 fatal_at(E0806, e->u.call.args.items[0]->span,
                          "hash_val[%s] argument must be %s, got %s",
