@@ -1,7 +1,9 @@
 // overwrite assignment destroys the previous owned value in locals,
 // struct fields, and tagged unions, and reinitializes moved/dropped places
 use std::io;
+use std::map;
 use std::mem as mem;
+use std::vec;
 
 export type Holder = resource struct {
     label: String,
@@ -83,5 +85,18 @@ export fn main() i32 = {
     d = String::from("again");
     io::println(d.view());
     d.free();
+
+    // container locals overwrite through their free() hook
+    let mut v = vec::new[String]();
+    v.push(String::from("old-element"));
+    v = vec::new[String]();
+    v.push(String::from("new-element"));
+    v.free();
+
+    let mut table = map::new[str, String]();
+    table.insert("old", String::from("old-value"));
+    table = map::new[str, String]();
+    table.insert("new", String::from("new-value"));
+    table.free();
     return 0;
 };
