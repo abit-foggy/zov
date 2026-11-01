@@ -1300,7 +1300,7 @@ static int hosted_only_module(const char *mod)
                    || zstr_eq(mod, "map") || zstr_eq(mod, "arena")
                    || zstr_eq(mod, "fs") || zstr_eq(mod, "env")
                    || zstr_eq(mod, "time") || zstr_eq(mod, "io")
-                   || zstr_eq(mod, "strsplit"));
+                   || zstr_eq(mod, "proc") || zstr_eq(mod, "strsplit"));
 }
 
 /* std::math mixes portable helpers with libm-backed functions.  Only the
@@ -1374,6 +1374,10 @@ static void reject_hosted_decl(Sema *se, Decl *decl, Span span)
         fatal_at(E0306, span,
                  "std::time requires a platform timer and is unavailable "
                  "in freestanding builds");
+    if (zstr_eq(mod, "proc"))
+        fatal_at(E0306, span,
+                 "std::proc requires a hosted POSIX process API and is "
+                 "unavailable in freestanding builds");
     if (zstr_eq(mod, "io"))
         fatal_at(E0306, span,
                  "std::io requires a platform output interface and is "

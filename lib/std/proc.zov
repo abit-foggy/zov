@@ -1,0 +1,95 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+// Hosted POSIX process execution.  argv is built from NUL-terminated copies,
+// passed to execvp, and released in the parent after waitpid.
+use <unistd.h> as u;
+use <sys/wait.h> as w;
+
+use std::mem as mem;
+
+export type ProcError = !i32;
+
+fn dupz(s: str) *u8 = {
+    let p: *u8 = mem::alloc[u8](s.len + 1usize);
+    let mut i: usize = 0usize;
+    while (i < s.len) {
+        p[i] = s.data[i];
+        i += 1usize;
+    };
+    p[s.len] = 0u8;
+    return p;
+};
+
+// Runs prog with args, waits for it, and returns the child's exit code.
+// A child killed by signal N returns 128 + N.  Fork or wait failures return
+// ProcError.  All temporary argv buffers are freed before returning.
+export fn run(prog: str, args: []str) (i32 | ProcError) = {
+    let argc: usize = args.len;
+    let argv: * *i8 = mem::alloc[*i8](argc + 2usize);
+    let p0: *u8 = dupz(prog);
+    argv[0usize] = p0 as *i8;
+    let mut i: usize = 0usize;
+    while (i < argc) {
+        let p: *u8 = dupz(args[i]);
+        argv[i + 1usize] = p as *i8;
+        i += 1usize;
+    };
+    argv[argc + 1usize] = (0i64 as *i8);
+
+    let pid: i32 = u::fork();
+    if (pid < 0) {
+        let mut k: usize = 0usize;
+        while (k < argc + 1usize) {
+            mem::freeptr[u8](argv[k] as *u8);
+            k += 1usize;
+        };
+        mem::freeptr[*i8](argv);
+        return 1;
+    };
+    if (pid == 0) {
+        u::execvp(argv[0usize] as *void, argv as *void);
+        u::_exit(127);
+        return 2;
+    };
+
+    let status: i32 = 0;
+    let got: i32 = w::waitpid(pid, &status, 0);
+
+    let mut k: usize = 0usize;
+    while (k < argc + 1usize) {
+        mem::freeptr[u8](argv[k] as *u8);
+        k += 1usize;
+    };
+    mem::freeptr[*i8](argv);
+
+    if (got < 0) {
+        return 2;
+    };
+    let sig: i32 = status & 127;
+    if (sig != 0) {
+        return 128 + sig;
+    };
+    return (status >> 8) & 255;
+};
