@@ -1323,9 +1323,27 @@ run_sanitizer_sweep() {
         sweep_dir=$TMP/san-run-$sweep_base
         rm -rf "$sweep_dir"
         mkdir -p "$sweep_dir"
+        sweep_stdin=
+        sweep_has_stdin=0
+        case $sweep_base in
+            17_std_io) sweep_stdin="first line"; sweep_has_stdin=1 ;;
+            51_shell_workload)
+                sweep_stdin="echo hello world\necho again\nexit"
+                sweep_has_stdin=1 ;;
+            53_zovsh_overwrite)
+                sweep_stdin='echo hello world\nexport FOO=bar\necho $FOO\necho $NOPE\ncd /tmp\npwd\necho done\nexit'
+                sweep_has_stdin=1 ;;
+            21_long_stdin) sweep_stdin="$LONG_LINE"; sweep_has_stdin=1 ;;
+        esac
+        if [ "$sweep_has_stdin" -eq 1 ]; then
+            printf '%b\n' "$sweep_stdin" >"$sweep_dir/stdin"
+            sweep_input=$sweep_dir/stdin
+        else
+            sweep_input=/dev/null
+        fi
         run_limited "$sweep_dir/stdout" "$sweep_dir/stderr" \
-            sh -c 'cd "$1" && exec "$2" < /dev/null' sh "$sweep_dir" \
-            "$TMP/san-$sweep_base"
+            sh -c 'cd "$1" && exec "$2" < "$3"' sh "$sweep_dir" \
+            "$TMP/san-$sweep_base" "$sweep_input"
         sweep_status=$?
         if [ "$sweep_status" -ge 128 ]; then
             fail "sanitizer sweep: $sweep_base (terminated by signal)"
@@ -1339,6 +1357,23 @@ run_sanitizer_sweep() {
             show_file "$sweep_dir/stderr"
             sweep_bad=$((sweep_bad + 1))
             continue
+        fi
+        if [ "$sweep_has_stdin" -eq 1 ]; then
+            if [ "$sweep_status" -ne 0 ]; then
+                fail "sanitizer sweep: $sweep_base (exited $sweep_status)"
+                show_file "$sweep_dir/stderr"
+                sweep_bad=$((sweep_bad + 1))
+                continue
+            fi
+            if [ -f "$ROOT/tests/$sweep_base.expected" ] \
+                && ! cmp -s "$sweep_dir/stdout" \
+                    "$ROOT/tests/$sweep_base.expected"; then
+                fail "sanitizer sweep: $sweep_base (stdout mismatch)"
+                diff "$ROOT/tests/$sweep_base.expected" \
+                    "$sweep_dir/stdout" | sed 's/^/    /'
+                sweep_bad=$((sweep_bad + 1))
+                continue
+            fi
         fi
         sweep_ok=$((sweep_ok + 1))
     done
@@ -1414,7 +1449,7 @@ run_stdout 52_owned_overwrite tests/52_owned_overwrite.zov tests/52_owned_overwr
 run_stdout 54_branch_ownership tests/54_branch_ownership.zov tests/54_branch_ownership.expected
 run_stdout 55_map_string_keys tests/55_map_string_keys.zov tests/55_map_string_keys.expected
 run_stdin 51_shell_workload tests/51_shell_workload.zov "echo hello world\necho again\nexit" tests/51_shell_workload.expected
-run_stdin 53_zovsh_overwrite tests/53_zovsh_overwrite.zov "echo hello world\ncd /tmp\npwd\necho done\nexit" tests/53_zovsh_overwrite.expected
+run_stdin 53_zovsh_overwrite tests/53_zovsh_overwrite.zov 'echo hello world\nexport FOO=bar\necho $FOO\necho $NOPE\ncd /tmp\npwd\necho done\nexit' tests/53_zovsh_overwrite.expected
 run_exit  18_std_time tests/18_std_time.zov 0
 run_exit  19_std_math tests/19_std_math_and_separators.zov 0
 run_stdout 20_string_ownership tests/20_string_ownership.zov tests/20_string_ownership.expected

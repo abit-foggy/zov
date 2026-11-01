@@ -1,21 +1,32 @@
-// zovsh-style REPL: command splitting, builtin dispatch, and an owned cwd
-// reassigned without manual cleanup on every cd
+// zovsh-style REPL: command splitting, builtin dispatch, real process
+// directory changes, and dynamic String-keyed variables
+use std::env;
 use std::io;
+use std::map;
 use std::str as text;
 use std::strsplit as strings;
 
 export fn main() i32 = {
-    let mut cwd = String::from("/");
+    let start = env::cwd();
+    let mut cwd: String = match (start) {
+        case let s: String => s,
+        case env::EnvNotFound => return 2,
+    };
+    let mut vars = map::new[String, String]();
     let mut commands: i32 = 0;
     while (true) {
         let r = io::readline();
         let line: String = match (r) {
             case let s: String => s,
             case Eof => break,
-            case IoError => return 2,
+            case IoError => return 3,
         };
         let cmd: str = text::trim(line.view());
-        let parts = strings::split_byte(cmd, 32u8);
+        if (cmd.len == 0usize) {
+            line.free();
+            continue;
+        };
+        let parts = strings::splitbyte(cmd, 32u8);
         let argc = parts.len();
         let head: str = parts.get(0usize);
         if (head == "exit") {
@@ -24,18 +35,54 @@ export fn main() i32 = {
             break;
         };
         if (head == "cd") {
-            if (argc > 1usize) {
-                let target: str = parts.get(1usize);
-                cwd = String::from(target); // old buffer released here
+            if (argc > 1usize && env::chdir(parts.get(1usize))) {
+                let next = env::cwd();
+                match (next) {
+                    case let s: String => {
+                        cwd = s; // old buffer released here
+                    },
+                    case env::EnvNotFound => {
+                        io::println("cwd failed");
+                    },
+                };
+                io::println("cd ok");
+            } else {
+                io::println("cd failed");
             };
         } else if (head == "pwd") {
             io::println(cwd.view());
+        } else if (head == "export") {
+            if (argc > 1usize) {
+                let kv: str = parts.get(1usize);
+                let eq = text::findbyte(kv, 61u8);
+                match (eq) {
+                    case let i: usize => {
+                        let name: str = kv[0..i];
+                        let value: str = kv[(i + 1usize)..];
+                        vars.insert(String::from(name), String::from(value));
+                        io::println("exported {name}");
+                    },
+                    case text::NotFound => io::println("usage: export NAME=VALUE"),
+                };
+            } else {
+                io::println("usage: export NAME=VALUE");
+            };
         } else if (head == "echo") {
             let mut i: usize = 1usize;
             let mut first = true;
             while (i < argc) {
                 if (!first) { io::print(" "); };
-                io::print(parts.get(i));
+                let word: str = parts.get(i);
+                if (word.len > 0usize && word.ptr[0] == 36u8) {
+                    let key = String::from(word[1..]);
+                    let found = vars.findref(key);
+                    match (found) {
+                        case let v: &String => io::print(v.view()),
+                        case map::MapNotFound => io::print("<unset>"),
+                    };
+                } else {
+                    io::print(word);
+                };
                 first = false;
                 i += 1usize;
             };
@@ -50,5 +97,6 @@ export fn main() i32 = {
     io::println("commands={commands}");
     io::println("cwd={cwd.view()}");
     cwd.free();
+    vars.free();
     return 0;
 };
