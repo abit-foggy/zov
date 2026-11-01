@@ -112,6 +112,27 @@ export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
     if (!inserted) { c::abort(); };
 };
 
+// Borrowed value access.  Missing keys abort, matching Vec.get_ref;
+// use get() for the fallible copy form (trivial values only).
+export fn (self: &Map[K, V]) get_ref(key: K) &V = {
+    if (self.cap == 0usize) { c::abort(); };
+    let h: u64 = hash_val[K](key);
+    let mut idx: usize = (h % (self.cap as u64)) as usize;
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        let st: u8 = (self.states!)[idx];
+        if (st == 0u8) { c::abort(); };
+        if (st == 1u8) {
+            let k: K = (self.keys!)[idx];
+            if (k == key) { return &((self.vals!)[idx]); };
+        };
+        idx = (idx + 1usize) % self.cap;
+        i += 1usize;
+    };
+    c::abort();
+    return &((self.vals!)[0usize]);
+};
+
 export fn (self: &Map[K, V]) get(key: K) (V | MapNotFound) = {
     if (self.cap == 0usize) { return MapNotFound; };
     let h: u64 = hash_val[K](key);
@@ -133,12 +154,22 @@ export fn (self: &Map[K, V]) get(key: K) (V | MapNotFound) = {
 };
 
 export fn (self: &Map[K, V]) contains(key: K) bool = {
-    let r = self.get(key);
-    let found: bool = match (r) {
-        case MapNotFound => false,
-        case _ => true,
+    /* probe without copying the value: get() is copy-only for trivial V */
+    if (self.cap == 0usize) { return false; };
+    let h: u64 = hash_val[K](key);
+    let mut idx: usize = (h % (self.cap as u64)) as usize;
+    let mut i: usize = 0usize;
+    while (i < self.cap) {
+        let st: u8 = (self.states!)[idx];
+        if (st == 0u8) { return false; };
+        if (st == 1u8) {
+            let k: K = (self.keys!)[idx];
+            if (k == key) { return true; };
+        };
+        idx = (idx + 1usize) % self.cap;
+        i += 1usize;
     };
-    return found;
+    return false;
 };
 
 // Removes the entry and destroys the stored key and value.  The lookup

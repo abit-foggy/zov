@@ -78,3 +78,7 @@
 75_drop_through_ref.zov|11|15|E0605|mem::drop cannot destroy through a reference
 76_overwrite_maybe_moved.zov|7|5|E0517|cannot overwrite 's': it may have been moved or freed on a conditional path
 77_overwrite_after_field_move.zov|10|5|E0510|cannot overwrite 'h': a field was already moved or freed
+78_vec_get_string.zov|7|13|E0611|std::vec::get would shallow-copy String
+79_map_get_string.zov|7|28|E0611|std::map::get would shallow-copy String
+80_get_ref_after_free.zov|9|5|E0502|cannot move 'v': it is still borrowed by 'r'
+81_map_ref_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'

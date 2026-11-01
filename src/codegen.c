@@ -1065,7 +1065,7 @@ static void emit_call(CG *cg, Expr *e)
         return;
     }
     if (e->builtin_str_method) {
-        Expr *recv = callee->u.field.base;
+        Expr *recv = e->str_recv ? e->str_recv : callee->u.field.base;
         cg->needs_string_owned = 1;
         if (e->builtin_str_method == 1) {
             cg->needs_string_init = 1;

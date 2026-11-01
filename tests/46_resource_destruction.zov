@@ -59,7 +59,7 @@ export fn main() i32 = {
     names.push(String::from("c"));
     names.insert(1usize, String::from("b"));
     assert(names.len() == 3usize);
-    assert(names.get(1usize).view() == "b");
+    assert(names.get_ref(1usize).view() == "b");
     let old = names.replace(0usize, String::from("A"));
     assert(old.view() == "a");
     old.free();
@@ -122,12 +122,7 @@ export fn main() i32 = {
     m3.clear();
     assert(m3.len() == 0usize);
     m3.insert("z", String::from("3"));
-    let found3 = m3.get("z");
-    let got3: String = match (found3) {
-        case let v: String => v,
-        case MapNotFound => return 3,
-    };
-    assert(got3.view() == "3");
+    assert(m3.get_ref("z").view() == "3");
     m3.free();
 
     let n: i32 = 5;

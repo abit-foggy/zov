@@ -1,0 +1,14 @@
+// MUST FAIL: Map[str, String].get aliases the owned value
+use std::map;
+
+export fn main() i32 = {
+    let mut m = map::new[str, String]();
+    m.insert("k", String::from("v"));
+    let s: String = match (m.get("k")) {
+        case let v: String => v,
+        case MapNotFound => return 1,
+    };
+    s.free();
+    m.free();
+    return 0;
+};

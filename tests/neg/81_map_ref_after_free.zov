@@ -1,0 +1,12 @@
+// MUST FAIL: a borrowed map value cannot outlive the map
+use std::map;
+use std::io;
+
+export fn main() i32 = {
+    let mut m = map::new[str, String]();
+    m.insert("k", String::from("v"));
+    let r: &String = m.get_ref("k");
+    m.free();
+    io::println(r.view());
+    return 0;
+};

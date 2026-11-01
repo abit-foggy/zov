@@ -538,6 +538,9 @@ static void note_use(Borrow *b, Expr *e)
         note_use(b, e->u.assign.rhs);
         return;
     case EX_CALL:
+        /* method receivers are part of the callee chain, not the argument
+         * list; their last use must keep returned views alive */
+        note_use(b, e->u.call.callee);
         for (size_t i = 0; i < e->u.call.args.len; i++)
             note_use(b, e->u.call.args.items[i]);
         return;

@@ -1,0 +1,11 @@
+// MUST FAIL: Vec[String].get aliases the owned element
+use std::vec;
+
+export fn main() i32 = {
+    let mut v = vec::new[String]();
+    v.push(String::from("a"));
+    let s = v.get(0usize);
+    s.free();
+    v.free();
+    return 0;
+};

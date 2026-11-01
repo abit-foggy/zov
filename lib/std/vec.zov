@@ -71,6 +71,13 @@ export fn (self: &Vec[T]) get(idx: usize) T = {
     return d[idx];
 };
 
+// Borrowed element access: safe for owned elements because the returned
+// reference keeps the vector borrowed for its lifetime.
+export fn (self: &Vec[T]) get_ref(idx: usize) &T = {
+    if (idx >= self.length) { c::abort(); };
+    return &((self.data!)[idx]);
+};
+
 // Overwrites an element and destroys the old value.  set() never leaks an
 // owned element; use replace() when the old value must be reused.
 export fn (self: &mut Vec[T]) set(idx: usize, val: T) void = {

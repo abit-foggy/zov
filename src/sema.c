@@ -348,6 +348,39 @@ static int is_stringish(Type *t)
     return t && (t->kind == TY_STR || is_string_type(t));
 }
 
+/* True when copying this value bitwise aliases owned storage.  Used to
+ * stop Vec.get/Map.get from handing out a second owner of a resource. */
+static int type_owns_resource(Sema *se, Type *t, int depth)
+{
+    if (!t || depth > 8)
+        return 0;
+    switch (t->kind) {
+    case TY_MUTREF:
+        return 1;
+    case TY_STRUCT: {
+        if (is_string_type(t))
+            return 1;
+        Decl *d = find_struct_decl(se, t->name);
+        if (!d)
+            return 0;
+        if (d->u.type.is_resource)
+            return 1;
+        for (size_t i = 0; i < d->u.type.fields.len; i++)
+            if (type_owns_resource(se, d->u.type.fields.items[i].ty,
+                                   depth + 1))
+                return 1;
+        return 0;
+    }
+    case TY_UNION:
+        for (size_t i = 0; i < t->members.len; i++)
+            if (type_owns_resource(se, t->members.items[i], depth + 1))
+                return 1;
+        return 0;
+    default:
+        return 0;
+    }
+}
+
 static void install_builtin_string(Program *prog)
 {
     for (size_t i = 0; i < prog->decls.len; i++) {
@@ -1835,6 +1868,15 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     fatal_at(E0602, e->span, "String.%s takes no arguments",
                              callee->u.field.name);
                 Expr *recv = callee->u.field.base;
+                if (bt->kind == TY_REF || bt->kind == TY_MUTREF) {
+                    /* String methods are value intrinsics: expose the
+                     * pointee so codegen never passes a pointer where a
+                     * String value is expected. */
+                    Expr *dr = expr_new(EX_DEREF, recv->span);
+                    dr->u.deref = recv;
+                    dr->type = st;
+                    recv = dr;
+                }
                 e->str_recv = recv;
                 if (zstr_eq(callee->u.field.name, "free")) {
                     e->builtin_str_method = 1;
@@ -1900,6 +1942,25 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             id->u.ident = m->name;
             e->u.call.callee = id;
             e->type = check_call_user(se, e, m);
+            if (zstr_eq(callee->u.field.name, "get") && m->decl
+                && m->decl->modname
+                && (zstr_eq(m->decl->modname, "vec")
+                    || zstr_eq(m->decl->modname, "map"))
+                && type_owns_resource(se, e->type, 0)) {
+                Type *shown = e->type;
+                if (shown->kind == TY_UNION)
+                    for (size_t mi = 0; mi < shown->members.len; mi++)
+                        if (type_owns_resource(se, shown->members.items[mi],
+                                               0)) {
+                            shown = shown->members.items[mi];
+                            break;
+                        }
+                fatal_at(E0611, e->span,
+                         "std::%s::get would shallow-copy %s; use "
+                         "get_ref() for borrowed access or an "
+                         "ownership-transferring API",
+                         m->decl->modname, type_spelling(shown));
+            }
             return e->type;
         }
         if (callee->kind == EX_GENERIC
