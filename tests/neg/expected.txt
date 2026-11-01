@@ -41,3 +41,5 @@
 38_private_string_fields.zov|4|18|-|String fields are private
 39_double_string_free.zov|5|5|-|value was already freed
 40_use_after_free.zov|7|18|-|use of freed value 's'
+41_missing_return.zov|1|1|-|does not return a value on all paths
+42_missing_return_branch.zov|1|1|-|does not return a value on all paths

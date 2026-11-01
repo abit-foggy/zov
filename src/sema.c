@@ -2345,6 +2345,53 @@ static void check_let(Sema *se, Stmt *s)
     scope_add(se, sym);
 }
 
+/* Conservative return-path analysis: a statement terminates when it always
+ * leaves the function. Loops are not treated as terminating because they may
+ * break or run zero times. */
+static int block_terminates(Block *b);
+static int block_terminates_stmt(Stmt *s);
+
+static int all_match_arms_terminate(Expr *e)
+{
+    if (!e || e->kind != EX_MATCH || e->u.match.arms.len == 0)
+        return 0;
+    for (size_t i = 0; i < e->u.match.arms.len; i++) {
+        MatchArm *a = &e->u.match.arms.items[i];
+        if (!a->jump || !block_terminates_stmt(a->jump))
+            return 0;
+    }
+    return 1;
+}
+
+static int block_terminates_stmt(Stmt *s)
+{
+    if (!s)
+        return 0;
+    switch (s->kind) {
+    case ST_RETURN:
+        return 1;
+    case ST_BLOCK:
+        return block_terminates(s->u.block);
+    case ST_IF:
+        if (!s->u.iff.else_stmt)
+            return 0;
+        return block_terminates(s->u.iff.then_blk)
+            && block_terminates_stmt(s->u.iff.else_stmt);
+    case ST_EXPR:
+        return all_match_arms_terminate(s->u.expr);
+    default:
+        return 0;
+    }
+}
+
+static int block_terminates(Block *b)
+{
+    if (!b || b->stmts.len == 0)
+        return 0;
+    /* reachable last statement decides; earlier dead code is irrelevant */
+    return block_terminates_stmt(b->stmts.items[b->stmts.len - 1]);
+}
+
 static void check_stmt(Sema *se, Stmt *s)
 {
     switch (s->kind) {
@@ -2710,6 +2757,11 @@ static void check_fn(Sema *se, Decl *d)
     se->loop_depth = 0;
     se->fn_ret = d->u.fn.ret;
     check_block(se, d->u.fn.body);
+    if (d->u.fn.ret->kind != TY_VOID
+        && !block_terminates(d->u.fn.body))
+        fatal_at(d->span,
+                 "function '%s' does not return a value on all paths",
+                 d->u.fn.name);
     se->fn_ret = prev_ret;
     se->loop_depth = prev_loop;
     pop_scope(se);

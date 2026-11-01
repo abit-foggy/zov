@@ -1,0 +1,7 @@
+export fn choose(x: i32) i32 = {
+    let y = x + 1;
+};
+
+export fn main() i32 = {
+    return choose(1);
+};

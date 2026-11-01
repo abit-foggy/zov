@@ -1,0 +1,9 @@
+export fn choose(x: i32) i32 = {
+    if (x > 0) {
+        return 1;
+    };
+};
+
+export fn main() i32 = {
+    return choose(1);
+};
