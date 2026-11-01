@@ -1141,6 +1141,8 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
     d->u.fn.ret = subst_type(se, sym->decl->u.fn.ret, tps, args);
     d->u.fn.body = clone_block(se, sym->decl->u.fn.body, tps, args);
     da_push(&se->prog->decls, d);
+    const char *saved_mod = se->curmod;
+    se->curmod = d->modname;
     register_decl(se, d);
     /* the clone resolves names from the template's own world: its
      * module's aliases plus globals, never the caller's live locals
@@ -1149,8 +1151,6 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
     while (se->scope->parent)
         se->scope = se->scope->parent;
     push_module_scope(se, sym->decl->modname);
-    const char *saved_mod = se->curmod;
-    se->curmod = sym->decl->modname;
     check_fn(se, d);
     se->curmod = saved_mod;
     pop_scope(se);
@@ -3380,8 +3380,11 @@ void sema_check(Program *prog, int test_mode)
     se->prog = prog;
     push_scope(se); /* global scope */
     install_builtin_string(prog);
-    for (size_t i = 0; i < prog->decls.len; i++)
+    for (size_t i = 0; i < prog->decls.len; i++) {
+        se->curmod = prog->decls.items[i]->modname;
         register_decl(se, prog->decls.items[i]);
+    }
+    se->curmod = NULL;
     check_all_type_cycles(se);
     /* freestanding kernels may use kmain or no entry at all */
     if (!se->has_main && !test_mode && !prog->freestanding)
