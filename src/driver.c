@@ -32,6 +32,7 @@
 #include "common.h"
 
 #include <sys/wait.h>
+#include <sys/utsname.h>
 
 #ifdef USE_LIBTCC
 #include <libtcc.h>
@@ -149,6 +150,19 @@ static int compile_via_tcc_ex(const char *c_src, const char *out_path,
 
 #endif /* USE_LIBTCC */
 
+/* The red zone exists only on x86-64.  Cross builds select the target with
+ * ZOV_TARGET_ARCH; otherwise the host machine name is used. */
+static int freestanding_is_x86_64(void)
+{
+    const char *arch = getenv("ZOV_TARGET_ARCH");
+    struct utsname u;
+    if (!arch && uname(&u) == 0)
+        arch = u.machine;
+    if (!arch)
+        return 0;
+    return strcmp(arch, "x86_64") == 0 || strcmp(arch, "amd64") == 0;
+}
+
 /* Freestanding backend flags; -c emits a linkable kernel object. */
 static int compile_via_cc_fs(const char *c_src, const char *out_path)
 {
@@ -157,7 +171,9 @@ static int compile_via_cc_fs(const char *c_src, const char *out_path)
     char cmd[2048];
     size_t off = (size_t)snprintf(cmd, sizeof(cmd),
                                   "cc -x c -std=c99 -O2 -ffreestanding "
-                                  "-nostdlib -mno-red-zone -fno-pie");
+                                  "-nostdlib -fno-pie%s",
+                                  freestanding_is_x86_64()
+                                      ? " -mno-red-zone" : "");
     if (to_object)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off, " -c");
     off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
