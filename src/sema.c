@@ -1913,6 +1913,12 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (!ty_is_num(dst->kind) && dst->kind != TY_CHAR
             && dst->kind != TY_BOOL && !is_ptrish(dst))
             fatal_at(e->span, "cannot cast to %s", type_spelling(dst));
+        if (t->kind == TY_PTR && t->nullable && dst->kind == TY_PTR
+            && !dst->nullable)
+            fatal_at(e->span,
+                     "cannot cast %s to %s: narrow it via match "
+                     "or '!' instead",
+                     type_spelling(t), type_spelling(dst));
         e->type = dst;
         return e->type;
     }
