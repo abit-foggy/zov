@@ -261,11 +261,12 @@ run_stdin() { # name source input_line expected_stdout
     pass "$name"
 }
 
-check_panic_report() { # name code message_log
+check_panic_report() { # name code message log [file:line:col]
     name=$1
     code=$2
     message=$3
     log=$4
+    site=$5
     if [ "$(head -1 "$log" 2>/dev/null)" != "Zov runtime error" ]; then
         fail "$name (missing runtime error header)"
         show_file "$log"
@@ -281,6 +282,11 @@ check_panic_report() { # name code message_log
         show_file "$log"
         return 1
     fi
+    if [ -n "$site" ] && ! grep -qF "  --> $site" "$log"; then
+        fail "$name (runtime panic reported the wrong source location, want $site)"
+        show_file "$log"
+        return 1
+    fi
     if grep -q '?:0:0' "$log"; then
         fail "$name (runtime panic used a fake source location)"
         show_file "$log"
@@ -289,11 +295,12 @@ check_panic_report() { # name code message_log
     return 0
 }
 
-run_panic() { # name source expected_code expected_stderr_text
+run_panic() { # name source expected_code expected_stderr_text [line:col]
     name=$1
     source=$2
     code=$3
     expected=$4
+    site=$5
     output=$TMP/$name
     compile_zov "$name" "$source" "$output" || return
     run_program "$name" "$output" /dev/null
@@ -313,15 +320,17 @@ run_panic() { # name source expected_code expected_stderr_text
         show_file "$TMP/$name.err"
         return
     fi
-    check_panic_report "$name" "$code" "$expected" "$TMP/$name.err" || return
+    check_panic_report "$name" "$code" "$expected" "$TMP/$name.err" \
+        "${site:+$source:$site}" || return
     pass "$name"
 }
 
-run_panic_release() { # name source expected_code expected_stderr_text
+run_panic_release() { # name source expected_code expected_stderr_text [line:col]
     label=$1
     source=$2
     code=$3
     expected=$4
+    site=$5
     output=$TMP/$label-release
     run_limited "$TMP/$label-release.compile.out" \
         "$TMP/$label-release.compile.err" \
@@ -340,7 +349,7 @@ run_panic_release() { # name source expected_code expected_stderr_text
         return
     fi
     check_panic_report "${label}-release" "$code" "$expected" \
-        "$TMP/$label-release.err" || return
+        "$TMP/$label-release.err" "${site:+$source:$site}" || return
     pass "$label release"
 }
 
@@ -1157,14 +1166,14 @@ run_stdout 34_owned_nested tests/34_owned_nested.zov tests/34_owned_nested.expec
 run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.expected
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
 run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
-run_panic 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero"
-run_panic 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2"
-run_panic 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4"
-run_panic 40_assert_panic tests/40_assert_panic.zov E1006 "assert failed:"
-run_panic 41_unwrap_null_panic tests/41_unwrap_null_panic.zov E1004 "unwrap of null"
-run_panic_release 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero"
-run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2"
-run_panic_release 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4"
+run_panic 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero" 8:18
+run_panic 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2" 8:19
+run_panic 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4" 6:20
+run_panic 40_assert_panic tests/40_assert_panic.zov E1006 "assert failed:" 4:5
+run_panic 41_unwrap_null_panic tests/41_unwrap_null_panic.zov E1004 "unwrap of null" 4:19
+run_panic_release 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero" 8:18
+run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2" 8:19
+run_panic_release 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4" 6:20
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
