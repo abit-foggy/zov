@@ -1,0 +1,16 @@
+// MUST FAIL: a view assigned to an outer binding inside a loop outlives the
+// String after the loop ends
+use std::io;
+
+export fn main() i32 = {
+    let s = String::from("x");
+    let mut t: str = "init";
+    let mut i: i32 = 0;
+    while (i < 1) {
+        t = s.view();
+        i += 1;
+    };
+    s.free();
+    io::println(t);
+    return 0;
+};

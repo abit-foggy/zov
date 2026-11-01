@@ -55,3 +55,5 @@
 52_nested_double_free.zov|10|23|-|use of moved value 'b.items'
 53_recursive_type.zov|2|26|-|recursive type 'A' has infinite size
 54_branch_view.zov|8|5|-|cannot free 's': it is still borrowed by 'v'
+55_lines_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 'ls'
+56_loop_view_outlives_string.zov|13|5|-|cannot free 's': it is still borrowed by 't'

@@ -1,0 +1,11 @@
+// MUST FAIL: lines() returns views of the input String, even through the
+// split_byte wrapper
+use std::str as strings;
+
+export fn main() i32 = {
+    let s = String::from("a\nb");
+    let ls = strings::lines(s.view());
+    s.free();
+    ls.free();
+    return 0;
+};
