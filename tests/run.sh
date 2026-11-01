@@ -649,7 +649,7 @@ run_freestanding() {
 
     run_limited "$TMP/fscc.out" "$TMP/fscc.err" \
         cc -ffreestanding -nostdlib -mno-red-zone -fno-pie -std=c99 \
-        -Wall -Wextra -Werror -c "$TMP/fs.c" -o "$TMP/fs.o"
+        -pedantic-errors -Wall -Wextra -Werror -c "$TMP/fs.c" -o "$TMP/fs.o"
     status=$?
     if [ "$status" -ne 0 ]; then
         fail "16_freestanding object compile (cc exited $status)"
