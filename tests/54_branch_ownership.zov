@@ -1,0 +1,60 @@
+// convergent and diverging branch ownership, plus fixed-array element
+// overwrite destruction
+use std::io;
+
+export fn main() i32 = {
+    // both arms free the value: it is definitely uninitialized after the if
+    let mut both = String::from("first");
+    if (1 == 1) {
+        both.free();
+    } else {
+        both.free();
+    };
+    both = String::from("second");
+    io::println(both.view());
+    both.free();
+
+    // both arms move the value through a call
+    let mut moved = String::from("left");
+    if (1 == 0) {
+        moved = consume(moved);
+    } else {
+        moved = consume(moved);
+    };
+    io::println(moved.view());
+    moved.free();
+
+    // a returning arm does not contribute its move to the fallthrough state
+    let mut alive = String::from("alive");
+    let early: bool = false;
+    if (early) {
+        alive.free();
+        return 0;
+    };
+    io::println(alive.view());
+    alive.free();
+
+    // match arms converge the same way
+    let mut matched = String::from("m");
+    let n: i32 = 2;
+    match (n) {
+        case 1 => matched.free(),
+        case _ => matched.free(),
+    };
+    matched = String::from("match");
+    io::println(matched.view());
+    matched.free();
+
+    // fixed arrays destroy the old element before storing a replacement
+    let mut arr: [2]String = [String::from("a"), String::from("b")];
+    arr[0] = String::from("c");
+    io::println(arr[0].view());
+    io::println(arr[1].view());
+    arr[0].free();
+    arr[1].free();
+    return 0;
+};
+
+fn consume(s: String) String = {
+    return s;
+};

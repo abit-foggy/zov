@@ -806,7 +806,15 @@ static void bx_assign(Borrow *b, Expr *e)
                     bfatal(E0517, lhs->span,
                            "cannot overwrite '%s': it may have been moved "
                            "or freed on a conditional path", root);
-                if (lhs->kind == EX_FIELD && !field_moved(bv, field)
+                /* Fixed-array elements are initialized storage: release
+                 * the old element before storing the replacement.  Raw
+                 * pointers and slices are aliases of storage owned
+                 * elsewhere, so they keep plain assignment. */
+                int array_elem = lhs->kind == EX_INDEX
+                                 && lhs->u.index.base->type
+                                 && lhs->u.index.base->type->kind == TY_ARRAY;
+                if ((lhs->kind == EX_FIELD || array_elem)
+                    && !field_moved(bv, field)
                     && !field_freed(bv, field)
                     && ty_is_move(b, lhs->type, 0))
                     e->assign_destroy = 1;
@@ -1621,41 +1629,52 @@ static void scan_defer_stmt(Borrow *b, Stmt *s)
     }
 }
 
-/* Branch joins: walk with a copied state, then OR the branch's MOVED /
- * defer_used marks back into the running state. Branch-local bindings
- * and loans are dropped. A diverged branch contributes no marks. */
-static void merge_branch_marks(Borrow *b, BVar *base, size_t nbase,
-                               int diverged)
+/* Branch outcomes are captured independently: each alternative starts from
+ * the same pre-branch state, so a move in one arm cannot poison another.
+ * Convergent marks (every surviving path moved/freed the same place) are
+ * definite; mixed marks stay conservative "maybe" states. */
+typedef struct BranchOut {
+    BVar *vars;
+    Loan *loans;
+    size_t nvars;
+    size_t nloans;
+    int diverged;
+} BranchOut;
+
+static BranchOut capture_branch(Borrow *b, size_t nvars)
 {
-    for (size_t i = 0; i < nbase && i < b->vars.len; i++) {
-        BVar *cur = &b->vars.items[i];
-        if (cur->moved && !diverged) {
-            if (!base[i].moved)
-                base[i].maybe_moved = 1;
-            base[i].moved = 1;
-        }
-        if (cur->freed && !diverged) {
-            if (!base[i].freed)
-                base[i].maybe_freed = 1;
-            base[i].freed = 1;
-        }
-        if (!diverged)
-            for (size_t j = 0; j < cur->nmoved_fields; j++) {
-                if (!field_moved(&base[i], cur->moved_fields[j]))
-                    base[i].maybe_fields = 1;
-                mark_field_moved(&base[i], cur->moved_fields[j]);
-            }
-        if (!diverged)
-            for (size_t j = 0; j < cur->nfreed_fields; j++) {
-                if (!field_freed(&base[i], cur->freed_fields[j]))
-                    base[i].maybe_fields = 1;
-                mark_field_freed(&base[i], cur->freed_fields[j]);
-            }
-        if (cur->defer_used)
-            base[i].defer_used = 1;
-        if (cur->defer_free)
-            base[i].defer_free = 1;
-    }
+    BranchOut o;
+    memset(&o, 0, sizeof(o));
+    o.nvars = nvars;
+    o.vars = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+    for (size_t i = 0; i < nvars; i++)
+        o.vars[i] = b->vars.items[i];
+    size_t nloans = b->loans.len;
+    o.nloans = nloans;
+    o.loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
+    if (nloans)
+        memcpy(o.loans, b->loans.items, nloans * sizeof(Loan));
+    o.diverged = 0;
+    return o;
+}
+
+static void release_branch(BranchOut *o)
+{
+    free(o->vars);
+    free(o->loans);
+    o->vars = NULL;
+    o->loans = NULL;
+}
+
+static void restore_branch(Borrow *b, BVar *base, size_t nvars,
+                           Loan *base_loans, size_t nloans)
+{
+    b->vars.len = nvars;
+    for (size_t i = 0; i < nvars; i++)
+        b->vars.items[i] = base[i];
+    b->loans.len = nloans;
+    if (nloans)
+        memcpy(b->loans.items, base_loans, nloans * sizeof(Loan));
 }
 
 static int holder_in_base(BVar *base, size_t nvars, const char *holder)
@@ -1679,86 +1698,205 @@ static void keep_outer_loans(Borrow *b, BVar *base, size_t nvars)
     b->loans.len = w;
 }
 
-/* Loans made inside a branch survive the join when their holder is still
- * in scope; branch-local holders and dead/rebound loans are dropped. */
-static void merge_branch_loans(Borrow *b, BVar *base, size_t nvars,
-                               Loan *base_loans, size_t nbase_loans,
-                               int diverged)
+static int loan_same(const Loan *a, const Loan *b)
 {
-    if (diverged) {
-        if (nbase_loans)
-            memcpy(b->loans.items, base_loans,
-                   nbase_loans * sizeof(Loan));
-        b->loans.len = nbase_loans;
-        return;
-    }
+    return a->holder == b->holder && a->root == b->root
+           && a->place == b->place && a->exclusive == b->exclusive;
+}
+
+static void merge_branch_loans(Borrow *b, BVar *base, size_t nvars,
+                               BranchOut *outs, const int *live,
+                               size_t nlive)
+{
     size_t w = 0;
-    for (size_t i = 0; i < b->loans.len; i++) {
-        Loan *l = &b->loans.items[i];
-        if (l->active && holder_in_base(base, nvars, l->holder))
+    for (size_t oi = 0; oi < nlive; oi++) {
+        BranchOut *o = &outs[live[oi]];
+        for (size_t i = 0; i < o->nloans; i++) {
+            Loan *l = &o->loans[i];
+            if (!l->active || !holder_in_base(base, nvars, l->holder))
+                continue;
+            int dup = 0;
+            for (size_t j = 0; j < w; j++)
+                if (loan_same(&b->loans.items[j], l)) {
+                    dup = 1;
+                    break;
+                }
+            if (dup)
+                continue;
+            if (w == b->loans.cap) {
+                size_t cap = b->loans.cap ? b->loans.cap * 2 : 8;
+                Loan *nl = realloc(b->loans.items, cap * sizeof(Loan));
+                if (!nl)
+                    fatal("out of memory");
+                b->loans.items = nl;
+                b->loans.cap = cap;
+            }
             b->loans.items[w++] = *l;
+        }
     }
     b->loans.len = w;
 }
 
-static int walk_branch(Borrow *b, Block *body)
+/* Merge captured alternatives into the running state.  A path that
+ * returns/breaks contributes no marks, so only surviving paths matter. */
+static void merge_branches(Borrow *b, BVar *base, size_t nvars,
+                           size_t nbase_loans, BranchOut *outs, size_t nout)
 {
-    size_t nvars = b->vars.len;
-    size_t nloans = b->loans.len;
-    BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
-    Loan *base_loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
-    for (size_t i = 0; i < nvars; i++)
-        base[i] = b->vars.items[i];
-    if (nloans)
-        memcpy(base_loans, b->loans.items, nloans * sizeof(Loan));
-    int diverged = b_block(b, body);
-    merge_branch_marks(b, base, nvars, diverged);
-    merge_branch_loans(b, base, nvars, base_loans, nloans, diverged);
+    (void)nbase_loans;
+    int *live = nout ? malloc(nout * sizeof(int)) : NULL;
+    size_t nlive = 0;
+    for (size_t i = 0; i < nout; i++)
+        if (!outs[i].diverged)
+            live[nlive++] = (int)i;
+    if (nlive == 0) {
+        free(live);
+        return; /* unreachable fallthrough: keep the entry state */
+    }
+    for (size_t vi = 0; vi < nvars; vi++) {
+        BVar merged = base[vi];
+        int nmoved = 0;
+        int nfreed = 0;
+        for (size_t oi = 0; oi < nlive; oi++) {
+            BVar *v = &outs[live[oi]].vars[vi];
+            nmoved += v->moved ? 1 : 0;
+            nfreed += v->freed ? 1 : 0;
+        }
+        if (nmoved == (int)nlive && nfreed == 0) {
+            merged.moved = 1;
+            merged.freed = 0;
+            merged.maybe_moved = 0;
+            merged.maybe_freed = 0;
+            merged.maybe_fields = 0;
+            clear_moved_fields(&merged);
+            clear_freed_fields(&merged);
+        } else if (nfreed == (int)nlive && nmoved == 0) {
+            merged.moved = 0;
+            merged.freed = 1;
+            merged.maybe_moved = 0;
+            merged.maybe_freed = 0;
+            merged.maybe_fields = 0;
+            clear_moved_fields(&merged);
+            clear_freed_fields(&merged);
+        } else {
+            merged.moved = nmoved > 0;
+            merged.freed = nfreed > 0;
+            merged.maybe_moved = (nmoved > 0 && nmoved < (int)nlive);
+            merged.maybe_freed = (nfreed > 0 && nfreed < (int)nlive);
+            /* different branches can move vs free the same value: both
+             * leave it uninitialized, so overwrite is still safe */
+            if (nmoved > 0 && nfreed > 0 && nmoved + nfreed == (int)nlive)
+                merged.maybe_moved = 0;
+            clear_moved_fields(&merged);
+            clear_freed_fields(&merged);
+            merged.maybe_fields = 0;
+            for (size_t oi = 0; oi < nlive; oi++) {
+                BVar *v = &outs[live[oi]].vars[vi];
+                for (size_t j = 0; j < v->nmoved_fields; j++) {
+                    const char *f = v->moved_fields[j];
+                    int nm = 0, nf = 0;
+                    for (size_t oj = 0; oj < nlive; oj++) {
+                        BVar *w = &outs[live[oj]].vars[vi];
+                        nm += field_moved(w, f) ? 1 : 0;
+                        nf += field_freed(w, f) ? 1 : 0;
+                    }
+                    if (nm + nf == (int)nlive && nf == 0) {
+                        mark_field_moved(&merged, f);
+                    } else if (nm + nf == (int)nlive && nm == 0) {
+                        mark_field_freed(&merged, f);
+                    } else {
+                        merged.maybe_fields = 1;
+                        mark_field_moved(&merged, f);
+                    }
+                }
+                for (size_t j = 0; j < v->nfreed_fields; j++) {
+                    const char *f = v->freed_fields[j];
+                    int nm = 0, nf = 0;
+                    for (size_t oj = 0; oj < nlive; oj++) {
+                        BVar *w = &outs[live[oj]].vars[vi];
+                        nm += field_moved(w, f) ? 1 : 0;
+                        nf += field_freed(w, f) ? 1 : 0;
+                    }
+                    if (nm + nf == (int)nlive && nf == 0) {
+                        mark_field_moved(&merged, f);
+                    } else if (nm + nf == (int)nlive && nm == 0) {
+                        mark_field_freed(&merged, f);
+                    } else {
+                        merged.maybe_fields = 1;
+                        mark_field_freed(&merged, f);
+                    }
+                }
+            }
+        }
+        /* deferred cleanup registration executes on every path, including
+         * the ones that returned early */
+        for (size_t oi = 0; oi < nout; oi++) {
+            merged.defer_used |= outs[oi].vars[vi].defer_used;
+            merged.defer_free |= outs[oi].vars[vi].defer_free;
+        }
+        base[vi] = merged;
+    }
     b->vars.len = nvars;
     for (size_t i = 0; i < nvars; i++)
         b->vars.items[i] = base[i];
-    free(base_loans);
-    free(base);
-    return diverged;
+    merge_branch_loans(b, base, nvars, outs, live, nlive);
+    free(live);
 }
 
-static int walk_arm(Borrow *b, MatchArm *a)
+/* Walk one alternative from the current (pre-branch) state. */
+static BranchOut run_block_branch(Borrow *b, Block *body, size_t nvars)
 {
-    size_t nvars = b->vars.len;
-    size_t nloans = b->loans.len;
-    BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
-    Loan *base_loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
-    for (size_t i = 0; i < nvars; i++)
-        base[i] = b->vars.items[i];
-    if (nloans)
-        memcpy(base_loans, b->loans.items, nloans * sizeof(Loan));
+    int diverged = b_block(b, body);
+    BranchOut o = capture_branch(b, nvars);
+    o.diverged = diverged;
+    return o;
+}
+
+static BranchOut run_stmt_branch(Borrow *b, Stmt *s, size_t nvars)
+{
+    int diverged = b_stmt(b, s);
+    BranchOut o = capture_branch(b, nvars);
+    o.diverged = diverged;
+    return o;
+}
+
+static BranchOut run_arm(Borrow *b, MatchArm *a, size_t nvars)
+{
     if (a->name && a->ty)
         var_add(b, a->name, a->ty, 0);
     int diverged = 0;
-    if (a->jump) {
+    if (a->jump)
         diverged = b_stmt(b, a->jump);
-    } else {
+    else
         bx_expr(b, a->val);
-    }
-    merge_branch_marks(b, base, nvars, diverged);
-    merge_branch_loans(b, base, nvars, base_loans, nloans, diverged);
-    b->vars.len = nvars;
-    for (size_t i = 0; i < nvars; i++)
-        b->vars.items[i] = base[i];
-    free(base_loans);
-    free(base);
-    return diverged;
+    BranchOut o = capture_branch(b, nvars);
+    o.diverged = diverged;
+    return o;
 }
 
 static void walk_match(Borrow *b, Expr *m)
 {
     bx_expr(b, m->u.match.scrutinee);
-    int all_diverge = 1;
-    for (size_t i = 0; i < m->u.match.arms.len; i++) {
-        int d = walk_arm(b, &m->u.match.arms.items[i]);
-        all_diverge = all_diverge && d;
+    size_t nvars = b->vars.len;
+    size_t nloans = b->loans.len;
+    BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+    Loan *base_loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
+    for (size_t i = 0; i < nvars; i++)
+        base[i] = b->vars.items[i];
+    if (nloans)
+        memcpy(base_loans, b->loans.items, nloans * sizeof(Loan));
+    size_t nout = m->u.match.arms.len;
+    BranchOut *outs = nout ? malloc(nout * sizeof(BranchOut)) : NULL;
+    for (size_t i = 0; i < nout; i++) {
+        restore_branch(b, base, nvars, base_loans, nloans);
+        outs[i] = run_arm(b, &m->u.match.arms.items[i], nvars);
     }
-    (void)all_diverge;
+    restore_branch(b, base, nvars, base_loans, nloans);
+    merge_branches(b, base, nvars, nloans, outs, nout);
+    for (size_t i = 0; i < nout; i++)
+        release_branch(&outs[i]);
+    free(outs);
+    free(base_loans);
+    free(base);
 }
 
 /* NLL: loans whose holder's last lexical use precedes the current
@@ -1931,15 +2069,35 @@ static int b_stmt(Borrow *b, Stmt *s)
         return 0;
     case ST_IF: {
         bx_expr(b, s->u.iff.cond);
-        int d1 = walk_branch(b, s->u.iff.then_blk);
-        int d2 = 0;
+        size_t nvars = b->vars.len;
+        size_t nloans = b->loans.len;
+        BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
+        Loan *base_loans = nloans ? malloc(nloans * sizeof(Loan)) : NULL;
+        for (size_t i = 0; i < nvars; i++)
+            base[i] = b->vars.items[i];
+        if (nloans)
+            memcpy(base_loans, b->loans.items, nloans * sizeof(Loan));
+        BranchOut outs[2];
+        restore_branch(b, base, nvars, base_loans, nloans);
+        outs[0] = run_block_branch(b, s->u.iff.then_blk, nvars);
+        restore_branch(b, base, nvars, base_loans, nloans);
         if (s->u.iff.else_stmt) {
             if (s->u.iff.else_stmt->kind == ST_IF)
-                d2 = b_stmt(b, s->u.iff.else_stmt);
+                outs[1] = run_stmt_branch(b, s->u.iff.else_stmt, nvars);
             else
-                d2 = walk_branch(b, s->u.iff.else_stmt->u.block);
+                outs[1] = run_block_branch(b, s->u.iff.else_stmt->u.block,
+                                           nvars);
+        } else {
+            outs[1] = capture_branch(b, nvars);
+            outs[1].diverged = 0;
         }
-        return d1 && d2;
+        restore_branch(b, base, nvars, base_loans, nloans);
+        merge_branches(b, base, nvars, nloans, outs, 2);
+        release_branch(&outs[0]);
+        release_branch(&outs[1]);
+        free(base_loans);
+        free(base);
+        return outs[0].diverged && outs[1].diverged;
     }
     case ST_WHILE: {
         bx_expr(b, s->u.whilee.cond);

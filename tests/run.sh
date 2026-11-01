@@ -1411,6 +1411,7 @@ run_stdout 14_bitwise_map tests/14_bitwise_and_map.zov tests/14_bitwise_and_map.
 run_stdout 15_capstone tests/15_capstone_interpreter.zov tests/15_capstone_interpreter.expected
 run_stdin 17_std_io tests/17_std_io.zov "first line" tests/17_std_io.expected
 run_stdout 52_owned_overwrite tests/52_owned_overwrite.zov tests/52_owned_overwrite.expected
+run_stdout 54_branch_ownership tests/54_branch_ownership.zov tests/54_branch_ownership.expected
 run_stdin 51_shell_workload tests/51_shell_workload.zov "echo hello world\necho again\nexit" tests/51_shell_workload.expected
 run_stdin 53_zovsh_overwrite tests/53_zovsh_overwrite.zov "echo hello world\ncd /tmp\npwd\necho done\nexit" tests/53_zovsh_overwrite.expected
 run_exit  18_std_time tests/18_std_time.zov 0
