@@ -1674,6 +1674,20 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 fatal_at(E0605, arg->span,
                          "mem::drop requires a place expression "
                          "(variable, field, index, or dereference)");
+            /* A type with a by-value free() method releases its own
+             * storage; instantiate the generic method now so codegen can
+             * call it from the drop helper. */
+            Type *at = arg->type;
+            if (at && at->kind == TY_STRUCT && at->tmpl
+                && at->inst_args.len > 0) {
+                Sym *m = find_method(se, at->tmpl, "free");
+                if (m && m->is_template) {
+                    char key[512];
+                    snprintf(key, sizeof(key), "%s__free", at->name);
+                    instantiate_method(se, m, key, at->tmpl,
+                                       &at->inst_args);
+                }
+            }
             e->builtin_drop = 1;
             e->type = type_prim(TY_VOID);
             return e->type;

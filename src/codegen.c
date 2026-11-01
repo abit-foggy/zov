@@ -2293,6 +2293,30 @@ static int type_is_string(Type *t)
            && zstr_eq(t->name, "String");
 }
 
+/* A struct may release its own storage through a by-value free() method
+ * (Vec, Map, Arena, and user containers).  Drop prefers that over
+ * recursing into fields, whose raw pointers carry no ownership. */
+static Decl *find_free_method(CG *cg, Type *t)
+{
+    if (!t || t->kind != TY_STRUCT || !t->name)
+        return NULL;
+    char name[512];
+    int w = snprintf(name, sizeof(name), "%s__free", t->name);
+    if (w <= 0 || (size_t)w >= sizeof(name))
+        return NULL;
+    for (size_t i = 0; i < cg->prog->decls.len; i++) {
+        Decl *d = cg->prog->decls.items[i];
+        if (d->kind != DL_FN || !d->u.fn.name
+            || !zstr_eq(d->u.fn.name, name) || d->u.fn.params.len != 1
+            || !d->u.fn.ret || d->u.fn.ret->kind != TY_VOID)
+            continue;
+        Param *p = &d->u.fn.params.items[0];
+        if (p->ty && p->ty->kind == TY_STRUCT && type_eq(p->ty, t))
+            return d;
+    }
+    return NULL;
+}
+
 static int type_needs_drop(CG *cg, Type *t, int depth)
 {
     if (!t || depth > 16)
@@ -2300,6 +2324,8 @@ static int type_needs_drop(CG *cg, Type *t, int depth)
     switch (t->kind) {
     case TY_STRUCT: {
         if (type_is_string(t))
+            return 1;
+        if (find_free_method(cg, t))
             return 1;
         int di = type_decl_index(cg->prog, t->name);
         if (di < 0)
@@ -2351,6 +2377,8 @@ static void collect_drop_types(CG *cg)
         if (type_is_string(t))
             continue;
         if (t->kind == TY_STRUCT) {
+            if (find_free_method(cg, t))
+                continue;
             int di = type_decl_index(cg->prog, t->name);
             if (di < 0)
                 continue;
@@ -2397,6 +2425,10 @@ static void emit_drop_defs(CG *cg, Buf *out)
         buf_puts(out, " v) {\n");
         if (type_is_string(t)) {
             buf_puts(out, "    zov_string_free(v);\n");
+        } else if (t->kind == TY_STRUCT && find_free_method(cg, t)) {
+            Decl *m = find_free_method(cg, t);
+            buf_printf(out, "    %s(*v);\n",
+                       mangle_fn(m->regname ? m->regname : m->u.fn.name));
         } else if (t->kind == TY_STRUCT) {
             int di = type_decl_index(cg->prog, t->name);
             Decl *d = di >= 0 ? cg->prog->decls.items[di] : NULL;
@@ -3035,9 +3067,10 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "}\n");
         }
     }
-    emit_drop_defs(cg, &out);
     buf_puts(&out, cg->str_helpers.data);
     buf_puts(&out, cg->protos.data);
+    /* after prototypes: drop helpers may call a type's free() method */
+    emit_drop_defs(cg, &out);
     buf_puts(&out, cg->body.data);
     char *result = malloc(out.len + 1);
     if (!result)

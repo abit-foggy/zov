@@ -1,0 +1,10 @@
+// MUST FAIL: a dropped container cannot be destroyed twice
+use std::vec as vec;
+use std::mem as mem;
+
+export fn main() i32 = {
+    let v = vec::new[String]();
+    mem::drop(v);
+    mem::drop(v);
+    return 0;
+};

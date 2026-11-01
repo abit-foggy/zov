@@ -17,11 +17,42 @@ export type Outer = struct {
     tail: String,
 };
 
+export type Shelf = struct {
+    items: vec::Vec[String],
+    id: i32,
+};
+
+export type Desk = struct {
+    entries: map::Map[str, String],
+};
+
+export type StringVec = vec::Vec[String];
+
 export fn main() i32 = {
     let mut v = vec::new[String]();
     v.push(String::from("alpha"));
     v.push(String::from("beta"));
     v.free();
+
+    let mut dropped = vec::new[String]();
+    dropped.push(String::from("owned"));
+    mem::drop(dropped);
+
+    let mut inner = vec::new[String]();
+    inner.push(String::from("nested"));
+    let mut outer = vec::new[StringVec]();
+    outer.push(inner);
+    outer.free();
+
+    let mut shelf_items = vec::new[String]();
+    shelf_items.push(String::from("shelved"));
+    let shelf = Shelf{ items = shelf_items, id = 5 };
+    mem::drop(shelf);
+
+    let mut desk_map = map::new[str, String]();
+    desk_map.insert("drawer", String::from("pencil"));
+    let desk = Desk{ entries = desk_map };
+    mem::drop(desk);
 
     let mut names = vec::new[String]();
     names.push(String::from("a"));
