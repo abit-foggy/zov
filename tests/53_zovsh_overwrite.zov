@@ -1,0 +1,54 @@
+// zovsh-style REPL: command splitting, builtin dispatch, and an owned cwd
+// reassigned without manual cleanup on every cd
+use std::io;
+use std::str as text;
+use std::strsplit as strings;
+
+export fn main() i32 = {
+    let mut cwd = String::from("/");
+    let mut commands: i32 = 0;
+    while (true) {
+        let r = io::readline();
+        let line: String = match (r) {
+            case let s: String => s,
+            case Eof => break,
+            case IoError => return 2,
+        };
+        let cmd: str = text::trim(line.view());
+        let parts = strings::split_byte(cmd, 32u8);
+        let argc = parts.len();
+        let head: str = parts.get(0usize);
+        if (head == "exit") {
+            parts.free();
+            line.free();
+            break;
+        };
+        if (head == "cd") {
+            if (argc > 1usize) {
+                let target: str = parts.get(1usize);
+                cwd = String::from(target); // old buffer released here
+            };
+        } else if (head == "pwd") {
+            io::println(cwd.view());
+        } else if (head == "echo") {
+            let mut i: usize = 1usize;
+            let mut first = true;
+            while (i < argc) {
+                if (!first) { io::print(" "); };
+                io::print(parts.get(i));
+                first = false;
+                i += 1usize;
+            };
+            io::println("");
+        } else {
+            io::println("unknown");
+        };
+        parts.free();
+        line.free();
+        commands += 1;
+    };
+    io::println("commands={commands}");
+    io::println("cwd={cwd.view()}");
+    cwd.free();
+    return 0;
+};

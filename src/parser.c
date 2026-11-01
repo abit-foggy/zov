@@ -320,13 +320,22 @@ static Expr *parse_match(Parser *p)
 {
     Span sp = tok(p)->span;
     advance(p); /* 'match' */
-    expect(p, TK_LPAREN, "'(' after 'match'");
+    if (!at(p, TK_LPAREN))
+        diag_fatal_at(E0201, tok(p)->span, NULL, NULL, NULL,
+                      "write match (expr) { ... }",
+                      "expected '(' after 'match', found %s", tok_desc(p));
+    advance(p);
     Expr *e = expr_new(EX_MATCH, sp);
     e->u.match.scrutinee = parse_expr(p);
     expect(p, TK_RPAREN, "')' after match scrutinee");
     expect(p, TK_LBRACE, "'{' in match");
     while (!at(p, TK_RBRACE) && !at(p, TK_EOF)) {
-        expect(p, TK_CASE, "'case'");
+        if (!at(p, TK_CASE))
+            diag_fatal_at(E0201, tok(p)->span, NULL, NULL, NULL,
+                          "each arm starts with 'case': case pattern => value",
+                          "expected 'case' at the start of a match arm, "
+                          "found %s", tok_desc(p));
+        advance(p);
         MatchArm arm;
         memset(&arm, 0, sizeof(arm));
         arm.span = tok(p)->span;
@@ -401,6 +410,11 @@ static Expr *parse_match(Parser *p)
             advance(p);
             continue;
         }
+        if (!at(p, TK_RBRACE) && !at(p, TK_EOF))
+            diag_fatal_at(E0201, tok(p)->span, NULL, NULL, NULL,
+                          "separate match arms with ','",
+                          "expected ',' between match arms, found %s",
+                          tok_desc(p));
         break;
     }
     expect(p, TK_RBRACE, "'}' after match arms");

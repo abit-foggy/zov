@@ -1,0 +1,8 @@
+// MUST FAIL: match scrutinees are parenthesized
+export fn main() i32 = {
+    let x = 1;
+    let y = match x {
+        case let n: i32 => n,
+    };
+    return y;
+};

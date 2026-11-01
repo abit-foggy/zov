@@ -82,3 +82,5 @@
 79_map_get_string.zov|7|28|E0611|std::map::get would shallow-copy String
 80_get_ref_after_free.zov|9|5|E0502|cannot move 'v': it is still borrowed by 'r'
 81_map_ref_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'
+82_match_missing_parens.zov|4|19|E0201|expected '(' after 'match', found identifier 'x'
+83_match_missing_case.zov|5|9|E0201|expected 'case' at the start of a match arm, found 'let'
