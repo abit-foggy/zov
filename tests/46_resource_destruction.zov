@@ -18,6 +18,31 @@ export fn main() i32 = {
     v.push(String::from("beta"));
     v.free();
 
+    let mut names = vec::new[String]();
+    names.push(String::from("a"));
+    names.push(String::from("c"));
+    names.insert(1usize, String::from("b"));
+    assert(names.len() == 3usize);
+    assert(names.get(1usize).view() == "b");
+    let old = names.replace(0usize, String::from("A"));
+    assert(old.view() == "a");
+    old.free();
+    let last = names.pop();
+    let lv: String = match (last) {
+        case let s: String => s,
+        case Empty => return 2,
+    };
+    assert(lv.view() == "c");
+    lv.free();
+    let removed = names.remove(0usize);
+    assert(removed.view() == "A");
+    removed.free();
+    assert(names.len() == 1usize);
+    names.set(0usize, String::from("B"));
+    names.clear();
+    assert(names.len() == 0usize);
+    names.free();
+
     let h = Holder{ label = String::from("holder"), id = 4 };
     mem::drop(h);
 

@@ -300,7 +300,7 @@ run_panic() { # name source expected_code expected_stderr_text [line:col]
     source=$2
     code=$3
     expected=$4
-    site=$5
+    site=${5:-}
     output=$TMP/$name
     compile_zov "$name" "$source" "$output" || return
     run_program "$name" "$output" /dev/null
@@ -330,7 +330,7 @@ run_panic_release() { # name source expected_code expected_stderr_text [line:col
     source=$2
     code=$3
     expected=$4
-    site=$5
+    site=${5:-}
     output=$TMP/$label-release
     run_limited "$TMP/$label-release.compile.out" \
         "$TMP/$label-release.compile.err" \
@@ -1301,6 +1301,8 @@ run_panic 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range
 run_panic 40_assert_panic tests/40_assert_panic.zov E1006 "assert failed:" 4:5
 run_panic 41_unwrap_null_panic tests/41_unwrap_null_panic.zov E1004 "unwrap of null" 4:19
 run_panic 45_generic_bounds_panic tests/45_generic_bounds_panic.zov E1001 "index 5 is outside 0..2" 3:13
+run_panic 47_alloc_overflow tests/47_alloc_overflow.zov E1006 "assert failed:"
+run_panic 48_vec_capacity_overflow tests/48_vec_capacity_overflow.zov E1006 "assert failed:"
 run_panic_release 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero" 8:18
 run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2" 8:19
 run_panic_release 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4" 6:20

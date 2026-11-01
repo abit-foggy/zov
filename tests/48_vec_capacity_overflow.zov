@@ -1,0 +1,10 @@
+// capacity arithmetic overflow must be a diagnostic, not a tiny buffer
+use std::vec as vec;
+
+export fn main() i32 = {
+    let mut v = vec::new[u8]();
+    v.push(1u8);
+    v.push(2u8);
+    v.reserve(~0usize);
+    return 0;
+};

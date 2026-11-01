@@ -1,0 +1,7 @@
+// allocation size overflow must be a diagnostic, not a wrapped allocation
+use std::mem as mem;
+
+export fn main() i32 = {
+    let p = mem::alloc[u32](~0usize);
+    return 0;
+};

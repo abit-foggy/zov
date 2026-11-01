@@ -33,21 +33,33 @@ export type Vec[T] = resource struct {
     cap: usize,
 };
 
+export type Empty = !void;
+
+// New vectors own a one-slot buffer so as_slice() never has to conjure a
+// pointer for the empty case.  Capacity grows geometrically from there.
 export fn new[T]() Vec[T] = {
-    return Vec[T]{ data = null, length = 0usize, cap = 0usize };
+    return Vec[T]{ data = mem::alloc[T](1usize), length = 0usize,
+                    cap = 1usize };
+};
+
+// Ensures room for `extra` more elements.  Unsigned overflow aborts rather
+// than wrapping into a too-small allocation.
+export fn (self: &mut Vec[T]) reserve(extra: usize) void = {
+    let need: usize = self.length + extra;
+    assert(need >= self.length);
+    if (need <= self.cap) { return; };
+    let mut cap: usize = self.cap;
+    while (cap < need) {
+        if (cap > ((~0usize) / 2usize)) { cap = need; break; };
+        cap = cap * 2usize + 1usize;
+    };
+    let p: *T = self.data!;
+    self.data = mem::realloc_buf[T](p, cap);
+    self.cap = cap;
 };
 
 export fn (self: &mut Vec[T]) push(val: T) void = {
-    if (self.length == self.cap) {
-        let new_cap: usize = (self.cap * 2usize) + 1usize;
-        if (self.data == null) {
-            self.data = mem::alloc[T](new_cap);
-        } else {
-            let p: *T = self.data!;
-            self.data = mem::realloc_buf[T](p, new_cap);
-        };
-        self.cap = new_cap;
-    };
+    self.reserve(1usize);
     let d: *T = self.data!;
     d[self.length] = val;
     self.length = self.length + 1usize;
@@ -59,10 +71,70 @@ export fn (self: &Vec[T]) get(idx: usize) T = {
     return d[idx];
 };
 
+// Overwrites an element and destroys the old value.  set() never leaks an
+// owned element; use replace() when the old value must be reused.
 export fn (self: &mut Vec[T]) set(idx: usize, val: T) void = {
     if (idx >= self.length) { c::abort(); };
     let d: *T = self.data!;
+    mem::drop[T](d[idx]);
     d[idx] = val;
+};
+
+// Stores a new element and returns the old one, transferring ownership.
+export fn (self: &mut Vec[T]) replace(idx: usize, val: T) T = {
+    if (idx >= self.length) { c::abort(); };
+    let d: *T = self.data!;
+    let old: T = d[idx];
+    d[idx] = val;
+    return old;
+};
+
+// Removes and returns the last element, transferring ownership.
+export fn (self: &mut Vec[T]) pop() (T | Empty) = {
+    if (self.length == 0usize) { return Empty; };
+    let d: *T = self.data!;
+    self.length = self.length - 1usize;
+    return d[self.length];
+};
+
+// Inserts before `idx` (idx == len appends), shifting later elements.
+export fn (self: &mut Vec[T]) insert(idx: usize, val: T) void = {
+    if (idx > self.length) { c::abort(); };
+    self.reserve(1usize);
+    let d: *T = self.data!;
+    let mut i: usize = self.length;
+    while (i > idx) {
+        d[i] = d[i - 1usize];
+        i = i - 1usize;
+    };
+    d[idx] = val;
+    self.length = self.length + 1usize;
+};
+
+// Removes and returns an element, shifting later elements down.  The
+// returned value owns its resources; the vector no longer does.
+export fn (self: &mut Vec[T]) remove(idx: usize) T = {
+    if (idx >= self.length) { c::abort(); };
+    let d: *T = self.data!;
+    let out: T = d[idx];
+    let mut i: usize = idx;
+    while (i + 1usize < self.length) {
+        d[i] = d[i + 1usize];
+        i = i + 1usize;
+    };
+    self.length = self.length - 1usize;
+    return out;
+};
+
+// Destroys every element and leaves an empty vector with its buffer.
+export fn (self: &mut Vec[T]) clear() void = {
+    let d: *T = self.data!;
+    let mut i: usize = 0usize;
+    while (i < self.length) {
+        mem::drop[T](d[i]);
+        i = i + 1usize;
+    };
+    self.length = 0usize;
 };
 
 export fn (self: &Vec[T]) len() usize = {
@@ -70,10 +142,6 @@ export fn (self: &Vec[T]) len() usize = {
 };
 
 export fn (self: &Vec[T]) as_slice() []T = {
-    if (self.length == 0usize) {
-        let empty: *T = mem::alloc[T](0usize);
-        return empty[0..0];
-    };
     let d: *T = self.data!;
     return d[0..self.length];
 };

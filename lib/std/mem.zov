@@ -32,15 +32,27 @@ use <stdlib.h> as c;
 export fn drop[T](_value: T) void = {
 };
 
+// Zeroed allocation.  The element count is checked against SIZE_MAX and
+// zero requests still return a unique, non-null pointer so callers never
+// have to special-case an empty buffer.  Allocation failure aborts; the
+// original pointer is never lost because callers replace it only after a
+// successful return.
 export fn alloc[T](count: usize) *T = {
-    let raw: nullable *void = c::calloc(count, sizeof[T]());
+    let elem: usize = sizeof[T]();
+    assert(count <= ((~0usize) / elem));
+    let mut n: usize = count;
+    if (n == 0usize) { n = 1usize; };
+    let raw: nullable *void = c::calloc(n, elem);
     if (raw == null) { c::abort(); };
     return (raw!) as *T;
 };
 
 export fn realloc_buf[T](ptr: *T, new_count: usize) *T = {
-    let raw: nullable *void = c::realloc(ptr as *void,
-                                         new_count * sizeof[T]());
+    let elem: usize = sizeof[T]();
+    assert(new_count <= ((~0usize) / elem));
+    let mut n: usize = new_count;
+    if (n == 0usize) { n = 1usize; };
+    let raw: nullable *void = c::realloc(ptr as *void, n * elem);
     if (raw == null) { c::abort(); };
     return (raw!) as *T;
 };
