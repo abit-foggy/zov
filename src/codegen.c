@@ -1441,7 +1441,6 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         break;
     }
     case EX_SLICE: {
-        cg->needs_slice = 1;
         if (!cg->freestanding)
             /* hosted bounds helper reports via fprintf; ring-0 panics */
             cg->needs_io = 1;
@@ -1450,6 +1449,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         int id = cg->tmp_id++;
         if (ty_is_stringish(bt)) {
             /* str/String sub-slice: borrow the underlying bytes */
+            cg->needs_slice = 1;
             buf_printf(&cg->protos,
                        "static zov_str zov_strsub_%d(zov_str s, size_t a, "
                        "size_t b, const char *f, unsigned long l) {\n"
@@ -1476,6 +1476,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         }
         if (bt->kind == TY_SLICE) {
             const char *st = c_type(cg, e->type);
+            cg->needs_slice = 1;
             buf_printf(&cg->protos,
                        "static %s zov_subslice_%d(%s s, size_t a, size_t b, "
                        "const char *f, unsigned long l) {\n"
@@ -1503,6 +1504,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         if (bt->kind == TY_ARRAY) {
             const char *st = c_type(cg, e->type);
             const char *et = c_type(cg, bt->base);
+            cg->needs_slice = 1;
             buf_printf(&cg->protos,
                        "static %s zov_arrslice_%d(%s *p, size_t n, "
                        "size_t a, size_t b, const char *f, unsigned long l) {\n"
@@ -1585,13 +1587,19 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             emit_expr(cg, e->u.index.index, 0);
             buf_puts(b, "))");
         } else {
+            /* slices are fat pointers: hoist the base so a side-effecting
+             * expression is evaluated once for both .data and .len */
             cg->needs_bounds = 1;
-            emit_expr(cg, e->u.index.base, 0);
-            buf_puts(b, ".data[zov_bounds((size_t)(");
+            int id = cg->tmp_id++;
+            Buf bx = {0};
+            emit_expr_into(cg, e->u.index.base, &bx, 0);
+            buf_printf(cg->pre, "%s _ix%d = ", c_type(cg, bt), id);
+            buf_append(cg->pre, &bx);
+            buf_puts(cg->pre, ";\n");
+            free(bx.data);
+            buf_printf(b, "_ix%d.data[zov_bounds((size_t)(", id);
             emit_expr(cg, e->u.index.index, 0);
-            buf_puts(b, "), ");
-            emit_expr(cg, e->u.index.base, 0);
-            buf_puts(b, ".len)]");
+            buf_printf(b, "), _ix%d.len)]", id);
         }
         break;
     }
