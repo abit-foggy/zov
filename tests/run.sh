@@ -1456,6 +1456,7 @@ run_stdout 55_map_string_keys tests/55_map_string_keys.zov tests/55_map_string_k
 run_stdout 57_array_index_ownership tests/57_array_index_ownership.zov tests/57_array_index_ownership.expected
 run_stdout 58_map_str_lookup tests/58_map_str_lookup.zov tests/58_map_str_lookup.expected
 run_stdout 59_intrinsic_names tests/59_intrinsic_names.zov tests/59_intrinsic_names.expected
+run_exit  60_private_module_types tests/60_private_module_types.zov 0
 run_stdin 51_shell_workload tests/51_shell_workload.zov "echo hello world\necho again\nexit" tests/51_shell_workload.expected
 run_stdin 53_zovsh_overwrite tests/53_zovsh_overwrite.zov 'echo hello world\nexport FOO=bar\necho $FOO\necho $NOPE\ncd /tmp\npwd\necho done\nexit' tests/53_zovsh_overwrite.expected
 run_stdin 56_zovsh_proc_fs tests/56_zovsh_proc_fs.zov 'echo $GREETING\necho $NOPE\nruntrue\nexit' tests/56_zovsh_proc_fs.expected

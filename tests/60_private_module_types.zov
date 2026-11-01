@@ -1,0 +1,5 @@
+use privmod::helper as helper;
+
+export fn main() i32 = {
+    return helper::useit() - 14;
+};

@@ -305,10 +305,14 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
         /* Private Zov decls are compiled under a module-qualified name so
          * the module can call its own helpers without exporting them. */
         if (d->kind != DL_USE && !d->exported) {
+            d->modname = canon;
             if (d->kind == DL_FN) {
-                d->modname = canon;
                 d->regname = mangled_mod_fn(canon,
                         d->u.fn.recv ? d->u.fn.mname : d->u.fn.name);
+                da_push(&ld->staged, d);
+            } else if (d->kind == DL_TYPE) {
+                /* private types live in the module scope, not the global
+                 * one, so importers cannot name them */
                 da_push(&ld->staged, d);
             }
             continue;

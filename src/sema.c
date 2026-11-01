@@ -66,6 +66,7 @@ typedef struct Sema {
     Program *prog;
     DA(struct Meth) methods;
     DA(Sym) modc;      /* module-private C header aliases */
+    DA(Sym) modtypes;  /* module-private Zov type declarations */
     const char *curmod; /* module whose body/signature is being checked */
 } Sema;
 
@@ -3223,6 +3224,7 @@ static void register_decl(Sema *se, Decl *d)
         sym.name = d->u.type.name;
         sym.kind = SYM_TYPE;
         sym.span = d->span;
+        sym.modname = d->modname;
         sym.is_template = d->u.type.tparams.len > 0;
         sym.decl = d;
         if (d->u.type.alias_ty) {
@@ -3257,6 +3259,10 @@ static void register_decl(Sema *se, Decl *d)
             sym.type = type_struct(d->u.type.name);
             if (d->u.type.is_resource)
                 sym.type->is_move = 1;
+        }
+        if (d->modname && !d->exported) {
+            da_push(&se->modtypes, sym);
+            break;
         }
         scope_add(se, sym);
         break;
@@ -3412,6 +3418,12 @@ static void push_module_scope(Sema *se, const char *modname)
         alias.name = d->u.fn.name;
         alias.alias_to = d->regname;
         scope_add(se, alias);
+    }
+    for (size_t i = 0; i < se->modtypes.len; i++) {
+        Sym *t = &se->modtypes.items[i];
+        if (t->modname != modname)
+            continue;
+        scope_add(se, *t);
     }
     se->scope->parent = saved;
 }

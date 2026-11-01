@@ -1,0 +1,6 @@
+type Priv = struct { n: i32 };
+
+export fn useit() i32 = {
+    let p = Priv{ n = 1 };
+    return p.n;
+};
