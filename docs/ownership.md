@@ -26,9 +26,37 @@ move*). The container then cannot be moved or freed as a whole
 (`E0510`), but disjoint fields stay usable. Moving deeper than one field,
 or moving a field out of a non-resource struct, is rejected (`E0511`).
 
+## Assignment and reassignment
+
+A plain `place = value` on an *initialized* owned place destroys the old
+value before storing the new one. The compiler emits one per-type helper
+(`drop` then store) so the destination is evaluated once and the release
+happens in C99-sequenced order:
+
+- locals, struct fields, and fields reached through `&mut T` are covered;
+- tagged unions destroy only the active payload before the new tag/payload
+  is written;
+- the right-hand side is evaluated once, and self-assignment of a moved
+  handle does not free the value being copied.
+
+If the place is definitely uninitialized (moved or dropped), assignment
+reinitializes it without trying to release the old contents (`E0503` and
+`E0509` are cleared). Reassigning after a field was moved out of the whole
+struct is rejected (`E0510`) because the remaining fields still own
+resources.
+
+A place that may be initialized is rejected (`E0517`): if one branch of an
+`if` moves or frees a value and another leaves it live, a later overwrite
+has no single safe action. Move/free on every branch, or restructure so
+the assignment happens before the branch.
+
+Assignment through a raw-pointer index is not automatically destructive
+(the compiler does not track pointee ownership). Container APIs such as
+`Vec.set`, `Vec.replace`, and `Map.insert` perform the release themselves.
+
 ## Explicit destruction
 
-Zov has no implicit destructors. These operations release resources:
+Zov has no scope-exit destructors. These operations release resources:
 
 - `String.free()` returns the buffer; the handle is left empty.
 - `mem::drop(place)` releases everything the place owns without
@@ -62,8 +90,10 @@ Zov has no implicit destructors. These operations release resources:
   the bump offset; it destroys nothing.
 
 Freeing or dropping while a borrow of the place is live is rejected
-(`E0502`), as is freeing a moved field (`E0503`). A deferred cleanup that
-frees a value pins it against moves (`E0515`).
+(`E0502`), as is freeing a moved field (`E0503`). Calling `free()` on a
+field reached through a reference is rejected (`E0605`): the owner would
+not know the field was released. Free the owning binding instead. A
+deferred cleanup that frees a value pins it against moves (`E0515`).
 
 ## Structs
 
@@ -89,8 +119,9 @@ type Result = (String | IoError);
 
 `mem::drop(u)` reads the active tag and destroys only that payload.
 Extracting a linear payload with `match` moves the union, so dropping the
-union afterwards is rejected. A union is not implicitly destroyed when a
-new variant is assigned; drop it first, then assign the replacement.
+union afterwards is rejected. Assigning a new variant to an initialized
+union destroys the currently active payload first, so switching between
+owned variants does not leak.
 
 ## Containers
 
@@ -105,11 +136,18 @@ without dropping them (ownership moves to the new tables). Hash keys
 currently support `str`, integers, and enums, not owned `String`
 (`E0806`).
 
-`Vec.get` and `Map.get` return a shallow copy of the stored value. For
-trivial element types that is a normal copy; for `String` it is a
-non-owning handle. Never call `free()` on a value obtained from `get`:
-the container still owns it. Use `pop`/`remove`/`replace`/`take` when
-ownership must move out.
+`Vec.get` and `Map.get` return a shallow copy of the stored value. That
+is safe only for copyable element types. Calling `get()` when the element
+type owns resources (`String`, `Vec`, `Map`, `Arena`, `&mut T`, or a
+resource-containing struct/union) is rejected with `E0611`, because the
+returned copy would alias the container's allocation.
+
+Use `Vec.get_ref(idx)` / `Map.get_ref(key)` for borrowed reads: they
+return `&T` / `&V`, keep the container borrowed while the reference is
+live, and abort on an out-of-bounds/missing key. Use `pop`, `remove`,
+`replace`, or `take` when ownership must move out of the container.
+These APIs are deliberately distinct from `get()`: no safe path hands out
+a second owner of a resource.
 
 ## Arenas
 
@@ -139,19 +177,21 @@ and `zov_rt_realloc`/`zov_rt_free` in freestanding builds.
 
 Hosted builds can use all of `std`. Freestanding builds reject
 `std::mem`, `std::vec`, `std::map`, `std::arena`, `std::io`, `std::fs`,
-`std::env`, `std::time`, `std::math`, and `std::str` with `E0306` at the
-call site, plus `String::from` and string concatenation. (`std::str` is
-rejected because its splitting helpers allocate; string comparison and
-byte indexing remain available through operators and slices.) `String::from_owned` remains
-available: the platform provides the buffer and `String.free()` calls the
-`zov_rt_free` hook. See [runtime/README.md](../runtime/README.md).
+`std::env`, `std::time`, and `std::strsplit` with `E0306` at the call
+site, plus `String::from` and string concatenation. Pure `std::math`
+helpers (`min`, `max`, `clamp`, `abs`, `sqrt`, `popcnt`, `nextpow2`) and
+all of `std::str` (`trim`, `starts_with`, `ends_with`, `find_byte`,
+`eq`) work freestanding; the libm-backed math functions and allocating
+splitting helpers are gated individually (`math::pow`, `strsplit::lines`,
+...). `String::from_owned` remains available: the platform provides the
+buffer and `String.free()` calls the `zov_rt_free` hook. See
+[runtime/README.md](../runtime/README.md).
 
 ## Known limits
 
-- Overwriting an owned local or struct field with `=` does not destroy
-  the previous value. Free it first, or the old allocation leaks.
-- Assigning a new union variant without dropping the active payload
-  leaks that payload.
+- Overwrite destruction covers locals and struct fields. Assigning
+  through a raw-pointer index does not know the element's ownership;
+  prefer `Vec.set`/`replace` or index assignment only for trivial types.
 - Dropping a raw-pointer value is a no-op: the pointer carries no
   ownership information. Dropping through `*p` is not checked against
   the allocation's real lifetime, so it belongs to the unsafe subset.

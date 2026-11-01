@@ -15,8 +15,9 @@ in each environment and what they depend on.
 | `std::fs` | yes | no (`E0306`) | ISO C `stdio.h` |
 | `std::env` | yes | no (`E0306`) | hosted process startup (argv) |
 | `std::time` | yes | no (`E0306`) | POSIX `usleep` |
-| `std::math` | yes | no (`E0306`) | ISO C `math.h` and `stdlib.h` |
-| `std::str` | yes | no (`E0306`) | `std::vec` for `split_byte`/`lines` |
+| `std::math` | yes | partly: pure helpers yes, libm functions no (`E0306`) | pure Zov; `math.h`/`stdlib.h` only for hosted functions |
+| `std::str` | yes | yes | nothing: zero-copy queries only |
+| `std::strsplit` | yes | no (`E0306`) | `std::vec` for `split_byte`/`lines` |
 
 ## Notes
 
@@ -25,16 +26,20 @@ in each environment and what they depend on.
   POSIX functions; hosted builds define `_POSIX_C_SOURCE 200809L` for
   that reason.
 - A freestanding build does not emit hosted headers for a module it
-  rejects. The diagnostic is `E0306` at the first call site, for example
+  rejects, nor for libm-backed `std::math` declarations that were skipped.
+  The diagnostic is `E0306` at the first call site, for example
   `std::vec depends on std::mem and is unavailable in freestanding
-  builds`.
-- `std::str` is currently rejected as a whole because its splitting
-  helpers allocate `Vec[str]`, even though `trim`, `starts_with`,
-  `ends_with`, and `find_byte` allocate nothing. Splitting them into a
-  separate pure module is a future cleanup.
-- `std::math` mixes pure integer helpers (`min`, `max`, `clamp`, `abs`,
-  `popcnt`) with functions backed by `<math.h>` and `rand()`. Module-level
-  imports make the whole module hosted-only until those are split.
+  builds` or `std::math::pow uses the hosted C math library`.
+- `std::str` is pure: `eq`, `starts_with`, `ends_with`, `find_byte`, and
+  `trim` are zero-allocation sub-slice queries and work in kernels.
+  Allocating `split_byte` and `lines` live in `std::strsplit`, which is
+  hosted-only because it returns `Vec[str]`.
+- `std::math` keeps the established single-module API but gates each
+  function. Pure helpers (`min`, `max`, `clamp`, `abs`, `sqrt`, `popcnt`,
+  `nextpow2`) are checked and emitted in freestanding builds; `sqrt` uses
+  a portable Newton iteration rather than libm. `randint` and the libm
+  functions (`pow`, trig, rounding, `fmin`/`fmax`) report `E0306` at the
+  call site, and their C headers are not emitted.
 - A kernel can expose its own C functions with `use <header.h> as name;`
   and call them from Zov like any other C import. That is how a platform
   allocator or console is integrated today.

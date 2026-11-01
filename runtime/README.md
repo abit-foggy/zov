@@ -39,9 +39,10 @@ program uses them when it owns a `String`:
   through `zov_rt_free`.
 - `String::from`, string concatenation, `std::io`, `std::mem`,
   `std::vec`, `std::map`, `std::arena`, `std::fs`, `std::env`,
-  `std::time`, `std::math`, and `std::str` are rejected in freestanding
-  mode with a diagnostic: they need an allocator, a C library, or an
-  operating system.
+  `std::time`, and `std::strsplit` are rejected in freestanding mode with
+  a diagnostic: they need an allocator, a C library, or an operating
+  system. Pure `std::str` queries and pure `std::math` helpers are
+  available; individual libm-backed math functions report `E0306`.
 - `zov_rt_realloc` is part of the ABI and is used by the String growth
   helper; current freestanding programs cannot reach that helper because
   allocation from a `str` is rejected. Define both hooks so the object
@@ -81,8 +82,9 @@ cc -std=c99 -pedantic-errors -ffreestanding -c kernel.c -o kernel.o
 cc my_runtime.c kernel.o -o kernel.elf    # or your linker script
 ```
 
-The generated object references only `zov_panic` (verified by `nm -u`
-in the test suite). `zov_kmain` is defined by the object.
+The generated object references only `zov_panic`, plus `memcmp` when a
+program compares strings (verified by `nm -u` in the test suite).
+`zov_kmain` is defined by the object.
 
 ## Limits
 
@@ -91,8 +93,9 @@ in the test suite). `zov_kmain` is defined by the object.
   `std::map`, and `std::arena` are hosted-only. A kernel can still wrap
   its own allocator as a C interface for Zov code.
 - No hosted headers are emitted, and `String::from`, concatenation,
-  `std::io`, `std::fs`, `std::env`, and `std::time` are rejected in
-  freestanding mode with `E0306` instead of a link failure.
+  `std::io`, `std::fs`, `std::env`, `std::time`, and `std::strsplit` are
+  rejected in freestanding mode with `E0306` instead of a link failure.
+  Pure `std::str` and pure `std::math` code compiles into the object.
 - `String::from_owned` is the only way to obtain an owned String; its
   buffer must satisfy the platform's `zov_rt_free` contract.
 - This is not a claim of kernel readiness: it defines the boundary
