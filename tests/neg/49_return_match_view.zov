@@ -1,0 +1,8 @@
+fn pick(flag: bool) str = {
+    let s = String::from("abc");
+    return match (flag) {
+        case true => s.view(),
+        case false => s.view(),
+    };
+};
+export fn main() i32 = { return 0; };

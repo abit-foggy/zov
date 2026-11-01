@@ -1,0 +1,7 @@
+export type H = struct { name: String, id: i32 };
+export fn main() i32 = {
+    let h = H{ name = String::from("x"), id = 1 };
+    h.name.free();
+    h.name.free();
+    return 0;
+};

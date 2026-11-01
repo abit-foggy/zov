@@ -36,6 +36,10 @@ typedef struct BVar {
     int is_param;
     int defer_used;
     int defer_free; /* a deferred cleanup calls free() on this binding */
+    /* Released owned fields: h.name.free() must poison later h.name uses
+     * without poisoning unrelated fields. */
+    const char *freed_fields[8];
+    size_t nfreed_fields;
 } BVar;
 
 typedef struct Loan {
@@ -99,6 +103,42 @@ static BVar *var_add(Borrow *b, const char *name, Type *ty, int mut)
     v.mut = mut;
     da_push(&b->vars, v);
     return &b->vars.items[b->vars.len - 1];
+}
+
+static int field_freed(BVar *v, const char *field)
+{
+    if (!v || !field)
+        return 0;
+    for (size_t i = 0; i < v->nfreed_fields; i++)
+        if (v->freed_fields[i] == field)
+            return 1;
+    return 0;
+}
+
+static void mark_field_freed(BVar *v, const char *field)
+{
+    if (!v || !field || field_freed(v, field))
+        return;
+    if (v->nfreed_fields < sizeof(v->freed_fields) / sizeof(*v->freed_fields))
+        v->freed_fields[v->nfreed_fields++] = field;
+}
+
+static void clear_freed_fields(BVar *v)
+{
+    if (v)
+        v->nfreed_fields = 0;
+}
+
+/* Outermost field of a place rooted at a binding: h.a.b -> "a". */
+static const char *place_field_name(Expr *e)
+{
+    const char *field = NULL;
+    while (e && (e->kind == EX_FIELD || e->kind == EX_INDEX)) {
+        if (e->kind == EX_FIELD && e->u.field.name)
+            field = e->u.field.name;
+        e = e->kind == EX_FIELD ? e->u.field.base : e->u.index.base;
+    }
+    return field;
 }
 
 static int root_shared(Borrow *b, const char *root)
@@ -462,6 +502,7 @@ typedef struct TempLoan {
 } TempLoan;
 
 static void bx_expr(Borrow *b, Expr *e);
+static void walk_match(Borrow *b, Expr *m);
 static void check_root_read(Borrow *b, Expr *e, const char *root);
 
 /* Walk a borrow's operand: the root is lent, not read; nested index
@@ -585,9 +626,8 @@ static void check_root_read(Borrow *b, Expr *e, const char *root)
                root, lk->holder);
 }
 
-static int is_borrowed_view(Type *t);
 static Expr *peel_try_unwrap(Expr *e);
-static void transfer_call_loans(Borrow *b, const char *holder, Expr *rhs);
+static void rebind_view_loans(Borrow *b, const char *holder, Expr *rhs);
 
 static void bx_assign(Borrow *b, Expr *e)
 {    bx_expr(b, e->u.assign.rhs);
@@ -606,32 +646,9 @@ static void bx_assign(Borrow *b, Expr *e)
                    lhs->u.ident);
         bv->moved = 0; /* fresh value: MOVED -> OWNED reinitialization */
         bv->freed = 0;
-        if (is_borrowed_view(bv->ty)) {
-            Expr *rhs = peel_try_unwrap(e->u.assign.rhs);
-            if (rhs && (rhs->kind == EX_CALL || rhs->kind == EX_SLICE)) {
-                if (rhs->kind == EX_SLICE) {
-                    /* re-slice: provenance follows the new base */
-                    for (size_t i = 0; i < b->loans.len; i++)
-                        if (b->loans.items[i].holder == lhs->u.ident)
-                            b->loans.items[i].active = 0;
-                    const char *root =
-                        resolve_root(b, rhs->u.slice.base);
-                    if (root && !root_locked(b, root)) {
-                        Loan l;
-                        memset(&l, 0, sizeof(l));
-                        l.holder = lhs->u.ident;
-                        l.root = root;
-                        l.exclusive = 0;
-                        l.active = 1;
-                        l.last_use = recorded_last_use(b, lhs->u.ident);
-                        l.origin = rhs->span;
-                        da_push(&b->loans, l);
-                    }
-                } else {
-                    transfer_call_loans(b, lhs->u.ident, rhs);
-                }
-            }
-        }
+        clear_freed_fields(bv);
+        if (type_contains_view(b, bv->ty, 0))
+            rebind_view_loans(b, lhs->u.ident, e->u.assign.rhs);
         return;
     }
     if (lhs->kind == EX_DEREF) {
@@ -654,6 +671,17 @@ static void bx_assign(Borrow *b, Expr *e)
         const char *root = resolve_root(b, lhs);
         if (root) {
             BVar *bv = var_find(b, root);
+            if (bv) {
+                const char *field = place_field_name(lhs);
+                if (field)
+                    for (size_t i = 0; i < bv->nfreed_fields; i++)
+                        if (bv->freed_fields[i] == field) {
+                            bv->freed_fields[i] =
+                                bv->freed_fields[bv->nfreed_fields - 1];
+                            bv->nfreed_fields--;
+                            break;
+                        }
+            }
             /* writing through a raw pointer mutates the pointee, not
              * the binding: no mutability requirement on the pointer */
             if (bv && bv->ty->kind == TY_PTR) {
@@ -687,15 +715,24 @@ static void check_free_receiver(Borrow *b, Expr *recv)
         bfatal(recv->span,
                "cannot free '%s': a deferred cleanup already frees it",
                root);
+    const char *field = place_field_name(recv);
+    if (field && field_freed(bv, field))
+        bfatal(recv->span, "value was already freed: '%s.%s'", root,
+               field);
+
     Loan *l = root_loan(b, root);
     if (l)
         bfatal(recv->span,
                "cannot free '%s': it is still borrowed by '%s'", root,
                l->holder);
-    /* track the common direct-owner case; field receivers keep the outer
-     * binding usable because only that one field was released */
-    if (recv->kind == EX_IDENT)
+    /* track the direct owner and released fields separately, so freeing
+     * h.name does not poison h.id but does catch a second h.name.free() */
+    if (recv->kind == EX_IDENT) {
         bv->freed = 1;
+        clear_freed_fields(bv);
+    } else if (field) {
+        mark_field_freed(bv, field);
+    }
 }
 
 static Decl *find_fn_decl(Borrow *b, const char *name);
@@ -881,29 +918,158 @@ static void extract_call_roots(Borrow *b, Expr *call, CallRootList *roots)
     }
 }
 
-static int is_borrowed_view(Type *t)
+/* Raw-pointer places belong to the unsafe allocator domain, not to a
+ * tracked owner binding. */
+static int place_through_raw_pointer(Expr *e)
 {
-    /* raw pointers are owned; plain str stays exempt for ergonomics, but
-     * String.view() is tracked explicitly at its binding site. */
-    return t && (t->kind == TY_REF || t->kind == TY_MUTREF
-                 || t->kind == TY_SLICE);
+    while (e) {
+        if (e->kind == EX_FIELD) {
+            e = e->u.field.base;
+            continue;
+        }
+        if (e->kind == EX_INDEX) {
+            if (e->u.index.base->type
+                && e->u.index.base->type->kind == TY_PTR)
+                return 1;
+            e = e->u.index.base;
+            continue;
+        }
+        if (e->kind == EX_DEREF) {
+            if (e->u.deref->type && e->u.deref->type->kind == TY_PTR)
+                return 1;
+            e = e->u.deref;
+            continue;
+        }
+        return 0;
+    }
+    return 0;
 }
 
-/* Rebind a borrowed-view binding's loans onto roots borrowed by the
- * call it is assigned from; earlier holder loans die with the rebind. */
-static void transfer_call_loans(Borrow *b, const char *holder,
-                                Expr *rhs)
+/* Roots whose storage may be embedded in a view-bearing value. */
+static void collect_view_roots(Borrow *b, Expr *e, CallRootList *roots)
 {
+    if (!e)
+        return;
+    switch (e->kind) {
+    case EX_IDENT: {
+        Loan *l = holder_loan(b, e->u.ident);
+        if (l)
+            push_call_root(roots, l->root, l->exclusive);
+        return;
+    }
+    case EX_FIELD:
+    case EX_INDEX: {
+        if (place_through_raw_pointer(e))
+            return;
+        const char *root = resolve_root(b, e);
+        if (root) {
+            push_call_root(roots, root, 0);
+            return;
+        }
+        const char *ref = place_ref_root(b, e);
+        if (ref) {
+            Loan *l = holder_loan(b, ref);
+            if (l)
+                push_call_root(roots, l->root, l->exclusive);
+            return;
+        }
+        Expr *base = e->kind == EX_FIELD ? e->u.field.base
+                                         : e->u.index.base;
+        collect_view_roots(b, base, roots);
+        return;
+    }
+    case EX_DEREF: {
+        if (e->u.deref->type && e->u.deref->type->kind == TY_PTR)
+            return;
+        const char *ref = place_ref_root(b, e);
+        if (ref) {
+            Loan *l = holder_loan(b, ref);
+            if (l)
+                push_call_root(roots, l->root, l->exclusive);
+            return;
+        }
+        collect_view_roots(b, e->u.deref, roots);
+        return;
+    }
+    case EX_SLICE:
+        if (e->u.slice.base->type
+            && e->u.slice.base->type->kind == TY_PTR)
+            return; /* raw-pointer slices have no tracked owner */
+        {
+            const char *root = resolve_root(b, e->u.slice.base);
+            if (root) {
+                push_call_root(roots, root, 0);
+                return;
+            }
+            collect_view_roots(b, e->u.slice.base, roots);
+        }
+        return;
+    case EX_CALL:
+        extract_call_roots(b, e, roots);
+        return;
+    case EX_UNARY:
+        if (e->u.unary.op == TK_AMP) {
+            push_call_root(roots, resolve_root(b, e->u.unary.e),
+                           e->borrow_mut);
+            return;
+        }
+        collect_view_roots(b, e->u.unary.e, roots);
+        return;
+    case EX_MATCH:
+        for (size_t i = 0; i < e->u.match.arms.len; i++) {
+            MatchArm *a = &e->u.match.arms.items[i];
+            if (!a->jump)
+                collect_view_roots(b, a->val, roots);
+        }
+        return;
+    case EX_ORELSE:
+        collect_view_roots(b, e->u.orelse.lhs, roots);
+        collect_view_roots(b, e->u.orelse.val, roots);
+        return;
+    case EX_TRY:
+        collect_view_roots(b, e->u.tryy, roots);
+        return;
+    case EX_UNWRAP:
+        collect_view_roots(b, e->u.unwrap, roots);
+        return;
+    case EX_COERCE:
+        collect_view_roots(b, e->u.coerce.e, roots);
+        return;
+    case EX_CAST:
+        collect_view_roots(b, e->u.cast.e, roots);
+        return;
+    case EX_STRUCT_LIT:
+        for (size_t i = 0; i < e->u.stlit.fields.len; i++)
+            collect_view_roots(b, e->u.stlit.fields.items[i].val, roots);
+        return;
+    case EX_ARR_LIT:
+        for (size_t i = 0; i < e->u.elems.len; i++)
+            collect_view_roots(b, e->u.elems.items[i], roots);
+        return;
+    default:
+        return;
+    }
+}
+
+/* Rebinding a view-bearing destination replaces its old loans with the
+ * roots of the new value, including match arms and aggregate literals. */
+static void rebind_view_loans(Borrow *b, const char *holder, Expr *rhs)
+{
+    CallRootList roots = {0};
+    collect_view_roots(b, rhs, &roots);
     for (size_t i = 0; i < b->loans.len; i++)
         if (b->loans.items[i].holder == holder)
             b->loans.items[i].active = 0;
-    Expr *call = peel_try_unwrap(rhs);
-    if (!call || call->kind != EX_CALL)
-        return;
-    CallRootList roots = {0};
-    extract_call_roots(b, call, &roots);
+    Expr *src = peel_try_unwrap(rhs);
+    if (src && src->kind == EX_IDENT) {
+        BVar *sv = var_find(b, src->u.ident);
+        if (sv && sv->ty && ty_is_move(b, sv->ty, 0))
+            for (size_t i = 0; i < b->loans.len; i++)
+                if (b->loans.items[i].holder == src->u.ident)
+                    b->loans.items[i].active = 0;
+    }
     for (size_t i = 0; i < roots.len; i++) {
-        if (root_locked(b, roots.items[i].root))
+        if (!roots.items[i].root || root_locked(b, roots.items[i].root))
             continue;
         Loan l;
         memset(&l, 0, sizeof(l));
@@ -912,7 +1078,7 @@ static void transfer_call_loans(Borrow *b, const char *holder,
         l.exclusive = roots.items[i].exclusive;
         l.active = 1;
         l.last_use = recorded_last_use(b, holder);
-        l.origin = call->span;
+        l.origin = rhs->span;
         da_push(&b->loans, l);
     }
     free(roots.items);
@@ -1036,6 +1202,10 @@ static void bx_expr(Borrow *b, Expr *e)
         if (root) {
             /* reading a field is a use of the root, never a move of it */
             check_root_read(b, e, root);
+            BVar *bv = var_find(b, root);
+            const char *field = place_field_name(e);
+            if (field && field_freed(bv, field))
+                bfatal(e->span, "use of freed value '%s.%s'", root, field);
             Expr *base = e->u.field.base;
             while (base && base->kind == EX_FIELD)
                 base = base->u.field.base;
@@ -1118,7 +1288,7 @@ static void bx_expr(Borrow *b, Expr *e)
             bx_expr(b, e->u.stlit.fields.items[i].val);
         return;
     case EX_MATCH:
-        bx_expr(b, e->u.match.scrutinee);
+        walk_match(b, e);
         return;
     case EX_TRY:
         bx_expr(b, e->u.tryy);
@@ -1150,47 +1320,19 @@ static void check_return_escape(Borrow *b, Expr *raw)
     }
     if (!e->type || !type_contains_view(b, e->type, 0))
         return;
-    if (e->kind == EX_IDENT) {
-        Loan *l = holder_loan(b, e->u.ident);
-        if (l && l->active && root_is_local(b, l->root))
+    CallRootList roots = {0};
+    collect_view_roots(b, e, &roots);
+    for (size_t i = 0; i < roots.len; i++)
+        if (roots.items[i].root && root_is_local(b, roots.items[i].root))
             bfatal(e->span, "cannot return borrowed data from local '%s'",
-                   l->root);
-        return;
-    }
-    if (e->kind == EX_SLICE) {
-        /* slices of raw pointers carry no tracked lifetime: the pointee is
-         * owned by the unsafe allocator domain, not by the pointer binding */
-        if (e->u.slice.base->type && e->u.slice.base->type->kind == TY_PTR)
-            return;
-        const char *root = resolve_root(b, e->u.slice.base);
-        if (root && root_is_local(b, root))
-            bfatal(e->span, "cannot return borrowed data from local '%s'",
-                   root);
-        return;
-    }
-    if (e->kind == EX_FIELD) {
-        const char *root = resolve_root(b, e);
-        if (root && root_is_local(b, root))
-            bfatal(e->span, "cannot return borrowed data from local '%s'",
-                   root);
-        return;
-    }
-    if (e->kind == EX_CALL) {
-        CallRootList roots = {0};
-        extract_call_roots(b, e, &roots);
-        for (size_t i = 0; i < roots.len; i++)
-            if (roots.items[i].root
-                && root_is_local(b, roots.items[i].root))
-                bfatal(e->span,
-                       "cannot return borrowed data from local '%s'",
-                       roots.items[i].root);
-        free(roots.items);
-    }
+                   roots.items[i].root);
+    free(roots.items);
 }
 
 /* ---- statements ---- */
 
 static int b_block(Borrow *b, Block *blk);
+static int b_stmt(Borrow *b, Stmt *s);
 
 static void scan_defer_idents(Borrow *b, Expr *e)
 {
@@ -1317,10 +1459,7 @@ static int walk_arm(Borrow *b, MatchArm *a)
         var_add(b, a->name, a->ty, 0);
     int diverged = 0;
     if (a->jump) {
-        if (a->jump->kind == ST_BLOCK)
-            diverged = b_block(b, a->jump->u.block);
-        else
-            diverged = 1; /* return/break/continue leave the construct */
+        diverged = b_stmt(b, a->jump);
     } else {
         bx_expr(b, a->val);
     }
@@ -1497,57 +1636,11 @@ static int b_stmt(Borrow *b, Stmt *s)
                 return 0;
             }
         }
-        if (init->kind == EX_MATCH)
-            walk_match(b, init);
-        else
-            bx_expr(b, init);
-        BVar *bv0 = var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
-        (void)bv0;
-        if (init->kind == EX_SLICE) {
-            /* provenance: sub holds a shared loan on the base root until
-             * its last lexical use */
-            const char *root = resolve_root(b, init->u.slice.base);
-            if (root && !root_locked(b, root)) {
-                Loan l;
-                memset(&l, 0, sizeof(l));
-                l.holder = s->u.let.name;
-                l.root = root;
-                l.exclusive = 0;
-                l.active = 1;
-                l.last_use = recorded_last_use(b, s->u.let.name);
-                da_push(&b->loans, l);
-            }
-        }
-        Expr *view_call = peel_try_unwrap(init);
+        bx_expr(b, init);
         Type *lt = s->u.let.ty ? s->u.let.ty : init->type;
-        if (view_call && view_call->kind == EX_IDENT && lt
-            && type_contains_view(b, lt, 0)) {
-            /* copying or moving a view-bearing value carries its provenance
-             * along, or the owner can be freed while the copy is live */
-            Loan *src = holder_loan(b, view_call->u.ident);
-            if (src && src->active) {
-                Loan l = *src;
-                if (init->kind == EX_IDENT) {
-                    BVar *sb = var_find(b, view_call->u.ident);
-                    if (sb && ty_is_move(b, sb->ty, 0)) {
-                        for (size_t i = 0; i < b->loans.len; i++)
-                            if (b->loans.items[i].holder
-                                == view_call->u.ident)
-                                b->loans.items[i].active = 0;
-                    }
-                }
-                l.holder = s->u.let.name;
-                l.active = 1;
-                l.last_use = recorded_last_use(b, s->u.let.name);
-                da_push(&b->loans, l);
-            }
-        }
-        int from_call = view_call && view_call->kind == EX_CALL;
-        if (from_call && lt && type_contains_view(b, lt, 0)) {
-            /* v.as_slice(), String.view(), split_byte(), and any user
-             * function returning view-bearing data borrow their arguments */
-            transfer_call_loans(b, s->u.let.name, view_call);
-        }
+        var_add(b, s->u.let.name, s->u.let.ty, s->u.let.mut);
+        if (lt && type_contains_view(b, lt, 0))
+            rebind_view_loans(b, s->u.let.name, init);
         return 0;
     }
     case ST_DEFER:
@@ -1602,10 +1695,7 @@ static int b_stmt(Borrow *b, Stmt *s)
     case ST_FOR_EACH:
         return b_foreach(b, s);
     case ST_EXPR:
-        if (s->u.expr->kind == EX_MATCH)
-            walk_match(b, s->u.expr);
-        else
-            bx_expr(b, s->u.expr);
+        bx_expr(b, s->u.expr);
         return 0;
     case ST_BLOCK: {
         size_t nvars = b->vars.len;

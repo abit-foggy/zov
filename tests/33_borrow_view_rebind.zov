@@ -1,0 +1,37 @@
+// view-bearing rebindings keep loans only until their last use, and freeing
+// one owned field does not poison unrelated fields
+use std::io;
+
+export type Holder = struct { name: String, id: i32 };
+
+fn idv(s: str) str = {
+    return s;
+};
+
+export fn main() i32 = {
+    let h = Holder{ name = String::from("gone"), id = 7 };
+    h.name.free();
+    assert(h.id == 7);
+
+    let s = String::from("hello");
+    let mut v: str = "static";
+    v = s.view();
+    assert(v.len == 5usize);
+    s.free();
+
+    let s2 = String::from("abc");
+    let w: str = match (true) {
+        case true => s2.view(),
+        case false => s2.view(),
+    };
+    assert(w.len == 3usize);
+    s2.free();
+
+    let s3 = String::from("xy");
+    let d: str = idv(s3.view());
+    assert(d.len == 2usize);
+    s3.free();
+
+    io::println("view rebinding ok");
+    return 0;
+};

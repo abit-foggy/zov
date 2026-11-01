@@ -1,0 +1,9 @@
+use std::io;
+export fn main() i32 = {
+    let mut v: str = "static";
+    let s = String::from("hello");
+    v = s.view();
+    s.free();
+    io::println(v);
+    return 0;
+};

@@ -47,3 +47,7 @@
 44_unsigned_literal_overflow.zov|2|13|-|does not fit in u8
 45_nullable_cast.zov|3|20|-|cannot cast nullable *i32 to *i32
 46_call_view_outlives_string.zov|11|5|-|cannot free 's': it is still borrowed by 'v'
+47_str_assign_view.zov|6|5|-|cannot free 's': it is still borrowed by 'v'
+48_double_field_free.zov|5|5|-|value was already freed: 'h.name'
+49_return_match_view.zov|3|12|-|cannot return borrowed data from local 's'
+50_match_init_view.zov|8|5|-|cannot free 's': it is still borrowed by 'v'
