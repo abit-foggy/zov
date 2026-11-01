@@ -76,3 +76,5 @@
 73_free_moved_field.zov|7|5|E0503|use of moved value 'h.name'
 74_drop_double_vec.zov|8|15|E0509|value was already freed: 'v'
 75_drop_through_ref.zov|11|15|E0605|mem::drop cannot destroy through a reference
+76_overwrite_maybe_moved.zov|7|5|E0517|cannot overwrite 's': it may have been moved or freed on a conditional path
+77_overwrite_after_field_move.zov|10|5|E0510|cannot overwrite 'h': a field was already moved or freed

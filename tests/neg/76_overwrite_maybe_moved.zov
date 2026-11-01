@@ -1,0 +1,10 @@
+// MUST FAIL: the value is dropped on only one branch
+use std::mem as mem;
+
+export fn main() i32 = {
+    let mut s = String::from("a");
+    if (1 == 1) { mem::drop(s); };
+    s = String::from("b");
+    s.free();
+    return 0;
+};

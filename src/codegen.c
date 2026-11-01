@@ -138,6 +138,7 @@ typedef struct CG {
     int tmp_id;       /* unique temp/label counter */
     Program *prog;
     DA(Type *) drops; /* types needing an emitted zov_drop_N helper */
+    DA(Type *) assigns; /* types needing an overwrite helper */
 } CG;
 
 /* ---- mangling ---- */
@@ -176,6 +177,7 @@ static const char *mangle_type(const char *name)
 static const char *c_type(CG *cg, Type *t);
 static int type_needs_drop(CG *cg, Type *t, int depth);
 static const char *drop_fn_name(CG *cg, Type *t);
+static const char *assign_fn_name(CG *cg, Type *t);
 static int type_decl_index(Program *prog, const char *name);
 
 /* Slice lowering: { T *data; size_t len; } via a registered typedef. */
@@ -1224,6 +1226,16 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_puts(b, "(");
             emit_expr(cg, e->u.assign.lhs, 0);
             buf_printf(b, " %s ", cop);
+            emit_expr(cg, e->u.assign.rhs, 0);
+            buf_puts(b, ")");
+            break;
+        }
+        if (e->assign_destroy && e->u.assign.lhs->type
+            && type_needs_drop(cg, e->u.assign.lhs->type, 0)) {
+            buf_printf(b, "%s(&(",
+                       assign_fn_name(cg, e->u.assign.lhs->type));
+            emit_expr(cg, e->u.assign.lhs, 0);
+            buf_puts(b, "), ");
             emit_expr(cg, e->u.assign.rhs, 0);
             buf_puts(b, ")");
             break;
@@ -2462,6 +2474,38 @@ static void emit_drop_defs(CG *cg, Buf *out)
     }
 }
 
+/* Overwrite helper: drop the previous value, then store the new one.
+ * Keeping this in a function evaluates the destination once and gives C99
+ * a well-defined sequence. */
+static const char *assign_fn_name(CG *cg, Type *t)
+{
+    for (size_t i = 0; i < cg->assigns.len; i++)
+        if (type_eq(cg->assigns.items[i], t)) {
+            char *s = zalloc(40);
+            snprintf(s, 40, "zov_assign_%lu", (unsigned long)i);
+            return s;
+        }
+    da_push(&cg->assigns, t);
+    (void)drop_fn_name(cg, t);
+    char *s = zalloc(40);
+    snprintf(s, 40, "zov_assign_%lu", (unsigned long)(cg->assigns.len - 1));
+    return s;
+}
+
+static void emit_assign_defs(CG *cg, Buf *out)
+{
+    for (size_t i = 0; i < cg->assigns.len; i++) {
+        Type *t = cg->assigns.items[i];
+        if (t->kind == TY_ARRAY)
+            continue; /* array assignment is rejected before codegen */
+        buf_printf(out, "static %s zov_assign_%lu(%s *zv_place, %s zv_val) {\n",
+                   c_type(cg, t), (unsigned long)i, c_type(cg, t),
+                   c_type(cg, t));
+        buf_printf(out, "    %s(zv_place);\n", drop_fn_name(cg, t));
+        buf_puts(out, "    *zv_place = zv_val;\n    return zv_val;\n}\n");
+    }
+}
+
 /* Register the tagged union for `u`, returning its index in cg->unions. */
 static size_t union_index(CG *cg, Type *u)
 {
@@ -3071,6 +3115,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     buf_puts(&out, cg->protos.data);
     /* after prototypes: drop helpers may call a type's free() method */
     emit_drop_defs(cg, &out);
+    emit_assign_defs(cg, &out);
     buf_puts(&out, cg->body.data);
     char *result = malloc(out.len + 1);
     if (!result)

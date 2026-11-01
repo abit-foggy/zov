@@ -1,0 +1,13 @@
+// MUST FAIL: overwriting the whole struct would hide the moved field
+export type Holder = resource struct {
+    label: String,
+    id: i32,
+};
+
+export fn main() i32 = {
+    let mut h = Holder{ label = String::from("a"), id = 1 };
+    let taken = h.label;
+    h = Holder{ label = String::from("b"), id = 2 };
+    taken.free();
+    return 0;
+};

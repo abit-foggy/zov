@@ -33,6 +33,9 @@ typedef struct BVar {
     int mut;
     int moved;
     int freed;      /* String.free() already released this owner */
+    int maybe_moved;  /* moved on at least one branch, live on another */
+    int maybe_freed;  /* freed on at least one branch, live on another */
+    int maybe_fields; /* a field was moved/freed on only some paths */
     int is_param;
     int defer_used;
     int defer_free; /* a deferred cleanup calls free() on this binding */
@@ -746,8 +749,24 @@ static void bx_assign(Borrow *b, Expr *e)
             bfatal(E0508, lhs->span,
                    "cannot assign to '%s': shared borrow is active",
                    lhs->u.ident);
+        if (bv->maybe_moved || bv->maybe_freed || bv->maybe_fields)
+            bfatal(E0517, lhs->span,
+                   "cannot overwrite '%s': it may have been moved or "
+                   "freed on a conditional path", lhs->u.ident);
+        if (bv->nmoved_fields > 0 || bv->nfreed_fields > 0)
+            bfatal(E0510, lhs->span,
+                   "cannot overwrite '%s': a field was already moved "
+                   "or freed", lhs->u.ident);
+        /* A live owned value is destroyed before the new value lands.
+         * A moved/freed place is uninitialized, so there is nothing to
+         * destroy and the assignment reinitializes it. */
+        if (!bv->moved && !bv->freed && ty_is_move(b, bv->ty, 0))
+            e->assign_destroy = 1;
         bv->moved = 0; /* fresh value: MOVED -> OWNED reinitialization */
         bv->freed = 0;
+        bv->maybe_moved = 0;
+        bv->maybe_freed = 0;
+        bv->maybe_fields = 0;
         clear_freed_fields(bv);
         clear_moved_fields(bv);
         if (type_contains_view(b, bv->ty, 0))
@@ -758,6 +777,8 @@ static void bx_assign(Borrow *b, Expr *e)
         const char *ref = place_ref_root(b, lhs);
         if (ref) {
             check_ref_place_write(b, lhs, ref);
+            if (ty_is_move(b, lhs->type, 0))
+                e->assign_destroy = 1;
             return;
         }
         const char *root = resolve_root(b, lhs);
@@ -769,6 +790,8 @@ static void bx_assign(Borrow *b, Expr *e)
         const char *ref = place_ref_root(b, lhs);
         if (ref) {
             check_ref_place_write(b, lhs, ref);
+            if (lhs->kind == EX_FIELD && ty_is_move(b, lhs->type, 0))
+                e->assign_destroy = 1;
             return;
         }
         const char *root = resolve_root(b, lhs);
@@ -776,6 +799,14 @@ static void bx_assign(Borrow *b, Expr *e)
             BVar *bv = var_find(b, root);
             if (bv) {
                 const char *field = place_field_name(lhs);
+                if (bv->maybe_moved || bv->maybe_freed || bv->maybe_fields)
+                    bfatal(E0517, lhs->span,
+                           "cannot overwrite '%s': it may have been moved "
+                           "or freed on a conditional path", root);
+                if (lhs->kind == EX_FIELD && !field_moved(bv, field)
+                    && !field_freed(bv, field)
+                    && ty_is_move(b, lhs->type, 0))
+                    e->assign_destroy = 1;
                 unmark_field_freed(bv, field);
                 unmark_field_moved(bv, field);
             }
@@ -796,6 +827,10 @@ static void bx_assign(Borrow *b, Expr *e)
  * moved receivers and any live borrow (a str view from .view()). */
 static void check_free_receiver(Borrow *b, Expr *recv)
 {
+    if (place_ref_root(b, recv))
+        bfatal(E0605, recv->span,
+               "cannot free through a reference; free the owning "
+               "binding instead");
     const char *root = resolve_root(b, recv);
     if (!root) {
         bx_expr(b, recv);
@@ -1591,16 +1626,28 @@ static void merge_branch_marks(Borrow *b, BVar *base, size_t nbase,
 {
     for (size_t i = 0; i < nbase && i < b->vars.len; i++) {
         BVar *cur = &b->vars.items[i];
-        if (cur->moved && !diverged)
+        if (cur->moved && !diverged) {
+            if (!base[i].moved)
+                base[i].maybe_moved = 1;
             base[i].moved = 1;
-        if (cur->freed && !diverged)
+        }
+        if (cur->freed && !diverged) {
+            if (!base[i].freed)
+                base[i].maybe_freed = 1;
             base[i].freed = 1;
+        }
         if (!diverged)
-            for (size_t j = 0; j < cur->nmoved_fields; j++)
+            for (size_t j = 0; j < cur->nmoved_fields; j++) {
+                if (!field_moved(&base[i], cur->moved_fields[j]))
+                    base[i].maybe_fields = 1;
                 mark_field_moved(&base[i], cur->moved_fields[j]);
+            }
         if (!diverged)
-            for (size_t j = 0; j < cur->nfreed_fields; j++)
+            for (size_t j = 0; j < cur->nfreed_fields; j++) {
+                if (!field_freed(&base[i], cur->freed_fields[j]))
+                    base[i].maybe_fields = 1;
                 mark_field_freed(&base[i], cur->freed_fields[j]);
+            }
         if (cur->defer_used)
             base[i].defer_used = 1;
         if (cur->defer_free)

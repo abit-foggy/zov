@@ -1374,6 +1374,7 @@ run_stdout 13_std_arena tests/13_std_arena_and_str.zov tests/13_std_arena_and_st
 run_stdout 14_bitwise_map tests/14_bitwise_and_map.zov tests/14_bitwise_and_map.expected
 run_stdout 15_capstone tests/15_capstone_interpreter.zov tests/15_capstone_interpreter.expected
 run_stdin 17_std_io tests/17_std_io.zov "first line" tests/17_std_io.expected
+run_stdout 52_owned_overwrite tests/52_owned_overwrite.zov tests/52_owned_overwrite.expected
 run_stdin 51_shell_workload tests/51_shell_workload.zov "echo hello world\necho again\nexit" tests/51_shell_workload.expected
 run_exit  18_std_time tests/18_std_time.zov 0
 run_exit  19_std_math tests/19_std_math_and_separators.zov 0

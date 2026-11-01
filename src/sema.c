@@ -1542,6 +1542,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             && !null_fits(e->u.assign.rhs, lt))
             fatal_at(E0601, e->span, "cannot assign %s to %s", type_spelling(rt),
                      type_spelling(lt));
+        if (lt->kind == TY_ARRAY)
+            fatal_at(E0612, e->span,
+                     "cannot assign array type %s; assign elements "
+                     "individually", type_spelling(lt));
         e->type = lt;
         return e->type;
     }

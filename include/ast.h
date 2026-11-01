@@ -171,6 +171,7 @@ typedef struct Expr {
     int method_call;        /* receiver was inserted as argument 0 */
     const char *variant_c; /* EX_NS_IDENT enum variant: C spelling */
     TokenKind comp_op;     /* EX_ASSIGN: compound operator, 0 when plain = */
+    int assign_destroy;    /* EX_ASSIGN: release the old value before storing */
     Type *hash_ty;         /* EX_CALL to hash_val[T](): the key type */
     int builtin_env_kind;  /* 1 args_count, 2 arg_at, 3 env_has, 4 env_get */
     int str_raw_builtin;   /* zov_str_from_raw(ptr, len) -> str */

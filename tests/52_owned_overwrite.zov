@@ -1,0 +1,66 @@
+// overwrite assignment destroys the previous owned value in locals,
+// struct fields, and tagged unions, and reinitializes moved/dropped places
+use std::io;
+use std::mem as mem;
+
+export type Holder = resource struct {
+    label: String,
+    id: i32,
+};
+
+export type Slot = (String | i32);
+
+export fn main() i32 = {
+    // local reassignment in a loop must release every previous buffer
+    let mut s = String::from("zero");
+    let mut i = 0;
+    while (i < 200) {
+        s = String::from("tick");
+        i += 1;
+    };
+    io::println(s.view());
+    s.free();
+
+    // struct field reassignment destroys the old field exactly once
+    let mut h = Holder{ label = String::from("a"), id = 1 };
+    h.label = String::from("b");
+    h.label = String::from("c");
+    io::println(h.label.view());
+    h.label.free();
+
+    // moving a field out and reassigning it must not free the old handle
+    let mut m = Holder{ label = String::from("moved"), id = 2 };
+    let taken = m.label;
+    m.label = String::from("fresh");
+    io::println(taken.view());
+    io::println(m.label.view());
+    taken.free();
+    m.label.free();
+
+    // union variant reassignment destroys only the active payload
+    let mut u: Slot = String::from("first");
+    u = String::from("second");
+    u = String::from("third");
+    u = 9;
+    let n: i32 = match (u) {
+        case let x: i32 => x,
+        case String => -1,
+    };
+    if (n != 9) { return 1; };
+    io::println("union ok");
+
+    // assignment after a move or drop reinitializes without a free
+    let mut r = String::from("moved-away");
+    let old = r;
+    r = String::from("back");
+    io::println(r.view());
+    old.free();
+    r.free();
+
+    let mut d = String::from("dropped");
+    mem::drop(d);
+    d = String::from("again");
+    io::println(d.view());
+    d.free();
+    return 0;
+};

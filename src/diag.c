@@ -309,6 +309,8 @@ static const DiagCodeInfo g_codes[] = {
      "A deferred block still uses this value; move the defer earlier."},
     {"E0516", "mutation of immutable binding",
      "Declare the binding with 'let mut'."},
+    {"E0517", "overwrite of conditionally moved value",
+     "Move or free the value on every branch before assigning over it."},
 
     {"E0601", "mismatched types",
      "Use an explicit 'as' cast when a conversion is intended."},
@@ -330,6 +332,10 @@ static const DiagCodeInfo g_codes[] = {
      "Remove the repeated arm."},
     {"E0610", "invalid pattern",
      "Check the pattern against the matched type."},
+    {"E0611", "resource value would be shallow-copied",
+     "Use borrowed access or an ownership-transferring API instead."},
+    {"E0612", "cannot assign array value",
+     "Assign array elements individually; arrays are not first-class values."},
 
     {"E0701", "integer literal out of range",
      "Use a wider type or a smaller literal."},
