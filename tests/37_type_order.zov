@@ -1,0 +1,29 @@
+// type emission: by-value fields may be declared later in the file, and
+// pointer-recursive structs need only the forward typedef
+use std::io;
+
+export type List = struct { head: i32, tail: nullable *List };
+
+export type Outer = struct { inner: Inner, tag: i32 };
+
+export type Inner = struct { v: i32, owner: Outer2 };
+
+export type Outer2 = struct { w: i32 };
+
+export fn main() i32 = {
+    let mut n: List = List{ head = 1, tail = null };
+    let n2 = List{ head = 2, tail = (&n) as *List };
+    let o = Outer{ inner = Inner{ v = 5, owner = Outer2{ w = 7 } }, tag = 9 };
+
+    let mut p: nullable *List = (&n2) as *List;
+    let mut sum: i32 = 0;
+    while (p != null) {
+        sum += (*p!).head;
+        p = (*p!).tail;
+    };
+
+    io::println("sum={sum} v={o.inner.v} w={o.inner.owner.w} tag={o.tag}");
+    if (sum != 3) { return 1; };
+    if (o.inner.owner.w != 7) { return 2; };
+    return 0;
+};

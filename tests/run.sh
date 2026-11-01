@@ -898,6 +898,7 @@ run_stdout 33_borrow_view_rebind tests/33_borrow_view_rebind.zov tests/33_borrow
 run_stdout 34_owned_nested tests/34_owned_nested.zov tests/34_owned_nested.expected
 run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.expected
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
+run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
