@@ -1,0 +1,38 @@
+// union payloads are initialized and copied per member, not just tagged
+use <stdio.h> as c;
+
+export type Oops = !void;
+
+export type Point = struct {
+    x: i32,
+    y: i32,
+};
+
+export fn make(flag: bool) (Point | Oops) = {
+    if (flag) {
+        return Point{ x = 3, y = 4 };
+    };
+    return Oops;
+};
+
+export fn pick(p: Point) i32 = {
+    return p.x * 10 + p.y;
+};
+
+export fn main() i32 = {
+    let r = make(true);
+    let p: Point = match (r) {
+        case let v: Point => v,
+        case Oops => return 1,
+    };
+    let bad = make(false);
+    let q: Point = match (bad) {
+        case let v: Point => v,
+        case Oops => Point{ x = 0, y = 0 },
+    };
+    c::printf("x=%d y=%d pick=%d q=%d\n", p.x, p.y, pick(p), q.x);
+    if (p.x != 3 || p.y != 4) { return 2; };
+    if (pick(p) != 34) { return 3; };
+    if (q.x != 0 || q.y != 0) { return 4; };
+    return 0;
+};
