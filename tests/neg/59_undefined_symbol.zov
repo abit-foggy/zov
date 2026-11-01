@@ -1,0 +1,4 @@
+// MUST FAIL: undefined symbol (name-resolution diagnostic)
+export fn main() i32 = {
+    return missing;
+};

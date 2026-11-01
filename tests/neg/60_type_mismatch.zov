@@ -1,0 +1,5 @@
+// MUST FAIL: str initializer for an i32 binding (type diagnostic)
+export fn main() i32 = {
+    let x: i32 = "text";
+    return x;
+};

@@ -1,0 +1,5 @@
+// MUST FAIL: unterminated string literal (lexer diagnostic)
+export fn main() i32 = {
+    let s: str = "oops;
+    return 0;
+};

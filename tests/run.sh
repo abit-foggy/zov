@@ -442,6 +442,29 @@ run_check() {
     fi
 }
 
+run_import_diagnostic() {
+    mkdir -p "$TMP/importmod"
+    printf 'export fn bad() i32 = {\n    return "nope";\n};\n' \
+        >"$TMP/importmod/helper.zov"
+    printf 'use helper;\n\nexport fn main() i32 = {\n    return helper::bad();\n};\n' \
+        >"$TMP/importmod/main.zov"
+    run_limited "$TMP/import.out" "$TMP/import.err" \
+        sh -c 'cd "$1" && exec "$2" --check main.zov' \
+        sh "$TMP/importmod" "$ZOV"
+    status=$?
+    if [ "$status" -ne 1 ]; then
+        fail "imported-file diagnostic (status $status, want 1)"
+        show_file "$TMP/import.err"
+        return
+    fi
+    if grep -Fq "./helper.zov:2:5: error: [E0601]" "$TMP/import.err"; then
+        pass "imported-file diagnostic location and code"
+    else
+        fail "imported-file diagnostic (missing helper.zov:2:5 [E0601])"
+        show_file "$TMP/import.err"
+    fi
+}
+
 run_diagnostic_registry() {
     run_limited "$TMP/diagcodes.out" "$TMP/diagcodes.err" \
         "$ZOV" diagnostics
@@ -1028,6 +1051,7 @@ done
 # ---------------------------------------------------------------------------
 
 run_check
+run_import_diagnostic
 run_diagnostic_registry
 run_lsp
 run_zovc_cc

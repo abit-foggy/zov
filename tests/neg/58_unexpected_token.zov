@@ -1,0 +1,5 @@
+// MUST FAIL: missing operator/semicolon (parser diagnostic)
+export fn main() i32 = {
+    let x: i32 = 1 2;
+    return x;
+};
