@@ -424,7 +424,7 @@ int main(int argc, char **argv)
                                NULL, 0, freestanding);
     free(c_src);
     free(src);
-    if (rc == 0 && test_mode) {
+    if (rc == 0 && test_mode && !emit_c) {
         /* test mode: execute the synthesized runner and forward status */
         char cmd[512];
         snprintf(cmd, sizeof(cmd), "./%s", out);
