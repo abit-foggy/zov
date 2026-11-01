@@ -554,6 +554,25 @@ run_freestanding() {
         fail "16_freestanding object symbols (zov_panic=$panic_refs, other=$other_refs)"
         show_file "$TMP/nm.out"
     fi
+
+    # freestanding builds are allocation-free: String allocation must be
+    # rejected at compile time with an actionable diagnostic
+    printf 'export fn kmain() void = {\n    let s = String::from("x");\n    s.free();\n};\n' \
+        >"$TMP/fs_alloc.zov"
+    run_limited "$TMP/fs_alloc.c" "$TMP/fs_alloc.err" \
+        "$ZOV" --freestanding --emit-c "$TMP/fs_alloc.zov"
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        fail "freestanding String allocation was accepted"
+    elif [ "$status" -ge 128 ]; then
+        fail "freestanding String allocation check crashed (status $status)"
+    elif ! grep -q "allocation is unavailable in freestanding" \
+        "$TMP/fs_alloc.err"; then
+        fail "freestanding String allocation diagnostic missing"
+        show_file "$TMP/fs_alloc.err"
+    else
+        pass "freestanding allocation diagnostic"
+    fi
 }
 
 run_strict_c99() {
