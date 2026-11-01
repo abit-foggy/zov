@@ -390,7 +390,7 @@ static const DiagCodeInfo g_codes[] = {
     {"E1007", "allocation failure",
      "The allocator returned no memory; reduce or bound the allocation."},
     {"E1008", "invalid owned String construction",
-     "String::from_owned requires len <= cap and a non-null buffer."},
+     "String::fromowned requires len <= cap and a non-null buffer."},
     {"E0902", "internal compiler error",
      "This is a compiler bug; please report it."},
 

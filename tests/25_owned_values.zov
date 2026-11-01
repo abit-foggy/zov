@@ -11,7 +11,7 @@ export fn main() i32 = {
     buf[0usize] = 65u8;
     buf[1usize] = 66u8;
     buf[2usize] = 67u8;
-    let made = String::from_owned(buf, 3usize, 4usize);
+    let made = String::fromowned(buf, 3usize, 4usize);
     io::println("made={made} len={made.len()}");
 
     let mut v = vec::new[String]();

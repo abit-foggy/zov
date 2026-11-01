@@ -53,7 +53,7 @@ export fn (self: &mut Map[K, V]) grow() void = {
         if ((self.states!)[i] == 1u8) {
             let k: K = (self.keys!)[i];
             let v: V = (self.vals!)[i];
-            let h: u64 = hash_val[K](k);
+            let h: u64 = hashval[K](k);
             let mut idx: usize = (h % (new_cap as u64)) as usize;
             while ((ns)[idx] == 1u8) {
                 idx = (idx + 1usize) % new_cap;
@@ -80,7 +80,7 @@ export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
     if (self.length + 1usize > load) {
         self.grow();
     };
-    let h: u64 = hash_val[K](key);
+    let h: u64 = hashval[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut inserted = false;
     let mut i: usize = 0usize;
@@ -116,7 +116,7 @@ export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
 // use get() for the fallible copy form (trivial values only).
 export fn (self: &Map[K, V]) getref(key: K) &V = {
     if (self.cap == 0usize) { c::abort(); };
-    let h: u64 = hash_val[K](key);
+    let h: u64 = hashval[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
@@ -140,7 +140,7 @@ export fn (self: &Map[K, V]) getref(key: K) &V = {
 // aborting, and a hit keeps the map borrowed for the reference's lifetime.
 export fn (self: &Map[K, V]) findref(key: K) (&V | MapNotFound) = {
     if (self.cap != 0usize) {
-        let h: u64 = hash_val[K](key);
+        let h: u64 = hashval[K](key);
         let mut idx: usize = (h % (self.cap as u64)) as usize;
         let mut i: usize = 0usize;
         while (i < self.cap) {
@@ -165,7 +165,7 @@ export fn (self: &Map[K, V]) findref(key: K) (&V | MapNotFound) = {
 // and compares the borrowed str bytes directly; no temporary String is built.
 export fn (self: &Map[String, V]) findstr(key: str) (&V | MapNotFound) = {
     if (self.cap != 0usize) {
-        let h: u64 = hash_val[str](key);
+        let h: u64 = hashval[str](key);
         let mut idx: usize = (h % (self.cap as u64)) as usize;
         let mut i: usize = 0usize;
         while (i < self.cap) {
@@ -198,7 +198,7 @@ export fn (self: &Map[String, V]) getstrref(key: str) &V = {
 
 export fn (self: &Map[String, V]) containsstr(key: str) bool = {
     if (self.cap != 0usize) {
-        let h: u64 = hash_val[str](key);
+        let h: u64 = hashval[str](key);
         let mut idx: usize = (h % (self.cap as u64)) as usize;
         let mut i: usize = 0usize;
         while (i < self.cap) {
@@ -217,7 +217,7 @@ export fn (self: &Map[String, V]) containsstr(key: str) bool = {
 
 export fn (self: &mut Map[String, V]) removestr(key: str) bool = {
     if (self.cap != 0usize) {
-        let h: u64 = hash_val[str](key);
+        let h: u64 = hashval[str](key);
         let mut idx: usize = (h % (self.cap as u64)) as usize;
         let mut i: usize = 0usize;
         while (i < self.cap) {
@@ -242,7 +242,7 @@ export fn (self: &mut Map[String, V]) removestr(key: str) bool = {
 
 export fn (self: &mut Map[String, V]) takestr(key: str) (V | MapNotFound) = {
     if (self.cap != 0usize) {
-        let h: u64 = hash_val[str](key);
+        let h: u64 = hashval[str](key);
         let mut idx: usize = (h % (self.cap as u64)) as usize;
         let mut i: usize = 0usize;
         while (i < self.cap) {
@@ -270,7 +270,7 @@ export fn (self: &Map[K, V]) get(key: K) (V | MapNotFound) = {
         mem::drop[K](key);
         return MapNotFound;
     };
-    let h: u64 = hash_val[K](key);
+    let h: u64 = hashval[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
@@ -300,7 +300,7 @@ export fn (self: &Map[K, V]) contains(key: K) bool = {
         mem::drop[K](key);
         return false;
     };
-    let h: u64 = hash_val[K](key);
+    let h: u64 = hashval[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
@@ -331,7 +331,7 @@ export fn (self: &mut Map[K, V]) remove(key: K) bool = {
         mem::drop[K](key);
         return false;
     };
-    let h: u64 = hash_val[K](key);
+    let h: u64 = hashval[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {
@@ -365,7 +365,7 @@ export fn (self: &mut Map[K, V]) take(key: K) (V | MapNotFound) = {
         mem::drop[K](key);
         return MapNotFound;
     };
-    let h: u64 = hash_val[K](key);
+    let h: u64 = hashval[K](key);
     let mut idx: usize = (h % (self.cap as u64)) as usize;
     let mut i: usize = 0usize;
     while (i < self.cap) {

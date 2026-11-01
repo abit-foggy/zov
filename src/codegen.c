@@ -3053,7 +3053,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
             if (cg->freestanding)
                 buf_puts(&out,
                          "        zov_panic(\"E1008\", "
-                         "\"invalid String::from_owned\", \"?\", 0, 0);\n"
+                         "\"invalid String::fromowned\", \"?\", 0, 0);\n"
                          "        for (;;) { }\n");
             else
                 buf_puts(&out,

@@ -984,7 +984,7 @@ static void bx_call(Borrow *b, Expr *e)
         int prev = b->read_only;
         if (e->builtin_print)
             b->read_only = 1;
-        /* hash_val hashes an owned String key by reading its bytes; the
+        /* hashval hashes an owned String key by reading its bytes; the
          * Map helpers store the key afterwards, so this is a borrow */
         if (e->hash_ty && e->hash_ty->kind == TY_STRUCT
             && e->hash_ty->name && zstr_eq(e->hash_ty->name, "String"))

@@ -548,12 +548,12 @@ export fn completion_reply(id: i64) void = {
         complete_item(&mut sb, mods[i as usize], 9usize, &mut first);
     };
     // methods + intrinsics (kind 2)
-    let fns: [24]str = ["push", "pop", "len", "asslice", "sort",
+    let fns: [26]str = ["push", "pop", "len", "asslice", "sort",
                         "insert", "get", "getref", "findref", "free",
-                        "sizeof", "hash_val", "sleep", "sleepms", "min",
+                        "sizeof", "hashval", "hash_val", "sleep", "sleepms", "min",
                         "max", "clamp", "abs", "sqrt", "pow", "floor",
-                        "ceil", "round", "randint"];
-    for (let i in 0..24) {
+                        "ceil", "round", "randint", "fromowned"];
+    for (let i in 0..26) {
         complete_item(&mut sb, fns[i as usize], 2usize, &mut first);
     };
     put_str(&mut sb, "]}");

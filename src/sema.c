@@ -1884,23 +1884,24 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 e->type = type_struct("String");
                 return e->type;
             }
-            if (zstr_eq(callee->u.nident.name, "from_owned")) {
+            if (zstr_eq(callee->u.nident.name, "fromowned")
+                || zstr_eq(callee->u.nident.name, "from_owned")) {
                 if (e->u.call.args.len != 3)
                     fatal_at(E0602, e->span,
-                             "String::from_owned takes data, len, and cap");
+                             "String::fromowned takes data, len, and cap");
                 Type *dt = check_expr(se, e->u.call.args.items[0], NULL);
                 if (!is_unknown(dt)
                     && !(dt->kind == TY_PTR && dt->base
                          && dt->base->kind == TY_U8))
                     fatal_at(E0601, e->u.call.args.items[0]->span,
-                             "String::from_owned expects *u8 data, got %s",
+                             "String::fromowned expects *u8 data, got %s",
                              type_spelling(dt));
                 for (size_t ai = 1; ai < 3; ai++) {
                     Type *at = check_expr(se, e->u.call.args.items[ai],
                                           type_prim(TY_USIZE));
                     if (!is_unknown(at) && at->kind != TY_USIZE)
                         fatal_at(E0601, e->u.call.args.items[ai]->span,
-                                 "String::from_owned expects usize length "
+                                 "String::fromowned expects usize length "
                                  "and capacity, got %s", type_spelling(at));
                 }
                 e->builtin_str_ctor = 3;
@@ -2073,23 +2074,25 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (callee->kind == EX_GENERIC
             && callee->u.generic.base->kind == EX_IDENT
-            && zstr_eq(callee->u.generic.base->u.ident, "hash_val")
+            && (zstr_eq(callee->u.generic.base->u.ident, "hashval")
+                || zstr_eq(callee->u.generic.base->u.ident, "hash_val"))
+            && !scope_find(se->scope, "hashval")
             && !scope_find(se->scope, "hash_val")) {
             if (callee->u.generic.targs.len != 1)
                 fatal_at(E0806, callee->span,
-                         "hash_val[T] takes one type argument");
+                         "hashval[T] takes one type argument");
             Type *kt = resolve_type(se, callee->u.generic.targs.items[0]);
             if (e->u.call.args.len != 1)
-                fatal_at(E0806, e->span, "hash_val[T] hashes exactly one value");
+                fatal_at(E0806, e->span, "hashval[T] hashes exactly one value");
             Type *at = check_expr(se, e->u.call.args.items[0], kt);
             if (kt->kind != TY_STR && kt->kind != TY_ENUM
                 && !ty_is_int(kt->kind) && !is_string_type(kt))
                 fatal_at(E0806, callee->span,
-                         "hash_val supports str, String, integers, and "
+                         "hashval supports str, String, integers, and "
                          "enums, not %s", type_spelling(kt));
             if (!is_unknown(at) && !type_eq(at, kt))
                 fatal_at(E0806, e->u.call.args.items[0]->span,
-                         "hash_val[%s] argument must be %s, got %s",
+                         "hashval[%s] argument must be %s, got %s",
                          type_spelling(kt), type_spelling(kt),
                          type_spelling(at));
             e->hash_ty = kt;
@@ -2506,7 +2509,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (is_string_type(st))
             fatal_at(E0605, e->span,
                      "String values must be built with String::new, "
-                     "String::from, or String::from_owned");
+                     "String::from, or String::fromowned");
         Decl *d = find_struct_decl(se, st->name);
         if (!d)
             fatal_at(E0408, e->span, "unknown struct type '%s'", st->name);

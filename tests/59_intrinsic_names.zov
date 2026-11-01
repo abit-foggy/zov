@@ -1,0 +1,19 @@
+// Canonical smooshed intrinsic spellings, with legacy aliases still accepted.
+use std::io;
+use std::mem as mem;
+
+export fn main() i32 = {
+    let buf: *u8 = mem::alloc[u8](4usize);
+    buf[0usize] = 65u8;
+    buf[1usize] = 66u8;
+    buf[2usize] = 67u8;
+    let s = String::fromowned(buf, 3usize, 4usize);
+    io::println(s.view());
+    let a: u64 = hashval[str]("abc");
+    let b: u64 = hash_val[str]("abc");
+    if (a != b) { s.free(); return 1; };
+    if (a == 0u64) { s.free(); return 2; };
+    io::println("hash ok");
+    s.free();
+    return 0;
+};
