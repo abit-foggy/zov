@@ -141,6 +141,60 @@ static Decl *find_struct_decl(Sema *se, const char *name)
     return NULL;
 }
 
+/* A struct that contains itself by value has infinite size. Pointers,
+ * slices, and references break the cycle; arrays and unions do not. */
+static void check_type_cycle(Sema *se, Decl *d, const char **path, int npath)
+{
+    if (npath >= 64)
+        fatal_at(d->span, "type nesting is too deep");
+    path[npath] = d->u.type.name;
+    for (size_t i = 0; i < d->u.type.fields.len; i++) {
+        Field *f = &d->u.type.fields.items[i];
+        Type *t = f->ty;
+        while (t && t->kind == TY_ARRAY)
+            t = t->base;
+        if (t && t->kind == TY_UNION) {
+            for (size_t k = 0; k < t->members.len; k++) {
+                Type *m = t->members.items[k];
+                while (m && m->kind == TY_ARRAY)
+                    m = m->base;
+                if (m && m->kind == TY_STRUCT && m->name
+                    && !zstr_eq(m->name, "String")) {
+                    for (int p = 0; p <= npath; p++)
+                        if (path[p] == m->name || zstr_eq(path[p], m->name))
+                            fatal_at(f->span,
+                                     "recursive type '%s' has infinite size; "
+                                     "use a pointer or slice", m->name);
+                }
+            }
+            continue;
+        }
+        if (!t || t->kind != TY_STRUCT || !t->name
+            || zstr_eq(t->name, "String"))
+            continue;
+        for (int p = 0; p <= npath; p++)
+            if (path[p] == t->name || zstr_eq(path[p], t->name))
+                fatal_at(f->span,
+                         "recursive type '%s' has infinite size; "
+                         "use a pointer or slice", t->name);
+        Decl *next = find_struct_decl(se, t->name);
+        if (next)
+            check_type_cycle(se, next, path, npath + 1);
+    }
+}
+
+static void check_all_type_cycles(Sema *se)
+{
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind != DL_TYPE || d->u.type.alias_ty
+            || d->u.type.is_enum || d->u.type.tparams.len > 0)
+            continue;
+        const char *path[64];
+        check_type_cycle(se, d, path, 0);
+    }
+}
+
 static Type *unknown(void)
 {
     return type_prim(TY_UNKNOWN);
@@ -2904,6 +2958,7 @@ void sema_check(Program *prog, int test_mode)
     install_builtin_string(prog);
     for (size_t i = 0; i < prog->decls.len; i++)
         register_decl(se, prog->decls.items[i]);
+    check_all_type_cycles(se);
     /* freestanding kernels may use kmain or no entry at all */
     if (!se->has_main && !test_mode && !prog->freestanding)
         fatal("no 'fn main' found in program");

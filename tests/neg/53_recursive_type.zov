@@ -1,0 +1,6 @@
+export type A = struct { b: B };
+export type B = struct { a: A };
+
+export fn main() i32 = {
+    return 0;
+};
