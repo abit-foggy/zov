@@ -33,7 +33,8 @@ later element overwrite cannot double-free an already-moved value.
 Borrowing (`&arr[i]`) and overwriting (`arr[i] = value`) remain
 available, and `mem::drop(arr)` destroys the whole array exactly once.
 Use `Vec.replace`, `Vec.remove`, or `Vec.pop` when ownership must leave a
-container element.
+container element. Iterating owned elements by value (`for (x in arr)`) is
+also rejected (`E0518`); iterate indices and borrow each element.
 
 ## Assignment and reassignment
 

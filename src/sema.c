@@ -3057,6 +3057,10 @@ static void check_stmt(Sema *se, Stmt *s)
             elem = type_prim(TY_U8);
         if (!elem)
             fatal_at(E0605, s->span, "cannot iterate %s", type_spelling(it));
+        if (type_owns_resource(se, elem, 0))
+            fatal_at(E0518, s->span,
+                     "cannot iterate owned elements by value; iterate "
+                     "indices and borrow each element instead");
         s->u.foreach.ty = elem;
         push_scope(se);
         Sym iv;

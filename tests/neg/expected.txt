@@ -93,3 +93,4 @@
 90_map_findstr_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'
 91_private_module_type.zov|4|13|E0408|'Priv' is not a struct type
 92_index_move_struct_literal.zov|5|26|E0518|cannot move an owned element out of an indexed place
+93_foreach_owned_element.zov|3|5|E0518|cannot iterate owned elements by value

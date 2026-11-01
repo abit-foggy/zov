@@ -1,0 +1,7 @@
+export fn main() i32 = {
+    let arr: [1]String = [String::from("a")];
+    for (let s in arr) {
+        s.free();
+    };
+    return 0;
+};
