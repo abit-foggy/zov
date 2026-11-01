@@ -87,3 +87,6 @@
 84_map_findref_after_free.zov|9|5|E0502|cannot move 'm': it is still borrowed by 'r'
 85_hosted_private_c_alias.zov|5|13|E0306|C symbol 'u::read' is private to std::io and unavailable to importers; use an exported Zov wrapper
 86_private_module_fn.zov|4|13|E0403|module 'env' has no function 'dupz'
+87_index_move_string.zov|3|16|E0518|cannot move an owned element out of an indexed place
+88_index_drop_string.zov|5|18|E0518|cannot move an owned element out of an indexed place
+89_index_free_string.zov|3|8|E0518|cannot move an owned element out of an indexed place

@@ -1,0 +1,22 @@
+// Indexed array and slice elements can be borrowed and overwritten, but an
+// owned element cannot be moved or freed out of the container.
+use std::io;
+use std::mem as mem;
+
+export fn main() i32 = {
+    let mut arr: [2]String = [String::from("a"), String::from("b")];
+    {
+        let r: &String = &arr[0];
+        io::println(r.view());
+    };
+    arr[0] = String::from("c");
+    io::println(arr[0].view());
+    let all: []String = arr[0..2];
+    let mut i: usize = 0usize;
+    while (i < 2usize) {
+        io::println(all[i].view());
+        i += 1usize;
+    };
+    mem::drop(arr);
+    return 0;
+};

@@ -311,6 +311,8 @@ static const DiagCodeInfo g_codes[] = {
      "Declare the binding with 'let mut'."},
     {"E0517", "overwrite of conditionally moved value",
      "Move or free the value on every branch before assigning over it."},
+    {"E0518", "moving owned element out of indexed place",
+     "Borrow the element, or use a container API that transfers ownership."},
 
     {"E0601", "mismatched types",
      "Use an explicit 'as' cast when a conversion is intended."},

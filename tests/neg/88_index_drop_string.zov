@@ -1,0 +1,7 @@
+use std::mem as mem;
+
+export fn main() i32 = {
+    let arr: [2]String = [String::from("a"), String::from("b")];
+    mem::drop(arr[0]);
+    return 0;
+};

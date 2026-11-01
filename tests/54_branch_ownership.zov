@@ -1,6 +1,7 @@
 // convergent and diverging branch ownership, plus fixed-array element
 // overwrite destruction
 use std::io;
+use std::mem as mem;
 
 export fn main() i32 = {
     // both arms free the value: it is definitely uninitialized after the if
@@ -51,8 +52,7 @@ export fn main() i32 = {
     arr[0] = String::from("d");
     io::println(arr[0].view());
     io::println(arr[1].view());
-    arr[0].free();
-    arr[1].free();
+    mem::drop(arr);
 
     // zero-initialized arrays hold empty String handles, so the first
     // element assignment destroys a null buffer safely
@@ -60,8 +60,7 @@ export fn main() i32 = {
     zeroed[0] = String::from("x");
     zeroed[1] = String::from("y");
     io::println(zeroed[1].view());
-    zeroed[0].free();
-    zeroed[1].free();
+    mem::drop(zeroed);
     return 0;
 };
 

@@ -115,6 +115,7 @@ typedef struct {
 #define E0515 "E0515"
 #define E0516 "E0516"
 #define E0517 "E0517"
+#define E0518 "E0518"
 #define E0611 "E0611"
 #define E0612 "E0612"
 #define E0601 "E0601"

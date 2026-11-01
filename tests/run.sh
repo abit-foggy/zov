@@ -1448,6 +1448,7 @@ run_stdin 17_std_io tests/17_std_io.zov "first line" tests/17_std_io.expected
 run_stdout 52_owned_overwrite tests/52_owned_overwrite.zov tests/52_owned_overwrite.expected
 run_stdout 54_branch_ownership tests/54_branch_ownership.zov tests/54_branch_ownership.expected
 run_stdout 55_map_string_keys tests/55_map_string_keys.zov tests/55_map_string_keys.expected
+run_stdout 57_array_index_ownership tests/57_array_index_ownership.zov tests/57_array_index_ownership.expected
 run_stdin 51_shell_workload tests/51_shell_workload.zov "echo hello world\necho again\nexit" tests/51_shell_workload.expected
 run_stdin 53_zovsh_overwrite tests/53_zovsh_overwrite.zov 'echo hello world\nexport FOO=bar\necho $FOO\necho $NOPE\ncd /tmp\npwd\necho done\nexit' tests/53_zovsh_overwrite.expected
 run_exit  18_std_time tests/18_std_time.zov 0

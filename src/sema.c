@@ -384,6 +384,30 @@ static int type_owns_resource(Sema *se, Type *t, int depth)
     }
 }
 
+/* Indexed places on arrays and slices are shared storage: moving an owned
+ * element out would leave the container responsible for a value it no longer
+ * owns, which is a double-free waiting to happen.  Borrowing and overwriting
+ * stay available because they preserve exactly one owner. */
+static int indexed_owned_place(Sema *se, Expr *e)
+{
+    while (e && e->kind == EX_FIELD)
+        e = e->u.field.base;
+    if (!e || e->kind != EX_INDEX || !e->type
+        || !type_owns_resource(se, e->type, 0))
+        return 0;
+    Type *bt = e->u.index.base->type;
+    return bt && (bt->kind == TY_ARRAY || bt->kind == TY_SLICE);
+}
+
+static void reject_indexed_move(Sema *se, Expr *e)
+{
+    if (!indexed_owned_place(se, e))
+        return;
+    fatal_at(E0518, e->span,
+             "cannot move an owned element out of an indexed place; "
+             "borrow it with '&arr[i]' or transfer it with a container API");
+}
+
 static void install_builtin_string(Program *prog)
 {
     for (size_t i = 0; i < prog->decls.len; i++) {
@@ -1378,6 +1402,7 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
         Expr *arg = e->u.call.args.items[i];
         Type *pt = fn->params.items[i].ty;
         check_expr(se, arg, pt);
+        reject_indexed_move(se, arg);
         if (pt->kind == TY_UNION) {
             e->u.call.args.items[i] = maybe_coerce(arg, pt);
             continue;
@@ -1625,6 +1650,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             return NULL;
         }
         Type *rt = check_expr(se, e->u.assign.rhs, lt);
+        reject_indexed_move(se, e->u.assign.rhs);
         if (!e->comp_op && lt->kind == TY_UNION) {
             e->u.assign.rhs = maybe_coerce(e->u.assign.rhs, lt);
             rt = e->u.assign.rhs->type;
@@ -1818,6 +1844,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                          "mem::drop takes exactly one argument");
             Expr *arg = e->u.call.args.items[0];
             check_expr(se, arg, NULL);
+            reject_indexed_move(se, arg);
             if (!drop_place_kind(arg))
                 fatal_at(E0605, arg->span,
                          "mem::drop requires a place expression "
@@ -1943,6 +1970,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     fatal_at(E0602, e->span, "String.%s takes no arguments",
                              callee->u.field.name);
                 Expr *recv = callee->u.field.base;
+                if (zstr_eq(callee->u.field.name, "free"))
+                    reject_indexed_move(se, recv);
                 if (bt->kind == TY_REF || bt->kind == TY_MUTREF) {
                     /* String methods are value intrinsics: expose the
                      * pointee so codegen never passes a pointer where a
@@ -2866,6 +2895,7 @@ static void check_let(Sema *se, Stmt *s)
         return;
     }
     Type *it = check_expr(se, s->u.let.init, s->u.let.ty);
+    reject_indexed_move(se, s->u.let.init);
     if (s->u.let.ty && s->u.let.ty->kind == TY_UNION) {
         s->u.let.init = maybe_coerce(s->u.let.init, s->u.let.ty);
         it = s->u.let.init->type;
@@ -3033,6 +3063,7 @@ static void check_stmt(Sema *se, Stmt *s)
         Type *ret = se->fn_ret;
         if (s->u.ret) {
             Type *t = check_expr(se, s->u.ret, ret);
+            reject_indexed_move(se, s->u.ret);
             if (ret->kind == TY_VOID)
                 fatal_at(E0706, s->span, "void function cannot return a value");
             if (ret->kind == TY_UNION)

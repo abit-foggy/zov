@@ -1,0 +1,5 @@
+export fn main() i32 = {
+    let arr: [2]String = [String::from("a"), String::from("b")];
+    let x = arr[0];
+    return 0;
+};
