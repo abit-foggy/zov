@@ -27,6 +27,18 @@
 #include "codegen.h"
 #include "diag.h"
 
+/* An impossible code-generation state is a compiler bug, not a user
+ * mistake: report it as E0902 instead of a bare driver error. */
+static void ZOV_NORETURN ice(const char *fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    diag_fatal_global(E0902, "internal compiler error: %s", buf);
+}
+
 typedef struct Buf {
     char *data;
     size_t len;
@@ -249,7 +261,7 @@ static const char *c_type(CG *cg, Type *t)
             return t->c_name; /* imported C type: emit verbatim */
         return mangle_type(t->name);
     default:
-        fatal("cannot emit type %s", type_spelling(t));
+        ice("cannot emit type %s", type_spelling(t));
         return NULL;
     }
 }
@@ -559,7 +571,7 @@ static void emit_seg_param(CG *cg, Expr *e, int idx, Buf *sig, Buf *body)
                    idx, idx, idx, idx);
         return;
     }
-    fatal("internal: unprintable concat segment");
+    ice("unprintable concat segment");
 }
 
 static void emit_seg_args(CG *cg, ExprList *segs, Buf *b)
@@ -791,7 +803,7 @@ static void emit_value_cases(CG *cg, Expr *e, int id, const char *res,
             emitted_default = 1;
         } else if (a->kind == PAT_LIT && a->pat->kind == EX_STR) {
             /* strings cannot ride a switch: emit as int length case? no */
-            fatal("internal: str pattern in value switch");
+            ice("str pattern in value switch");
         } else if (a->kind == PAT_LIT) {
             buf_puts(b, "case ");
             if (a->pat->kind == EX_CHAR)
@@ -804,7 +816,7 @@ static void emit_value_cases(CG *cg, Expr *e, int id, const char *res,
         } else if (a->variant_c) {
             buf_printf(b, "case %s: {\n", a->variant_c);
         } else {
-            fatal("internal: unsupported match arm in value switch");
+            ice("unsupported match arm in value switch");
         }
         emit_arm_body(cg, a, res);
         buf_printf(b, "} break;\n");
@@ -1274,7 +1286,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         case TK_CARET: op = "^"; break;
         case TK_SHL: op = "<<"; break;
         case TK_SHR: op = ">>"; break;
-        default: fatal("unsupported binary operator"); break;
+        default: ice("unsupported binary operator"); break;
         }
         if ((e->u.binary.op == TK_SLASH || e->u.binary.op == TK_PERCENT)
             && e->type && ty_is_num(e->type->kind)
@@ -1369,7 +1381,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         else if (e->u.unary.op == TK_TILDE)
             buf_puts(b, "~");
         else
-            fatal("unsupported unary operator");
+            ice("unsupported unary operator");
         emit_expr(cg, e->u.unary.e, 0);
         buf_puts(b, ")");
         break;
@@ -1581,7 +1593,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_puts(b, "))");
             break;
         }
-        fatal("internal: unprintable slice base");
+        ice("unprintable slice base");
         break;
     }
     case EX_INDEX: {
@@ -1647,7 +1659,9 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         buf_puts(b, "))");
         break;
     case EX_GENERIC:
-        fatal("generic instantiation requires a call or struct literal");
+        diag_fatal_global(E0901,
+                          "generic instantiation requires a call or "
+                          "struct literal");
         break;
     case EX_DEREF:
         buf_puts(b, "(*");
@@ -2318,7 +2332,7 @@ static void emit_union_deps(CG *cg, Program *prog, size_t uidx,
                             unsigned char *sstate, unsigned char *ustate)
 {
     if (uidx >= cg->union_cap)
-        fatal("internal: union typedef registered after emission");
+        ice("union typedef registered after emission");
     if (ustate[uidx] != 0)
         return; /* done, or a by-value cycle C will reject later */
     ustate[uidx] = 1;
