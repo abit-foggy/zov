@@ -42,6 +42,7 @@ export fn new[K, V]() Map[K, V] = {
 };
 
 export fn (self: &mut Map[K, V]) grow() void = {
+    assert(self.cap <= ((~0usize) - 8usize) / 2usize);
     let new_cap: usize = self.cap * 2usize + 8usize;
     // calloc zeroes the state table: every slot starts empty
     let nk: *K = mem::alloc[K](new_cap);
@@ -73,8 +74,10 @@ export fn (self: &mut Map[K, V]) grow() void = {
 };
 
 export fn (self: &mut Map[K, V]) insert(key: K, val: V) void = {
-    // resize at a 70% load factor before probing
-    if ((self.length + 1usize) * 10usize > self.cap * 7usize) {
+    // resize near a 70% load factor before probing; the division form
+    // cannot overflow the way cap * 7 could
+    let load: usize = self.cap - (self.cap / 10usize) * 3usize;
+    if (self.length + 1usize > load) {
         self.grow();
     };
     let h: u64 = hash_val[K](key);
@@ -209,6 +212,26 @@ export fn (self: &mut Map[K, V]) take(key: K) (V | MapNotFound) = {
 
 export fn (self: &Map[K, V]) len() usize = {
     return self.length;
+};
+
+// Destroys every live entry and reuses the tables.  The key and value
+// tables are zeroed so stale owned handles are never revisited.
+export fn (self: &mut Map[K, V]) clear() void = {
+    if (self.states != null && self.keys != null && self.vals != null) {
+        let keys: *K = self.keys!;
+        let vals: *V = self.vals!;
+        let states: *u8 = self.states!;
+        let mut i: usize = 0usize;
+        while (i < self.cap) {
+            if (states[i] == 1u8) {
+                mem::drop[K](keys[i]);
+                mem::drop[V](vals[i]);
+            };
+            states[i] = 0u8;
+            i += 1usize;
+        };
+    };
+    self.length = 0usize;
 };
 
 // Destroys the owned keys and values of every occupied entry, then the

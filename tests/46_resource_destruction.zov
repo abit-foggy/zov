@@ -85,6 +85,20 @@ export fn main() i32 = {
     assert(m2.len() == 0usize);
     m2.free();
 
+    let mut m3 = map::new[str, String]();
+    m3.insert("x", String::from("1"));
+    m3.insert("y", String::from("2"));
+    m3.clear();
+    assert(m3.len() == 0usize);
+    m3.insert("z", String::from("3"));
+    let found3 = m3.get("z");
+    let got3: String = match (found3) {
+        case let v: String => v,
+        case MapNotFound => return 3,
+    };
+    assert(got3.view() == "3");
+    m3.free();
+
     let n: i32 = 5;
     mem::drop(n); // trivially destructible values are a no-op
     io::println("resource destruction ok");
