@@ -1535,6 +1535,19 @@ static int holder_in_base(BVar *base, size_t nvars, const char *holder)
     return 0;
 }
 
+/* Leaving a nested scope/loop drops loans held by local bindings but keeps
+ * loans an outer binding acquired while the nested region ran. */
+static void keep_outer_loans(Borrow *b, BVar *base, size_t nvars)
+{
+    size_t w = 0;
+    for (size_t i = 0; i < b->loans.len; i++) {
+        Loan *l = &b->loans.items[i];
+        if (l->active && holder_in_base(base, nvars, l->holder))
+            b->loans.items[w++] = *l;
+    }
+    b->loans.len = w;
+}
+
 /* Loans made inside a branch survive the join when their holder is still
  * in scope; branch-local holders and dead/rebound loans are dropped. */
 static void merge_branch_loans(Borrow *b, BVar *base, size_t nvars,
@@ -1658,13 +1671,12 @@ static int b_foreach(Borrow *b, Stmt *s)
         da_push(&b->loans, l);
     }
     size_t nvars = b->vars.len;
-    size_t nloans = b->loans.len;
     BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
     for (size_t i = 0; i < nvars; i++)
         base[i] = b->vars.items[i];
     var_add(b, s->u.foreach.name, s->u.foreach.ty, 0);
     b_block(b, s->u.foreach.body);
-    b->loans.len = nloans;
+    keep_outer_loans(b, base, nvars);
     for (size_t i = 0; i < nvars && i < b->vars.len; i++)
         if (!base[i].moved && b->vars.items[i].moved)
             bfatal(s->span,
@@ -1687,13 +1699,12 @@ static int b_range(Borrow *b, Stmt *s)
     bx_expr(b, s->u.forr.start);
     bx_expr(b, s->u.forr.end);
     size_t nvars = b->vars.len;
-    size_t nloans = b->loans.len;
     BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
     for (size_t i = 0; i < nvars; i++)
         base[i] = b->vars.items[i];
     var_add(b, s->u.forr.name, s->u.forr.ty, 0);
     b_block(b, s->u.forr.body);
-    b->loans.len = nloans;
+    keep_outer_loans(b, base, nvars);
     for (size_t i = 0; i < nvars && i < b->vars.len; i++)
         if (!base[i].moved && b->vars.items[i].moved)
             bfatal(s->span,
@@ -1797,12 +1808,11 @@ static int b_stmt(Borrow *b, Stmt *s)
     case ST_WHILE: {
         bx_expr(b, s->u.whilee.cond);
         size_t nvars = b->vars.len;
-        size_t nloans = b->loans.len;
         BVar *base = nvars ? malloc(nvars * sizeof(BVar)) : NULL;
         for (size_t i = 0; i < nvars; i++)
             base[i] = b->vars.items[i];
         b_block(b, s->u.whilee.body);
-        b->loans.len = nloans;
+        keep_outer_loans(b, base, nvars);
         /* moving inside a loop without reinitialization poisons the
          * next iteration */
         for (size_t i = 0; i < nvars && i < b->vars.len; i++)
@@ -1833,10 +1843,9 @@ static int b_stmt(Borrow *b, Stmt *s)
         return 0;
     case ST_BLOCK: {
         size_t nvars = b->vars.len;
-        size_t nloans = b->loans.len;
         int diverged = b_block(b, s->u.block);
+        keep_outer_loans(b, b->vars.items, nvars);
         b->vars.len = nvars;
-        b->loans.len = nloans;
         return diverged;
     }
     }
