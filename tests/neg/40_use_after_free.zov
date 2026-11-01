@@ -1,0 +1,10 @@
+// MUST FAIL: s.view() after s.free() reads released storage
+use std::io;
+
+export fn main() i32 = {
+    let s = String::from("x");
+    s.free();
+    let v: str = s.view();
+    io::println("v={v}");
+    return 0;
+};

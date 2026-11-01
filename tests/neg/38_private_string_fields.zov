@@ -1,0 +1,7 @@
+// MUST FAIL: String.data/cap are implementation details
+export fn main() i32 = {
+    let s = String::from("x");
+    let p: *u8 = s.data;
+    s.free();
+    return 0;
+};

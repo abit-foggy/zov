@@ -166,6 +166,26 @@ export fn (self: Map[K, V]) free() void = {
     if (self.states != null) { mem::free_ptr[u8](self.states!); };
 };
 
+// Explicit destruction for Map[str, String]: every stored String value is
+// released before the tables.  Keys are borrowed str views and are not
+// owned by the map, so the source string must outlive the map usage.
+export fn free_strings(m: Map[str, String]) void = {
+    if (m.vals != null) {
+        let vals: *String = m.vals!;
+        let states: *u8 = m.states!;
+        let mut i: usize = 0usize;
+        while (i < m.cap) {
+            if (states[i] == 1u8) {
+                vals[i].free();
+            };
+            i += 1usize;
+        };
+        mem::free_ptr[String](vals);
+    };
+    if (m.keys != null) { mem::free_ptr[str](m.keys!); };
+    if (m.states != null) { mem::free_ptr[u8](m.states!); };
+};
+
 test "map basics" {
     let mut m = new[str, i32]();
     m.insert("alpha", 1);

@@ -45,7 +45,7 @@ export fn read_str(path: str) (String | FsError) = {
     let cap: usize = (size as usize) + 1usize;
     let buf: *u8 = mem::alloc[u8](cap);
     let n = c::fread(buf as *void, 1usize, size as usize, fp);
-    return String{ data = buf, len = n, cap = cap };
+    return String::from_owned(buf, n, cap);
 };
 
 export fn write_str(path: str, content: str) (void | FsError) = {

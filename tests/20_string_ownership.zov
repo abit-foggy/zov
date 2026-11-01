@@ -14,13 +14,14 @@ export fn main() i32 = {
     let long: str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 
     let big = long + long + long + long;
-    assert(big.len == 1200usize);
+    assert(big.len() == 1200usize);
+    let biglen = big.len();
 
     let nested = ("a" + 1) + ("b" + 2);
     assert(nested.view() == "a1b2");
 
     let n = 7;
-    let interp = "n={n} len={big.len}";
+    let interp = "n={n} len={biglen}";
     assert(interp.view() == "n=7 len=1200");
 
     let empty = "";
@@ -30,7 +31,7 @@ export fn main() i32 = {
     assert(made_view == "id-42");
 
     let nul = String::from("A\0B");
-    assert(nul.len == 3usize);
+    assert(nul.len() == 3usize);
     let nulv: str = nul.view();
     assert(nulv.len == 3usize);
     assert(nulv.ptr[0usize] == 65u8);
@@ -51,10 +52,10 @@ export fn main() i32 = {
         case let s: String => s,
         case FsError => return 11,
     };
-    assert(loaded.len == content.len);
+    assert(loaded.len() == content.len());
     assert(loaded.view() == content.view());
 
-    io::println("strings ok {big.len} {nul.len} empty={empty.len}");
+    io::println("strings ok {biglen} {nul.len()} empty={empty.len}");
     loaded.free();
     content.free();
     nul.free();

@@ -37,3 +37,7 @@
 34_move_resource_field.zov|7|20|-|cannot move field 'inner'
 35_return_local_view.zov|4|12|-|cannot return borrowed data from local 's'
 36_container_view_outlives_string.zov|7|5|-|cannot free 's': it is still borrowed by 'parts'
+37_invalid_string_literal.zov|3|13|-|String values must be built
+38_private_string_fields.zov|4|18|-|String fields are private
+39_double_string_free.zov|5|5|-|value was already freed
+40_use_after_free.zov|7|18|-|use of freed value 's'

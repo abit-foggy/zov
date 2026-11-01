@@ -7,7 +7,7 @@ export fn main() i32 = {
         case Eof => return 2,
         case IoError => return 3,
     };
-    io::println("len={line.len}");
+    io::println("len={line.len()}");
     line.free();
     return 0;
 };

@@ -83,3 +83,18 @@ export fn (self: Vec[T]) free() void = {
     let d: *T = self.data!;
     mem::free_ptr[T](d);
 };
+
+// Explicit destruction for Vec[String]: free each owned element, then the
+// backing array.  Zov has no implicit destructors, so callers must use this
+// (or free elements themselves) instead of plain free() to avoid leaks.
+export fn free_strings(v: Vec[String]) void = {
+    if (v.data != null) {
+        let d: *String = v.data!;
+        let mut i: usize = 0usize;
+        while (i < v.length) {
+            d[i].free();
+            i += 1usize;
+        };
+        mem::free_ptr[String](d);
+    };
+};

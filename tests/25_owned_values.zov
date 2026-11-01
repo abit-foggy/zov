@@ -1,0 +1,37 @@
+// owned-value contract: explicit destruction for String and containers
+use std::vec as vec;
+use std::map as map;
+use std::mem as mem;
+use std::io;
+
+export type Holder = struct { name: String, id: i32 };
+
+export fn main() i32 = {
+    let buf: *u8 = mem::alloc[u8](4usize);
+    buf[0usize] = 65u8;
+    buf[1usize] = 66u8;
+    buf[2usize] = 67u8;
+    let made = String::from_owned(buf, 3usize, 4usize);
+    io::println("made={made} len={made.len()}");
+
+    let mut v = vec::new[String]();
+    v.push(String::from("a"));
+    v.push(String::from("bb"));
+    let n = v.len();
+    vec::free_strings(v);
+
+    let mut m = map::new[str, String]();
+    m.insert("one", String::from("first"));
+    m.insert("two", String::from("second"));
+    let c = m.len();
+    map::free_strings(m);
+
+    let mut h = Holder{ name = String::from("held"), id = 7 };
+    io::println("name={h.name}");
+    h.name.free();
+    assert(h.id == 7);
+
+    made.free();
+    io::println("v={n} m={c} id={h.id}");
+    return 0;
+};

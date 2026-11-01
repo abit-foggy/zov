@@ -1004,6 +1004,17 @@ static void emit_call(CG *cg, Expr *e)
     Expr *callee = e->u.call.callee;
     if (e->builtin_str_ctor) {
         cg->needs_string_owned = 1;
+        if (e->builtin_str_ctor == 3) {
+            buf_puts(&*cg->cur, "((zov_type_String){ .zv_data = "
+                                "(uint8_t *)(");
+            emit_expr(cg, e->u.call.args.items[0], 0);
+            buf_puts(&*cg->cur, "), .zv_len = (uintptr_t)(");
+            emit_expr(cg, e->u.call.args.items[1], 0);
+            buf_puts(&*cg->cur, "), .zv_cap = (uintptr_t)(");
+            emit_expr(cg, e->u.call.args.items[2], 0);
+            buf_puts(&*cg->cur, ") })");
+            return;
+        }
         cg->needs_string_init = 1;
         if (e->builtin_str_ctor == 2) {
             cg->needs_string_new = 1;
@@ -1026,6 +1037,11 @@ static void emit_call(CG *cg, Expr *e)
             buf_puts(&*cg->cur, "zov_string_free(&(");
             emit_expr(cg, recv, 0);
             buf_puts(&*cg->cur, "))");
+        } else if (e->builtin_str_method == 3) {
+            cg->needs_string_view = 1;
+            buf_puts(&*cg->cur, "((size_t)zov_string_view(");
+            emit_expr(cg, recv, 0);
+            buf_puts(&*cg->cur, ").len)");
         } else {
             cg->needs_string_view = 1;
             buf_puts(&*cg->cur, "zov_string_view(");
@@ -2106,6 +2122,64 @@ static void emit_test_main(CG *cg, Program *prog)
                "_zv_passed);\nreturn 0;\n}\n\n");
 }
 
+/* Does a by-value field mention this struct?  Pointers only need the
+ * forward typedef, so they do not impose definition ordering. */
+static int type_mentions_struct(Type *t, const char *name)
+{
+    if (!t)
+        return 0;
+    switch (t->kind) {
+    case TY_STRUCT:
+        return t->name == name;
+    case TY_ARRAY:
+        return type_mentions_struct(t->base, name);
+    default:
+        return 0;
+    }
+}
+
+static int decl_is_plain_struct(Decl *d)
+{
+    return d->kind == DL_TYPE && d->u.type.tparams.len == 0
+           && !d->u.type.alias_ty && !d->u.type.is_enum;
+}
+
+static void emit_struct_definition(CG *cg, Decl *d)
+{
+    cg->cur = &cg->head;
+    buf_printf(&*cg->cur, "struct %s {\n", mangle_type(d->u.type.name));
+    for (size_t j = 0; j < d->u.type.fields.len; j++) {
+        Field *f = &d->u.type.fields.items[j];
+        buf_puts(&*cg->cur, "    ");
+        emit_var(&*cg->cur, cg, f->ty, mangle_local(f->name));
+        buf_puts(&*cg->cur, ";\n");
+    }
+    buf_printf(&*cg->cur, "};\n");
+}
+
+/* Emit struct definitions after the structs their by-value fields require. */
+static void emit_type_deps(CG *cg, Program *prog, size_t idx,
+                           unsigned char *state)
+{
+    if (state[idx] != 0)
+        return; /* done, or a by-value cycle C will reject later */
+    state[idx] = 1;
+    Decl *d = prog->decls.items[idx];
+    for (size_t j = 0; j < prog->decls.len; j++) {
+        Decl *dep = prog->decls.items[j];
+        if (!decl_is_plain_struct(dep) || j == idx)
+            continue;
+        for (size_t k = 0; k < d->u.type.fields.len; k++)
+            if (type_mentions_struct(d->u.type.fields.items[k].ty,
+                                     dep->u.type.name)) {
+                emit_type_deps(cg, prog, j, state);
+                break;
+            }
+    }
+    state[idx] = 2;
+    emit_struct_definition(cg, d);
+}
+
 char *codegen_generate(Program *prog)
 {
     return codegen_generate_mode(prog, 0);
@@ -2163,18 +2237,24 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                        mangle_type(d->u.type.name));
             continue;
         }
-        if (d->u.type.alias_ty)
-            continue; /* aliases emit no C definition */
-        cg->cur = &cg->head;
-        buf_printf(&*cg->cur, "typedef struct {\n");
-        for (size_t j = 0; j < d->u.type.fields.len; j++) {
-            Field *f = &d->u.type.fields.items[j];
-            buf_puts(&*cg->cur, "    ");
-            emit_var(&*cg->cur, cg, f->ty, mangle_local(f->name));
-            buf_puts(&*cg->cur, ";\n");
-        }
-        buf_printf(&*cg->cur, "} %s;\n", mangle_type(d->u.type.name));
+        /* structs are emitted below in dependency order */
     }
+    for (size_t i = 0; i < prog->decls.len; i++) {
+        Decl *d = prog->decls.items[i];
+        if (!decl_is_plain_struct(d))
+            continue;
+        cg->cur = &cg->head;
+        buf_printf(&*cg->cur, "typedef struct %s %s;\n",
+                   mangle_type(d->u.type.name),
+                   mangle_type(d->u.type.name));
+    }
+    unsigned char *type_state = calloc(prog->decls.len, 1);
+    if (!type_state)
+        fatal("out of memory");
+    for (size_t i = 0; i < prog->decls.len; i++)
+        if (decl_is_plain_struct(prog->decls.items[i]))
+            emit_type_deps(cg, prog, i, type_state);
+    free(type_state);
 
     for (size_t i = 0; i < prog->decls.len; i++) {
         Decl *d = prog->decls.items[i];

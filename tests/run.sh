@@ -886,6 +886,7 @@ run_stdout 20_string_ownership tests/20_string_ownership.zov tests/20_string_own
 run_stdout 22_strict_c99 tests/22_strict_c99_constructs.zov tests/22_strict_c99_constructs.expected
 run_stdout 23_eval_order tests/23_eval_order.zov tests/23_eval_order.expected
 run_stdout 24_borrow_scopes tests/24_borrow_scopes.zov tests/24_borrow_scopes.expected
+run_stdout 25_owned_values tests/25_owned_values.zov tests/25_owned_values.expected
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 

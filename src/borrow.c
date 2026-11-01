@@ -32,8 +32,10 @@ typedef struct BVar {
     Type *ty;
     int mut;
     int moved;
+    int freed;      /* String.free() already released this owner */
     int is_param;
     int defer_used;
+    int defer_free; /* a deferred cleanup calls free() on this binding */
 } BVar;
 
 typedef struct Loan {
@@ -526,6 +528,8 @@ static void check_borrow(Borrow *b, Expr *e, int borrow_mut)
         return;
     if (bv->moved)
         bfatal(e->span, "cannot borrow '%s': value was moved", root);
+    if (bv->freed)
+        bfatal(e->span, "cannot borrow '%s': value was freed", root);
     Loan *lk = root_locked(b, root);
     if (borrow_mut) {
         if (!bv->mut)
@@ -554,6 +558,8 @@ static void check_root_write(Borrow *b, Expr *e, const char *root)
         return;
     if (bv->moved)
         bfatal(e->span, "use of moved value '%s'", root);
+    if (bv->freed)
+        bfatal(e->span, "use of freed value '%s'", root);
     if (!bv->mut)
         bfatal(e->span, "cannot mutate immutable binding '%s'", root);
     if (root_locked(b, root))
@@ -571,6 +577,8 @@ static void check_root_read(Borrow *b, Expr *e, const char *root)
         return;
     if (bv->moved)
         bfatal(e->span, "use of moved value '%s'", root);
+    if (bv->freed)
+        bfatal(e->span, "use of freed value '%s'", root);
     Loan *lk = root_locked(b, root);
     if (lk)
         bfatal(e->span, "cannot read '%s' while mutably borrowed by '%s'",
@@ -597,6 +605,7 @@ static void bx_assign(Borrow *b, Expr *e)
                    "cannot assign to '%s': shared borrow is active",
                    lhs->u.ident);
         bv->moved = 0; /* fresh value: MOVED -> OWNED reinitialization */
+        bv->freed = 0;
         if (is_borrowed_view(bv->ty)) {
             Expr *rhs = peel_try_unwrap(e->u.assign.rhs);
             if (rhs && (rhs->kind == EX_CALL || rhs->kind == EX_SLICE)) {
@@ -672,11 +681,21 @@ static void check_free_receiver(Borrow *b, Expr *recv)
         return;
     if (bv->moved)
         bfatal(recv->span, "use of moved value '%s'", root);
+    if (bv->freed)
+        bfatal(recv->span, "value was already freed: '%s'", root);
+    if (bv->defer_free)
+        bfatal(recv->span,
+               "cannot free '%s': a deferred cleanup already frees it",
+               root);
     Loan *l = root_loan(b, root);
     if (l)
         bfatal(recv->span,
                "cannot free '%s': it is still borrowed by '%s'", root,
                l->holder);
+    /* track the common direct-owner case; field receivers keep the outer
+     * binding usable because only that one field was released */
+    if (recv->kind == EX_IDENT)
+        bv->freed = 1;
 }
 
 static Decl *find_fn_decl(Borrow *b, const char *name);
@@ -908,6 +927,8 @@ static void bx_expr(Borrow *b, Expr *e)
         BVar *bv = var_find(b, e->u.ident);
         if (!bv)
             return;
+        if (bv->freed)
+            bfatal(e->span, "use of freed value '%s'", bv->name);
         if (bv->ty->kind == TY_REF)
             return; /* shared references are Copy */
         if (bv->ty->kind == TY_MUTREF) {
@@ -1194,6 +1215,17 @@ static void scan_defer_idents(Borrow *b, Expr *e)
         scan_defer_idents(b, e->u.assign.rhs);
         return;
     case EX_CALL:
+        if (e->builtin_str_method == 1 && e->str_recv
+            && e->str_recv->kind == EX_IDENT) {
+            BVar *bv = var_find(b, e->str_recv->u.ident);
+            if (bv) {
+                if (bv->freed)
+                    bfatal(e->span,
+                           "cannot defer free of already-freed '%s'",
+                           bv->name);
+                bv->defer_free = 1;
+            }
+        }
         for (size_t i = 0; i < e->u.call.args.len; i++)
             scan_defer_idents(b, e->u.call.args.items[i]);
         return;
@@ -1248,8 +1280,12 @@ static void merge_branch_marks(Borrow *b, BVar *base, size_t nbase,
     for (size_t i = 0; i < nbase && i < b->vars.len; i++) {
         if (b->vars.items[i].moved && !diverged)
             base[i].moved = 1;
+        if (b->vars.items[i].freed && !diverged)
+            base[i].freed = 1;
         if (b->vars.items[i].defer_used)
             base[i].defer_used = 1;
+        if (b->vars.items[i].defer_free)
+            base[i].defer_free = 1;
     }
 }
 

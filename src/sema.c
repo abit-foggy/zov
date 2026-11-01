@@ -1346,6 +1346,29 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 e->type = type_struct("String");
                 return e->type;
             }
+            if (zstr_eq(callee->u.nident.name, "from_owned")) {
+                if (e->u.call.args.len != 3)
+                    fatal_at(e->span,
+                             "String::from_owned takes data, len, and cap");
+                Type *dt = check_expr(se, e->u.call.args.items[0], NULL);
+                if (!is_unknown(dt)
+                    && !(dt->kind == TY_PTR && dt->base
+                         && dt->base->kind == TY_U8))
+                    fatal_at(e->u.call.args.items[0]->span,
+                             "String::from_owned expects *u8 data, got %s",
+                             type_spelling(dt));
+                for (size_t ai = 1; ai < 3; ai++) {
+                    Type *at = check_expr(se, e->u.call.args.items[ai],
+                                          type_prim(TY_USIZE));
+                    if (!is_unknown(at) && at->kind != TY_USIZE)
+                        fatal_at(e->u.call.args.items[ai]->span,
+                                 "String::from_owned expects usize length "
+                                 "and capacity, got %s", type_spelling(at));
+                }
+                e->builtin_str_ctor = 3;
+                e->type = type_struct("String");
+                return e->type;
+            }
             if (zstr_eq(callee->u.nident.name, "from")) {
                 if (e->u.call.args.len != 1)
                     fatal_at(e->span, "String::from takes one argument");
@@ -1418,6 +1441,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 if (zstr_eq(callee->u.field.name, "view")) {
                     e->builtin_str_method = 2;
                     e->type = type_prim(TY_STR);
+                    return e->type;
+                }
+                if (zstr_eq(callee->u.field.name, "len")) {
+                    e->builtin_str_method = 3;
+                    e->type = type_prim(TY_USIZE);
                     return e->type;
                 }
 
@@ -1863,6 +1891,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->via_ref = 1;
             t = t->base;
         }
+        if (is_string_type(t))
+            fatal_at(e->span,
+                     "String fields are private; use view(), len(), or "
+                     "free()");
         if (t->kind != TY_STRUCT || !t->name)
             fatal_at(e->span, "%s has no fields", type_spelling(t));
         Decl *d = find_struct_decl(se, t->name);
@@ -1893,6 +1925,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (!st)
             fatal_at(e->span, "'%s' is not a struct type", e->u.stlit.name);
+        if (is_string_type(st))
+            fatal_at(e->span,
+                     "String values must be built with String::new, "
+                     "String::from, or String::from_owned");
         Decl *d = find_struct_decl(se, st->name);
         if (!d)
             fatal_at(e->span, "unknown struct type '%s'", st->name);

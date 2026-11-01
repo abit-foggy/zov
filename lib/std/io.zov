@@ -72,7 +72,7 @@ export fn readline() (String | Eof | IoError) = {
     if (len > 0usize && buf[len - 1usize] == 13u8) {
         len -= 1usize;
     };
-    return String{ data = buf, len = len, cap = cap };
+    return String::from_owned(buf, len, cap);
 };
 
 // Streaming fallback for non-specialized callers.  The compiler lowers

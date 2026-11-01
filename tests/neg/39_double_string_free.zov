@@ -1,0 +1,7 @@
+// MUST FAIL: free releases ownership exactly once
+export fn main() i32 = {
+    let s = String::from("x");
+    s.free();
+    s.free();
+    return 0;
+};

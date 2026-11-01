@@ -1,0 +1,6 @@
+// MUST FAIL: String values must come from a checked constructor
+export fn main() i32 = {
+    let s = String{ data = null, len = 1usize, cap = 1usize };
+    s.free();
+    return 0;
+};
