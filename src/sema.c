@@ -671,6 +671,22 @@ static Stmt *clone_stmt(Sema *se, Stmt *s, StrList *tps,
     case ST_BLOCK:
         n->u.block = clone_block(se, s->u.block, tps, args);
         break;
+    case ST_FOR_RANGE:
+        n->u.forr.name = s->u.forr.name;
+        n->u.forr.ty = s->u.forr.ty
+                           ? subst_type(se, s->u.forr.ty, tps, args) : NULL;
+        n->u.forr.start = clone_expr(se, s->u.forr.start, tps, args);
+        n->u.forr.end = clone_expr(se, s->u.forr.end, tps, args);
+        n->u.forr.body = clone_block(se, s->u.forr.body, tps, args);
+        break;
+    case ST_FOR_EACH:
+        n->u.foreach.name = s->u.foreach.name;
+        n->u.foreach.ty = s->u.foreach.ty
+                              ? subst_type(se, s->u.foreach.ty, tps, args)
+                              : NULL;
+        n->u.foreach.iter = clone_expr(se, s->u.foreach.iter, tps, args);
+        n->u.foreach.body = clone_block(se, s->u.foreach.body, tps, args);
+        break;
     default:
         break;
     }

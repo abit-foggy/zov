@@ -1886,6 +1886,7 @@ static int emit_stmt_body(CG *cg, Stmt *s)
         buf_printf(&*cg->cur, "; %s < %s; %s = %s + 1) {\n",
                    mangle_local(s->u.forr.name), ub,
                    mangle_local(s->u.forr.name), mangle_local(s->u.forr.name));
+        buf_printf(&*cg->cur, "(void)%s;\n", mangle_local(s->u.forr.name));
         da_push(&cg->loop_marks, cg->defers.len);
         da_push(&cg->loop_ids, id);
         emit_block(cg, s->u.forr.body);
@@ -1930,6 +1931,7 @@ static int emit_stmt_body(CG *cg, Stmt *s)
             buf_printf(cur, " = _zv_itp[_i%d];\n", id);
         else
             buf_printf(cur, " = _zv_it.data[_i%d];\n", id);
+        buf_printf(cur, "(void)%s;\n", mangle_local(s->u.foreach.name));
         da_push(&cg->loop_marks, cg->defers.len);
         da_push(&cg->loop_ids, id);
         emit_block(cg, s->u.foreach.body);

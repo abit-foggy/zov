@@ -890,6 +890,7 @@ run_stdout 25_owned_values tests/25_owned_values.zov tests/25_owned_values.expec
 run_stdout 26_nullable_wildcard tests/26_nullable_wildcard.zov tests/26_nullable_wildcard.expected
 run_stdout 27_return_defer_order tests/27_return_defer_order.zov tests/27_return_defer_order.expected
 run_stdout 28_return_paths tests/28_return_paths.zov tests/28_return_paths.expected
+run_stdout 29_generic_loops tests/29_generic_loops.zov tests/29_generic_loops.expected
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
