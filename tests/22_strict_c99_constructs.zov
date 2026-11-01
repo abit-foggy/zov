@@ -1,0 +1,47 @@
+// C99 lowering coverage: try, orelse, value match, slices, unwrap, div/mod
+use <stdlib.h> as c;
+
+use std::io;
+
+export type Missing = !void;
+
+export fn fallible(flag: bool) (i32 | Missing) = {
+    if (flag) { return Missing; };
+    return 10;
+};
+
+export fn forward(flag: bool) (i32 | Missing) = {
+    let n = fallible(flag)?;
+    return n + 5;
+};
+
+export fn main() i32 = {
+    let a: i32 = forward(false)!;
+    let b: i32 = fallible(true) orelse 3;
+    let third: i32 = fallible(false) orelse 99;
+
+    let s: str = "abcdef";
+    let mid: str = s[1..4];
+    let nums: [4]i32 = [4, 5, 6, 7];
+    let part = nums[1..3];
+    let all = nums[..];
+    let sub = all[1..2];
+
+    let raw: nullable *i32 = c::calloc(1usize, sizeof[i32]()) as nullable *i32;
+    let mut p: *i32 = raw!;
+    *p = 7;
+    let ps = p[0..1];
+    c::free(p as *void);
+
+    let d: i32 = 17 / 5;
+    let m: i32 = 17 % 5;
+    let v: i32 = match (fallible(false)) {
+        case let n: i32 => n,
+        case Missing => 0,
+    };
+
+    io::println("a={a} b={b} c={third} mid={mid}");
+    io::println("part={part.len} sub={sub.len} ps={ps.len} v={v}");
+    io::println("d={d} m={m}");
+    return 0;
+};
