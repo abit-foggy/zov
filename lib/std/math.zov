@@ -22,8 +22,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-use <math.h> as m;
-use <stdlib.h> as st;
+use <math.h> as cmath;
+use <stdlib.h> as cstdlib;
 
 export fn min(a: i32, b: i32) i32 = {
     if (a < b) { return a; };
@@ -47,7 +47,7 @@ export fn abs(x: i32) i32 = {
 };
 
 export fn randint(lo: i32, hi: i32) i32 = {
-    return lo + (st::rand() % (hi - lo + 1));
+    return lo + (cstdlib::rand() % (hi - lo + 1));
 };
 
 export fn popcnt(x: u32) i32 = {
@@ -72,19 +72,19 @@ export fn nextpow2(x: u32) u32 = {
 };
 
 export fn fmin(a: f64, b: f64) f64 = {
-    return m::fmin(a, b);
+    return cmath::fmin(a, b);
 };
 
 export fn fmax(a: f64, b: f64) f64 = {
-    return m::fmax(a, b);
+    return cmath::fmax(a, b);
 };
 
 export fn fclamp(val: f64, lo: f64, hi: f64) f64 = {
-    return m::fmin(m::fmax(val, lo), hi);
+    return cmath::fmin(cmath::fmax(val, lo), hi);
 };
 
 export fn fabs(x: f64) f64 = {
-    return m::fabs(x);
+    return cmath::fabs(x);
 };
 
 // Portable square root: scale into [1, 4] by powers of four, run a
@@ -112,29 +112,29 @@ export fn sqrt(x: f64) f64 = {
 };
 
 export fn pow(x: f64, y: f64) f64 = {
-    return m::pow(x, y);
+    return cmath::pow(x, y);
 };
 
 export fn floor(x: f64) f64 = {
-    return m::floor(x);
+    return cmath::floor(x);
 };
 
 export fn ceil(x: f64) f64 = {
-    return m::ceil(x);
+    return cmath::ceil(x);
 };
 
 export fn round(x: f64) f64 = {
-    return m::round(x);
+    return cmath::round(x);
 };
 
 export fn sin(x: f64) f64 = {
-    return m::sin(x);
+    return cmath::sin(x);
 };
 
 export fn cos(x: f64) f64 = {
-    return m::cos(x);
+    return cmath::cos(x);
 };
 
 export fn tan(x: f64) f64 = {
-    return m::tan(x);
+    return cmath::tan(x);
 };

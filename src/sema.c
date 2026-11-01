@@ -44,6 +44,7 @@ typedef struct Sym {
     Type *ret;
     CHeader *hdr;     /* imported C namespace members */
     int is_zov;       /* namespace of a loaded .zov module */
+    const char *modname; /* owning module for a private C alias */
     StrList zsyms;    /* exported symbol names of the module */
     StrList ztargets; /* registered spellings for ns call rewrites */
     const char *alias_to; /* module-scope alias: the registered name */
@@ -1435,6 +1436,11 @@ static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
     if (ns->kind != SYM_NS || !ns->hdr)
         fatal_at(E0405, callee->span, "'%s' is not a C namespace",
                  callee->u.nident.ns);
+    if (se->prog->freestanding && ns->modname)
+        fatal_at(E0306, callee->span,
+                 "C symbol '%s::%s' is private to std::%s and unavailable "
+                 "in freestanding builds; use an exported Zov wrapper",
+                 callee->u.nident.ns, callee->u.nident.name, ns->modname);
     CMember *fn = cimport_find(ns->hdr, callee->u.nident.name);
     if (!fn)
         fatal_at(E0402, callee->span, "unknown C symbol '%s::%s'",
@@ -3115,6 +3121,9 @@ static void register_decl(Sema *se, Decl *d)
         sym.kind = SYM_NS;
         sym.span = d->span;
         sym.hdr = h;
+        /* a C alias declared inside a module is private to that module;
+         * importers must not resolve their own names through it */
+        sym.modname = d->modname;
         scope_add(se, sym);
         break;
     }

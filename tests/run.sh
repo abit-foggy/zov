@@ -701,7 +701,7 @@ run_freestanding() {
     fi
 
     # pure std::math and std::str stay available without a hosted libc
-    printf 'use std::math as math;\nexport fn kmain() i32 = {\n    let r: f64 = math::sqrt(9.0f64);\n    return math::min(1, 2) + math::popcnt(7u32) + math::nextpow2(9u32) as i32 + r as i32;\n};\n' \
+    printf 'use std::math as m;\nexport fn kmain() i32 = {\n    let r: f64 = m::sqrt(9.0f64);\n    return m::min(1, 2) + m::popcnt(7u32) + m::nextpow2(9u32) as i32 + r as i32;\n};\n' \
         >"$TMP/fs_math_pure.zov"
     printf 'use std::str as strlib;\nexport fn kmain() i32 = {\n    let t: str = strlib::trim(" hi ");\n    if (!strlib::starts_with(t, "h")) { return 1; };\n    let r = strlib::find_byte(t, 105u8);\n    let n: usize = match (r) {\n        case let i: usize => i,\n        case strlib::NotFound => 9usize,\n    };\n    return n as i32;\n};\n' \
         >"$TMP/fs_str_pure.zov"
