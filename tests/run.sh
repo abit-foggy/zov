@@ -1158,11 +1158,13 @@ run_stdout 35_union_payload tests/35_union_payload.zov tests/35_union_payload.ex
 run_stdout 36_union_fields tests/36_union_fields.zov tests/36_union_fields.expected
 run_stdout 37_type_order tests/37_type_order.zov tests/37_type_order.expected
 run_panic 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero"
-run_panic 39_bounds_panic tests/39_bounds_panic.zov E1001 "index out of bounds"
+run_panic 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2"
+run_panic 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4"
 run_panic 40_assert_panic tests/40_assert_panic.zov E1006 "assert failed:"
 run_panic 41_unwrap_null_panic tests/41_unwrap_null_panic.zov E1004 "unwrap of null"
 run_panic_release 38_div_by_zero tests/38_div_by_zero.zov E1003 "integer division by zero"
-run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index out of bounds"
+run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is outside 0..2"
+run_panic_release 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4"
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
 
