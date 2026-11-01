@@ -692,6 +692,97 @@ run_freestanding() {
     fi
 }
 
+run_freestanding_link() {
+    require_cmd cc || return
+    require_file "$ROOT/runtime/example/hosted_runtime.c" || return
+
+    run_limited "$TMP/rt_smoke.c" "$TMP/rt_smoke.emit.err" \
+        "$ZOV" --freestanding --emit-c \
+        "$ROOT/tests/16_freestanding_smoke.zov"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding runtime link (emit exited $status)"
+        show_file "$TMP/rt_smoke.emit.err"
+        return
+    fi
+    run_limited "$TMP/rt_smoke.cc.out" "$TMP/rt_smoke.cc.err" \
+        cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+        -ffreestanding -c "$TMP/rt_smoke.c" -o "$TMP/rt_smoke.o"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding runtime link (object compile exited $status)"
+        show_file "$TMP/rt_smoke.cc.err"
+        return
+    fi
+    run_limited "$TMP/rt_smoke.link.out" "$TMP/rt_smoke.link.err" \
+        cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+        "$ROOT/runtime/example/hosted_runtime.c" "$TMP/rt_smoke.o" \
+        -o "$TMP/rt_smoke"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding runtime link (link exited $status)"
+        show_file "$TMP/rt_smoke.link.err"
+        return
+    fi
+    run_limited "$TMP/rt_smoke.out" "$TMP/rt_smoke.err" \
+        sh -c 'exec "$1" < /dev/null' sh "$TMP/rt_smoke"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding runtime link (program exited $status)"
+        show_file "$TMP/rt_smoke.err"
+        return
+    fi
+    pass "freestanding runtime link"
+
+    # Panic hook invocation: the platform hook receives the stable code
+    # and the Zov source site.
+    printf 'export fn kmain() void = {\n    assert(false);\n};\n' \
+        >"$TMP/rt_panic.zov"
+    run_limited "$TMP/rt_panic.c" "$TMP/rt_panic.emit.err" \
+        "$ZOV" --freestanding --emit-c "$TMP/rt_panic.zov"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding panic hook (emit exited $status)"
+        show_file "$TMP/rt_panic.emit.err"
+        return
+    fi
+    run_limited "$TMP/rt_panic.cc.out" "$TMP/rt_panic.cc.err" \
+        cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+        -ffreestanding -c "$TMP/rt_panic.c" -o "$TMP/rt_panic.o"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding panic hook (object compile exited $status)"
+        show_file "$TMP/rt_panic.cc.err"
+        return
+    fi
+    run_limited "$TMP/rt_panic.link.out" "$TMP/rt_panic.link.err" \
+        cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+        "$ROOT/runtime/example/hosted_runtime.c" "$TMP/rt_panic.o" \
+        -o "$TMP/rt_panic"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding panic hook (link exited $status)"
+        show_file "$TMP/rt_panic.link.err"
+        return
+    fi
+    run_limited "$TMP/rt_panic.out" "$TMP/rt_panic.err" \
+        sh -c 'exec "$1" < /dev/null' sh "$TMP/rt_panic"
+    status=$?
+    if [ "$status" -ne 101 ]; then
+        fail "freestanding panic hook (program exited $status, want 101)"
+        show_file "$TMP/rt_panic.err"
+        return
+    fi
+    if ! grep -qF 'error[E1006]: assert failed' "$TMP/rt_panic.err" \
+        || ! grep -qE '^  --> .*rt_panic\.zov:[0-9]+:[0-9]+$' \
+            "$TMP/rt_panic.err"; then
+        fail "freestanding panic hook (missing code or source location)"
+        show_file "$TMP/rt_panic.err"
+        return
+    fi
+    pass "freestanding panic hook"
+}
+
 run_strict_c99() {
     require_cmd cc || return
     strict_fail=0
@@ -1112,6 +1203,7 @@ run_diagnostic_registry
 run_lsp
 run_zovc_cc
 run_freestanding
+run_freestanding_link
 run_strict_c99
 run_freestanding_arch
 run_freestanding_package
