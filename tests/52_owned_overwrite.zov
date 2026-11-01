@@ -37,6 +37,13 @@ export fn main() i32 = {
     taken.free();
     m.label.free();
 
+    // freeing a field and reassigning it reinitializes without a second free
+    h.label = String::from("after-free");
+    h.label.free();
+    h.label = String::from("reborn");
+    io::println(h.label.view());
+    h.label.free();
+
     // union variant reassignment destroys only the active payload
     let mut u: Slot = String::from("first");
     u = String::from("second");
@@ -48,6 +55,20 @@ export fn main() i32 = {
     };
     if (n != 9) { return 1; };
     io::println("union ok");
+
+    // a moved union payload is uninitialized; assign a fresh variant
+    let mut u2: Slot = String::from("first-payload");
+    let first_payload: String = match (u2) {
+        case let s: String => s,
+        case _ => String::new(),
+    };
+    u2 = String::from("second-payload");
+    let second_payload: String = match (u2) {
+        case let s: String => s,
+        case _ => String::new(),
+    };
+    first_payload.free();
+    second_payload.free();
 
     // assignment after a move or drop reinitializes without a free
     let mut r = String::from("moved-away");
