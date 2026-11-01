@@ -208,6 +208,13 @@ static int ptr_widens(Type *from, Type *to)
         && type_eq(from->base, to->base);
 }
 
+/* The null literal may initialize any nullable pointer target. */
+static int null_fits(Expr *e, Type *to)
+{
+    return e && e->kind == EX_NULL && to && to->kind == TY_PTR
+        && to->nullable;
+}
+
 /* printable covers every intrinsic format a print segment can emit */
 static int is_printable(Type *t)
 {
@@ -1018,6 +1025,8 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
         }
         if (is_unknown(arg->type))
             continue;
+        if (null_fits(arg, pt))
+            continue;
         if (!type_eq(arg->type, pt))
             fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
                      (unsigned long)(i + 1), fn_display_name(fn),
@@ -1068,6 +1077,8 @@ static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
                  type_spelling(at));
     }
     if (pt->kind == TY_PTR && pt->nullable) {
+        if (null_fits(arg, pt))
+            return;
         if (at->kind == TY_PTR && type_eq(at->base, pt->base))
             return;
         if ((at->kind == TY_REF || at->kind == TY_MUTREF)
@@ -1257,7 +1268,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             return e->type;
         }
         if (!is_unknown(rt) && !is_unknown(lt) && !type_eq(lt, rt)
-            && !ptr_widens(rt, lt))
+            && !ptr_widens(rt, lt)
+            && !null_fits(e->u.assign.rhs, lt))
             fatal_at(e->span, "cannot assign %s to %s", type_spelling(rt),
                      type_spelling(lt));
         e->type = lt;
@@ -2399,7 +2411,8 @@ static void check_let(Sema *se, Stmt *s)
         declared = it;
     } else {
         if (!is_unknown(it) && !type_eq(declared, it)
-            && !ptr_widens(it, declared))
+            && !ptr_widens(it, declared)
+            && !null_fits(s->u.let.init, declared))
             fatal_at(s->span, "cannot bind %s to %s", type_spelling(it),
                      type_spelling(declared));
     }
@@ -2557,7 +2570,8 @@ static void check_stmt(Sema *se, Stmt *s)
             if (ret->kind == TY_UNION)
                 s->u.ret = maybe_coerce(s->u.ret, ret);
             t = s->u.ret->type;
-            if (!is_unknown(t) && !type_eq(ret, t))
+            if (!is_unknown(t) && !type_eq(ret, t)
+                && !null_fits(s->u.ret, ret))
                 fatal_at(s->span, "returning %s from a %s function",
                          type_spelling(t), type_spelling(ret));
         } else if (ret->kind != TY_VOID) {

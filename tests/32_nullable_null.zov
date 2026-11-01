@@ -1,0 +1,34 @@
+// the null literal fits every nullable pointer position
+use <stdio.h> as c;
+
+export type Holder = struct {
+    ptr: nullable *i32,
+};
+
+export fn make(flag: bool) nullable *i32 = {
+    if (flag) {
+        return null;
+    };
+    return null;
+};
+
+export fn is_null(p: nullable *i32) bool = {
+    return p == null;
+};
+
+export fn main() i32 = {
+    let a: nullable *i32 = null;
+    let mut b: nullable *i32 = null;
+    b = null;
+    let h = Holder{ ptr = null };
+    let d = make(true);
+    let e = is_null(null);
+    c::printf("a=%d b=%d h=%d d=%d e=%d\n", is_null(a), is_null(b),
+              is_null(h.ptr), is_null(d), e);
+    if (!is_null(a)) { return 1; };
+    if (!is_null(b)) { return 2; };
+    if (!is_null(h.ptr)) { return 3; };
+    if (!is_null(d)) { return 4; };
+    if (!e) { return 5; };
+    return 0;
+};
