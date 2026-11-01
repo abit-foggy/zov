@@ -1,0 +1,33 @@
+// return operands are evaluated before deferred cleanup runs
+use <stdio.h> as c;
+
+export fn value() i32 = {
+    defer c::puts("defer-value");
+    c::puts("eval-value");
+    return 7;
+};
+
+export fn call_operand() i32 = {
+    defer c::puts("defer-call");
+    return nested();
+};
+
+export fn nested() i32 = {
+    c::puts("eval-call");
+    return 11;
+};
+
+export fn bare() void = {
+    defer c::puts("defer-bare");
+    c::puts("eval-bare");
+    return;
+};
+
+export fn main() i32 = {
+    let a = value();
+    let b = call_operand();
+    bare();
+    if (a != 7) { return 1; };
+    if (b != 11) { return 2; };
+    return 0;
+};

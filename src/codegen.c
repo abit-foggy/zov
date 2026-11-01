@@ -1975,11 +1975,33 @@ static int emit_stmt_body(CG *cg, Stmt *s)
         return 0;
     }
     case ST_RETURN: {
+        Buf *b = &*cg->cur;
+        Expr *rv = s->u.ret;
+        Type *rt = rv ? rv->type : NULL;
+        /* Sema's synthetic void-union coercion has no expression type. */
+        if (!rt && rv && rv->kind == EX_COERCE)
+            rt = rv->u.coerce.target;
+        if (!rt)
+            rt = cg->fn_ret;
+        if (!rv || !rt || rt->kind == TY_VOID) {
+            if (rv) {
+                emit_expr(cg, rv, 0);
+                buf_puts(b, ";\n");
+            }
+            emit_defers_down_to(cg, 0);
+            buf_puts(b, "return;\n");
+            cg->terminated = 1;
+            return 1;
+        }
+        /* The value is computed before deferred cleanup runs; without a
+         * temporary, `return f()` would call f() after the defers. */
+        int id = cg->tmp_id++;
+        buf_printf(b, "{\n%s zov_ret_%d;\nzov_ret_%d = ",
+                   c_type(cg, rt), id, id);
+        emit_expr(cg, rv, 0);
+        buf_printf(b, ";\n");
         emit_defers_down_to(cg, 0);
-        buf_puts(&*cg->cur, "return ");
-        if (s->u.ret)
-            emit_expr(cg, s->u.ret, 0);
-        buf_puts(&*cg->cur, ";\n");
+        buf_printf(b, "return zov_ret_%d;\n}\n", id);
         cg->terminated = 1;
         return 1;
     }
