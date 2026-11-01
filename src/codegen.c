@@ -729,21 +729,43 @@ static void emit_nullable_cases(CG *cg, Expr *e, int id, const char *res)
     buf_printf(b, "%s *_m%d = (", c_type(cg, st->base), id);
     emit_expr(cg, e->u.match.scrutinee, 0);
     buf_printf(b, "); if (_m%d == NULL) {\n", id);
+    int done = 0;
     for (size_t i = 0; i < e->u.match.arms.len; i++) {
         MatchArm *a = &e->u.match.arms.items[i];
         if (a->kind == PAT_NULL) {
             emit_arm_body(cg, a, res);
+            done = 1;
             break;
         }
     }
+    if (!done) {
+        for (size_t i = 0; i < e->u.match.arms.len; i++) {
+            MatchArm *a = &e->u.match.arms.items[i];
+            if (a->kind == PAT_WILDCARD) {
+                emit_arm_body(cg, a, res);
+                break;
+            }
+        }
+    }
     buf_printf(b, "} else {\n");
+    done = 0;
     for (size_t i = 0; i < e->u.match.arms.len; i++) {
         MatchArm *a = &e->u.match.arms.items[i];
         if (a->kind == PAT_TYPE_BIND && a->name) {
             emit_var(b, cg, a->ty, mangle_local(a->name));
             buf_printf(b, " = _m%d;\n", id);
             emit_arm_body(cg, a, res);
+            done = 1;
             break;
+        }
+    }
+    if (!done) {
+        for (size_t i = 0; i < e->u.match.arms.len; i++) {
+            MatchArm *a = &e->u.match.arms.items[i];
+            if (a->kind == PAT_WILDCARD) {
+                emit_arm_body(cg, a, res);
+                break;
+            }
         }
     }
     buf_printf(b, "}\n");
