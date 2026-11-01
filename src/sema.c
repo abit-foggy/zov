@@ -778,10 +778,15 @@ static void collect_recv_tparams(Sema *se, Type *t, StrList *out)
             collect_recv_tparams(se, t->members.items[i], out);
         return;
     case TY_STRUCT:
-        /* Concrete builtin types in a receiver are not method type params:
-         * Map[String, V] binds only V. */
+        /* Concrete builtin and module-private types in a receiver are not
+         * method type params: Map[String, V] binds only V. */
         if (t->name && zstr_eq(t->name, "String"))
             return;
+        if (t->name)
+            for (size_t i = 0; i < se->modtypes.len; i++)
+                if (se->modtypes.items[i].modname == se->curmod
+                    && se->modtypes.items[i].name == t->name)
+                    return;
         if (t->name && !strstr(t->name, "::")
             && !scope_find(se->scope, t->name)) {
             for (size_t i = 0; i < out->len; i++)
@@ -2053,7 +2058,8 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->u.call.args.len = nargs.len;
             e->u.call.args.cap = nargs.cap;
             Expr *id = expr_new(EX_IDENT, callee->span);
-            id->u.ident = m->name;
+            id->u.ident = (m->decl && m->decl->regname)
+                              ? m->decl->regname : m->name;
             e->u.call.callee = id;
             e->type = check_call_user(se, e, m);
             if (zstr_eq(callee->u.field.name, "get") && m->decl

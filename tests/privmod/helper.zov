@@ -3,7 +3,9 @@ type Priv = struct { n: i32 };
 
 fn twice(x: i32) i32 = { return x * 2; };
 
+fn (self: &Priv) doubled() i32 = { return self.n; };
+
 export fn useit() i32 = {
     let p = Priv{ n = twice(7) };
-    return p.n;
+    return p.doubled();
 };
