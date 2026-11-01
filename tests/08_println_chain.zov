@@ -44,8 +44,9 @@ export fn main() i32 = {
     io::println("hello1 " + compute_fn(21) + " bool=" + true + " hex=" + 0xffu32);
     io::print("part1 ");
     io::println("part2" + 99 + false);
-    let msg: str = "count=" + 42;
+    let msg = "count=" + 42;
     io::println(msg);
+    msg.free();
     let h = Handle{ fd = 7 };
     io::println("fd=" + h.fd);
     let v = consume(h);

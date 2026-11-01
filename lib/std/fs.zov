@@ -28,7 +28,8 @@ use std::mem as mem;
 
 export type FsError = !i32;
 
-export fn read_str(path: str) (str | FsError) = {
+// Reads the whole file into an owned String.  The caller must free it.
+export fn read_str(path: str) (String | FsError) = {
     let raw: nullable *c::FILE = c::fopen(path, "rb");
     let fp: *c::FILE = match (raw) {
         case null => return 1,
@@ -41,9 +42,10 @@ export fn read_str(path: str) (str | FsError) = {
         return 2;
     };
     c::fseek(fp, 0, c::SEEK_SET);
-    let buf: *u8 = mem::alloc[u8](size as usize);
+    let cap: usize = (size as usize) + 1usize;
+    let buf: *u8 = mem::alloc[u8](cap);
     let n = c::fread(buf as *void, 1usize, size as usize, fp);
-    return zov_str_from_raw(buf, n);
+    return String{ data = buf, len = n, cap = cap };
 };
 
 export fn write_str(path: str, content: str) (void | FsError) = {

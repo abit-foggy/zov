@@ -134,7 +134,7 @@ static Decl *find_struct_decl(Sema *se, const char *name)
 {
     for (size_t i = 0; i < se->prog->decls.len; i++) {
         Decl *d = se->prog->decls.items[i];
-        if (d->kind == DL_TYPE && d->u.type.name == name
+        if (d->kind == DL_TYPE && zstr_eq(d->u.type.name, name)
             && !d->u.type.alias_ty && d->u.type.tparams.len == 0)
             return d;
     }
@@ -149,6 +149,49 @@ static Type *unknown(void)
 static int is_unknown(Type *t)
 {
     return t && t->kind == TY_UNKNOWN;
+}
+
+/* Owned string: a compiler-known resource struct.  The declaration is
+ * injected once per program so `String` is available without an import. */
+static int is_string_type(Type *t)
+{
+    return t && t->kind == TY_STRUCT && t->name
+        && zstr_eq(t->name, "String");
+}
+
+static int is_stringish(Type *t)
+{
+    return t && (t->kind == TY_STR || is_string_type(t));
+}
+
+static void install_builtin_string(Program *prog)
+{
+    for (size_t i = 0; i < prog->decls.len; i++) {
+        Decl *d = prog->decls.items[i];
+        if (d->kind == DL_TYPE && zstr_eq(d->u.type.name, "String"))
+            return;
+    }
+    Span sp;
+    memset(&sp, 0, sizeof(sp));
+    Decl *d = decl_new(DL_TYPE, sp);
+    d->u.type.name = str_intern_c("String");
+    d->u.type.is_resource = 1;
+    Field data;
+    memset(&data, 0, sizeof(data));
+    data.name = str_intern_c("data");
+    data.ty = type_ptr(type_prim(TY_U8), 1);
+    da_push(&d->u.type.fields, data);
+    Field len;
+    memset(&len, 0, sizeof(len));
+    len.name = str_intern_c("len");
+    len.ty = type_prim(TY_USIZE);
+    da_push(&d->u.type.fields, len);
+    Field cap;
+    memset(&cap, 0, sizeof(cap));
+    cap.name = str_intern_c("cap");
+    cap.ty = type_prim(TY_USIZE);
+    da_push(&d->u.type.fields, cap);
+    da_push(&prog->decls, d);
 }
 
 static int is_ptrish(Type *t)
@@ -177,7 +220,7 @@ static int is_printable(Type *t)
     case TY_PTR: case TY_ENUM:
         return 1;
     default:
-        return 0;
+        return is_string_type(t);
     }
 }
 
@@ -657,6 +700,7 @@ static Expr *clone_expr(Sema *se, Expr *e, StrList *tps,
     n->borrow_mut = e->borrow_mut;
     /* parser-set state the sema re-check will not re-derive */
     n->comp_op = e->comp_op;
+    n->method_call = e->method_call;
     switch (e->kind) {
     case EX_INT: n->u.ilit = e->u.ilit; break;
     case EX_FLOAT: n->u.flit = e->u.flit; break;
@@ -766,6 +810,7 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
     if (existing)
         return scope_find(se->scope, keyi);
     Decl *d = decl_new(DL_FN, sym->decl->span);
+    d->modname = sym->decl->modname;
     d->u.fn.name = keyi;
     d->u.fn.srcname = sym->decl->u.fn.srcname ? sym->decl->u.fn.srcname
                                               : sym->decl->u.fn.name;
@@ -922,6 +967,19 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
                      (unsigned long)(i + 1), fn_display_name(fn),
                      type_spelling(pt),
                      type_spelling(arg->type));
+    }
+    if (fn->decl && fn->decl->kind == DL_FN && fn->decl->modname
+        && zstr_eq(fn->decl->modname, "io") && !fn->decl->u.fn.recv) {
+        const char *src = fn->decl->u.fn.srcname
+                              ? fn->decl->u.fn.srcname
+                              : fn->decl->u.fn.name;
+        if (zstr_eq(src, "print") || zstr_eq(src, "println")) {
+            if (se->prog->freestanding)
+                fatal_at(e->span,
+                         "std::io is unavailable in freestanding builds; "
+                         "use a platform output hook");
+            e->builtin_print = zstr_eq(src, "print") ? 1 : 2;
+        }
     }
     return fn->ret;
 }
@@ -1201,14 +1259,28 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 return e->type;
             }
         }
-        if (op == TK_PLUS && (lt->kind == TY_STR
-                              || e->u.binary.rhs->type->kind == TY_STR)) {
-            /* str + T scripting chain: any printable T, result is str */
+        if (op == TK_PLUS && (is_stringish(lt)
+                              || is_stringish(e->u.binary.rhs->type))) {
+            /* str/String + T scripting chain: any printable T.  The
+             * result owns a fresh heap buffer and must be released. */
             if (!is_printable(lt) || !is_printable(e->u.binary.rhs->type))
                 fatal_at(e->span, "cannot concatenate %s with %s",
                          type_spelling(lt),
                          type_spelling(e->u.binary.rhs->type));
-            e->type = type_prim(TY_STR);
+            if (se->prog->freestanding)
+                fatal_at(e->span,
+                         "String concatenation needs an allocator; "
+                         "freestanding builds must provide one explicitly");
+            e->type = type_struct("String");
+            return e->type;
+        }
+        if (comparison && (is_stringish(lt)
+                           || is_stringish(e->u.binary.rhs->type))) {
+            if (!is_stringish(lt) || !is_stringish(e->u.binary.rhs->type))
+                fatal_at(e->span,
+                         "cannot compare %s with %s", type_spelling(lt),
+                         type_spelling(e->u.binary.rhs->type));
+            e->type = type_prim(TY_BOOL);
             return e->type;
         }
         require_same(e->u.binary.lhs, e->u.binary.rhs, "<binary>");
@@ -1265,6 +1337,35 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_CALL: {
         Expr *callee = e->u.call.callee;
+        if (callee->kind == EX_NS_IDENT
+            && zstr_eq(callee->u.nident.ns, "String")) {
+            if (zstr_eq(callee->u.nident.name, "new")) {
+                if (e->u.call.args.len != 0)
+                    fatal_at(e->span, "String::new takes no arguments");
+                e->builtin_str_ctor = 2;
+                e->type = type_struct("String");
+                return e->type;
+            }
+            if (zstr_eq(callee->u.nident.name, "from")) {
+                if (e->u.call.args.len != 1)
+                    fatal_at(e->span, "String::from takes one argument");
+                Type *at = check_expr(se, e->u.call.args.items[0],
+                                      type_prim(TY_STR));
+                if (!is_unknown(at) && !is_stringish(at))
+                    fatal_at(e->u.call.args.items[0]->span,
+                             "String::from expects str or String, got %s",
+                             type_spelling(at));
+                if (se->prog->freestanding)
+                    fatal_at(e->span,
+                             "String allocation is unavailable in "
+                             "freestanding mode; provide an allocator");
+                e->builtin_str_ctor = 1;
+                e->type = type_struct("String");
+                return e->type;
+            }
+            fatal_at(callee->span, "String has no associated function '%s'",
+                     callee->u.nident.name);
+        }
         if (callee->kind == EX_NS_IDENT) {
             const char *tgt = zov_ns_target(se, callee->u.nident.ns,
                                             callee->u.nident.name);
@@ -1303,6 +1404,26 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 st = st->base;
             if (!st || st->kind != TY_STRUCT || !st->name)
                 fatal_at(callee->span, "methods require a struct receiver");
+            if (is_string_type(st)) {
+                if (e->u.call.args.len != 0)
+                    fatal_at(e->span, "String.%s takes no arguments",
+                             callee->u.field.name);
+                Expr *recv = callee->u.field.base;
+                e->str_recv = recv;
+                if (zstr_eq(callee->u.field.name, "free")) {
+                    e->builtin_str_method = 1;
+                    e->type = type_prim(TY_VOID);
+                    return e->type;
+                }
+                if (zstr_eq(callee->u.field.name, "view")) {
+                    e->builtin_str_method = 2;
+                    e->type = type_prim(TY_STR);
+                    return e->type;
+                }
+
+                fatal_at(callee->span, "String has no method '%s'",
+                         callee->u.field.name);
+            }
             const char *sname = st->tmpl ? st->tmpl : st->name;
             Sym *m = find_method(se, sname, callee->u.field.name);
             if (!m)
@@ -1336,6 +1457,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 dr->u.deref = recv;
                 recv = dr;
             }
+            e->method_call = 1;
             ExprList nargs = {0};
             da_push(&nargs, recv);
             for (size_t i = 0; i < e->u.call.args.len; i++)
@@ -1633,7 +1755,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = type_slice(bt->base);
             return e->type;
         }
-        if (bt->kind == TY_STR) {
+        if (is_stringish(bt)) {
             e->type = type_prim(TY_STR);
             return e->type;
         }
@@ -1653,6 +1775,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                      "index must be an integer, got %s", type_spelling(it));
         if (is_unknown(bt))
             return unknown();
+        if (is_stringish(bt)) {
+            e->type = type_prim(TY_U8);
+            return e->type;
+        }
         if (bt->kind == TY_SLICE || bt->kind == TY_ARRAY) {
             e->type = bt->base;
             return e->type;
@@ -2240,7 +2366,7 @@ static void check_stmt(Sema *se, Stmt *s)
         Type *elem = NULL;
         if (it->kind == TY_SLICE || it->kind == TY_ARRAY)
             elem = it->base;
-        if (it->kind == TY_STR)
+        if (is_stringish(it))
             elem = type_prim(TY_U8);
         if (!elem)
             fatal_at(s->span, "cannot iterate %s", type_spelling(it));
@@ -2598,6 +2724,7 @@ void sema_check(Program *prog, int test_mode)
     Sema *se = zalloc(sizeof(Sema));
     se->prog = prog;
     push_scope(se); /* global scope */
+    install_builtin_string(prog);
     for (size_t i = 0; i < prog->decls.len; i++)
         register_decl(se, prog->decls.items[i]);
     /* freestanding kernels may use kmain or no entry at all */

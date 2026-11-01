@@ -331,7 +331,7 @@ int type_eq(const Type *a, const Type *b)
     case TY_ARRAY:
         return a->count == b->count && type_eq(a->base, b->base);
     case TY_STRUCT:
-        return a->name == b->name;
+        return a->name && b->name && zstr_eq(a->name, b->name);
     case TY_INST:
         if (a->name != b->name || a->members.len != b->members.len)
             return 0;

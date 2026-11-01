@@ -27,13 +27,19 @@ use std::mem as mem;
 
 export fn main() i32 = {
     io::println("io online");
+    // readline distinguishes EOF, empty input, and read errors; the String
+    // owns its buffer, so release it after the final use.
     let r = io::readline();
-    let line: str = match (r) {
-        case let s: str => s,
-        case IoError => "eof",
+    let line: String = match (r) {
+        case let s: String => s,
+        case Eof => String::new(),
+        case IoError => String::new(),
     };
     io::print("echo:");
-    io::println(line);
+    io::println(line.view());
+    if (line == "first line") {
+        io::println("input matched");
+    };
     let n = 5;
     io::println(n);
     io::println(3.5f64);
@@ -42,5 +48,6 @@ export fn main() i32 = {
     std::io::println("full path works");
     let scratch: *u8 = mem::alloc[u8](4usize);
     mem::free_ptr(scratch);
+    line.free();
     return 0;
 };

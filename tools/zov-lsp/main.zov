@@ -339,10 +339,10 @@ export fn uri_to_path(uri: str) str = {
 
 export fn run_check(path: str) str = {
     // PATH lookup: sh resolves zovc wherever it is installed
-    let cmd: str = "zovc --check '" + path + "' 2>&1";
-    let raw = c::popen(cmd, "r");
+    let cmd: String = "zovc --check '" + path + "' 2>&1";
+    let raw = c::popen(cmd.view(), "r");
     let fp: *c::FILE = match (raw) {
-        case null => return "",
+        case null => { cmd.free(); return ""; },
         case let p: *c::FILE => p,
     };
     let buf: [4096]u8;
@@ -359,6 +359,7 @@ export fn run_check(path: str) str = {
         };
     };
     c::pclose(fp);
+    cmd.free();
     let out: str = heap_copy(finish(&bytes));
     return out;
 };
@@ -571,35 +572,23 @@ export fn simple_result(id: i64, result: str) void = {
 // ---- main loop ----
 
 export fn main() i32 = {
-    let mut doc_text: str = "";
+    let mut doc_text: String = String::new();
     let mut docs = map::new[str, str]();
     defer docs.free();
-    docs.insert("print", "`io::print[T](msg: T)` — stdout writer for "
-        + "any printable value; segments concatenate with `+`");
-    docs.insert("println", "`io::println[T](msg: T)` — `io::print` "
-        + "with a trailing newline; `\{expr}` interpolation supported");
-    docs.insert("readline", "`io::readline()` — one line from stdin "
-        + "as `(str | IoError)`");
-    docs.insert("assert", "`assert(cond: bool)` — aborts with "
-        + "`file:line: condition` on failure");
+    docs.insert("print", "`io::print[T](msg: T)` — stdout writer for any printable value");
+    docs.insert("println", "`io::println[T](msg: T)` — `io::print` with a trailing newline; `\{expr}` interpolation supported");
+    docs.insert("readline", "`io::readline()` — one line from stdin as `(String | Eof | IoError)`");
+    docs.insert("assert", "`assert(cond: bool)` — aborts with `file:line: condition` on failure");
     docs.insert("sizeof", "`sizeof[T]()` — byte size of `T` as `usize`");
-    docs.insert("orelse", "`expr orelse fallback` — coalesces "
-        + "`nullable *T` / tagged unions; `orelse return x` diverges");
-    docs.insert("resource", "`resource struct` — move-only type; the "
-        + "borrow checker prevents use-after-move and double-frees");
-    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: "
-        + "push, pop, get, set, len, as_slice, sort, free");
-    docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: "
-        + "insert, get, contains, remove, len, free");
-    docs.insert("std::str", "str utilities: eq, starts_with, ends_with, "
-        + "find_byte, trim");
-    docs.insert("std::arena", "`Arena` — bump allocator: new, "
-        + "alloc_bytes, reset, free");
+    docs.insert("orelse", "`expr orelse fallback` — coalesces `nullable *T` / tagged unions; `orelse return x` diverges");
+    docs.insert("resource", "`resource struct` — move-only type; the borrow checker prevents use-after-move and double-frees");
+    docs.insert("std::vec", "`Vec[T]` — resource-safe growable vector: push, pop, get, set, len, as_slice, sort, free");
+    docs.insert("std::map", "`Map[K, V]` — open-addressing hash map: insert, get, contains, remove, len, free");
+    docs.insert("std::str", "str utilities: eq, starts_with, ends_with, find_byte, trim");
+    docs.insert("std::arena", "`Arena` — bump allocator: new, alloc_bytes, reset, free");
     docs.insert("std::fs", "file helpers: write_str, read_str, exists");
-    docs.insert("std::io", "terminal I/O module: print, println, "
-        + "readline as `(str | IoError)`, flush");
-    docs.insert("std::time", "sleep for fractional seconds or whole "
-        + "milliseconds: sleep(secs: f64), sleepms(ms: u32)");
+    docs.insert("std::io", "terminal I/O module: print, println, readline as `(String | Eof | IoError)`, flush");
+    docs.insert("std::time", "sleep for fractional seconds or whole milliseconds: sleep(secs: f64), sleepms(ms: u32)");
     docs.insert("std::env", "CLI + environment: args_count, arg_at, get");
 
     let mut running = true;
@@ -640,9 +629,7 @@ export fn main() i32 = {
         let has_id: bool = json_get_int(json, "id", &mut id);
 
         if (method == "initialize") {
-            simple_result(id, "\{\"capabilities\":\{\"textDocumentSync\":1,"
-                + "\"hoverProvider\":true,\"completionProvider\":"
-                + "\{\"triggerCharacters\":[\".\",\":\"]}}}");
+            simple_result(id, "\{\"capabilities\":\{\"textDocumentSync\":1,\"hoverProvider\":true,\"completionProvider\":\{\"triggerCharacters\":[\".\",\":\"]}}}");
         } else if (method == "shutdown") {
             if (has_id) {
                 simple_result(id, "null");
@@ -661,12 +648,14 @@ export fn main() i32 = {
             let path: str = uri_to_path(uri);
             let mut check_path: str = path;
             if (has_text && text != "") {
-                doc_text = text;
+                doc_text.free();
+                doc_text = String::from(text);
                 let _ = fs::write_str(".zov-lsp-buffer.zov", text);
                 check_path = ".zov-lsp-buffer.zov";
             } else {
+                doc_text.free();
                 doc_text = fs::read_str(path)
-                    orelse "";
+                    orelse String::new();
             };
             let output: str = run_check(check_path);
             publish_diagnostics(uri, output);
@@ -677,12 +666,13 @@ export fn main() i32 = {
             let mut character: i64 = 0;
             json_get_int(json, "line", &mut line);
             json_get_int(json, "character", &mut character);
-            hover_reply(id, doc_text, line, character, &docs);
+            hover_reply(id, doc_text.view(), line, character, &docs);
         } else {
             if (has_id) {
                 simple_result(id, "null");
             };
         };
     };
+    doc_text.free();
     return 0;
 };

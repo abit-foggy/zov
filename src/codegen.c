@@ -84,6 +84,9 @@ typedef struct CG {
     Buf head; /* includes, struct typedefs */
     Buf protos; /* function prototypes (after union typedefs) */
     Buf body; /* function definitions */
+    Buf str_helpers; /* generated C99 concat helpers */
+    int needs_string_owned; /* zov_type_String runtime */
+    int needs_print; /* direct std::io streaming */
     Buf *cur; /* active emission target */
     DA(DeferEntry) defers;
     DA(size_t) loop_marks; /* defer-stack base per active loop */
@@ -96,6 +99,7 @@ typedef struct CG {
     int needs_io;   /* str-concat and diagnostic emission */
     int needs_utf8; /* char formatting helper */
     int needs_string; /* memcmp emission for native str equality */
+    int needs_str_index; /* checked byte access helper for String */
     int needs_slice; /* runtime slice bounds helper */
     int needs_env;   /* std::env runtime helpers */
     int needs_strcmp; /* lexical str ordering helper */
@@ -277,13 +281,16 @@ static void emit_zov_str(Buf *b, const char *s, size_t len)
 
 /* '\{' marker from the lexer decodes back to a literal '{' in C text */
 
-/* str-concat flattening: left-assoc '+' chains over str collapse into an
- * ordered segment list before any I/O is emitted */
+static int ty_is_owned_string(Type *t);
+static int ty_is_stringish(Type *t);
+
+/* str/String concat flattening: left-assoc '+' chains collapse into an
+ * ordered segment list before any allocation or I/O is emitted */
 static void flatten_concat(CG *cg, Expr *e, ExprList *segs)
 {
     (void)cg;
     if (e->kind == EX_BINARY && e->u.binary.op == TK_PLUS && e->type
-        && e->type->kind == TY_STR) {
+        && ty_is_stringish(e->type)) {
         flatten_concat(cg, e->u.binary.lhs, segs);
         flatten_concat(cg, e->u.binary.rhs, segs);
         return;
@@ -299,19 +306,6 @@ static void emit_expr(CG *cg, Expr *e, int cstr);
 static int emit_block(CG *cg, Block *blk);
 static int emit_stmt(CG *cg, Stmt *s);
 static void emit_defers_down_to(CG *cg, size_t base);
-
-/* pure segment: safe to evaluate twice (nullable/char always hoist) */
-static int seg_is_trivial(Expr *e)
-{
-    switch (e->kind) {
-    case EX_STR: case EX_INT: case EX_FLOAT: case EX_BOOL: case EX_CHAR:
-    case EX_NULL: case EX_IDENT: case EX_NS_IDENT: case EX_FIELD:
-    case EX_DEREF:
-        return 1;
-    default:
-        return 0;
-    }
-}
 
 static void append_fmt_str(Buf *b, const char *s, size_t len)
 {
@@ -349,201 +343,195 @@ static const char *int_spec(TypeKind k)
     }
 }
 
-/* one prepared output unit: temps hoist side effects in order */
-typedef struct PSeg {
-    Expr *e;
-    int tmp;      /* value lives in _p<tmp> */
-    int char_tmp; /* utf8 bytes in _c<char_tmp>, length _cl<char_tmp> */
-    int nul_tmp;  /* nullable pointer lives in _p<nul_tmp> */
-} PSeg;
-
-static void prepare_seg(CG *cg, Expr *e, PSeg *ps, Buf *pre)
+static int ty_is_owned_string(Type *t)
 {
-    memset(ps, 0, sizeof(*ps));
-    ps->e = e;
-    Type *t = e->type;
-    int hoist = !seg_is_trivial(e);
-    if (t->kind == TY_CHAR)
-        hoist = 1; /* encode order must precede all I/O calls */
-    if (t->kind == TY_PTR && t->nullable)
-        hoist = 1; /* the null check reads the value twice */
-    if (t->kind == TY_STR && e->kind != EX_STR)
-        hoist = 1; /* .len/.data would evaluate the expr twice */
-    if (!hoist)
-        return;
-    ps->tmp = ++cg->tmp_id;
-    Buf *saved = cg->cur; /* segment exprs stream into the pre buffer */
-    cg->cur = pre;
-    if (t->kind == TY_CHAR) {
-        cg->needs_utf8 = 1;
-        buf_printf(pre, "uint32_t _p%d = (uint32_t)(", ps->tmp);
+    return t && t->kind == TY_STRUCT && t->name
+        && zstr_eq(t->name, "String");
+}
+
+static int ty_is_stringish(Type *t)
+{
+    return t && (t->kind == TY_STR || ty_is_owned_string(t));
+}
+
+/* Emit a zov_str view for either a borrowed str or an owned String. */
+static void emit_str_view(CG *cg, Expr *e)
+{
+    if (ty_is_owned_string(e->type)) {
+        cg->needs_string_owned = 1;
+        buf_puts(&*cg->cur, "zov_string_view(");
         emit_expr(cg, e, 0);
-        buf_printf(pre, ");\n");
-        ps->char_tmp = ps->tmp;
-        buf_printf(pre, "char _c%d[5]; int _cl%d = zov_utf8(_c%d, _p%d);\n",
-                   ps->tmp, ps->tmp, ps->tmp, ps->tmp);
-        cg->cur = saved;
+        buf_puts(&*cg->cur, ")");
+        return;
+    }
+    emit_expr(cg, e, 0);
+}
+
+/* One raw helper parameter plus the statements that turn it into a view. */
+static void emit_seg_param(CG *cg, Expr *e, int idx, Buf *sig, Buf *body)
+{
+    Type *t = e->type;
+    if (t->kind == TY_STR) {
+        buf_printf(sig, "%szov_str a%d", idx ? ", " : "", idx);
+        buf_printf(body, "    zov_str _sz%d = a%d;\n", idx, idx);
+        return;
+    }
+    if (ty_is_owned_string(t)) {
+        cg->needs_string_owned = 1;
+        buf_printf(sig, "%szov_type_String a%d", idx ? ", " : "", idx);
+        buf_printf(body, "    zov_str _sz%d = zov_string_view(a%d);\n",
+                   idx, idx);
+        return;
+    }
+    if (t->kind == TY_BOOL) {
+        buf_printf(sig, "%sbool a%d", idx ? ", " : "", idx);
+        buf_printf(body,
+                   "    zov_str _sz%d = { (const uint8_t *)(a%d ? "
+                   "\"true\" : \"false\"), a%d ? 4u : 5u };\n",
+                   idx, idx, idx);
+        return;
+    }
+    if (t->kind == TY_CHAR) {
+        cg->needs_io = 1;
+        cg->needs_utf8 = 1;
+        buf_printf(sig, "%suint32_t a%d", idx ? ", " : "", idx);
+        buf_printf(body,
+                   "    char _scb%d[5]; int _scl%d = zov_utf8(_scb%d, a%d);\n"
+                   "    zov_str _sz%d = { (const uint8_t *)_scb%d, "
+                   "(size_t)_scl%d };\n",
+                   idx, idx, idx, idx, idx, idx, idx);
+        return;
+    }
+    if (t->kind == TY_ENUM) {
+        cg->needs_string = 1;
+        buf_printf(sig, "%s%s a%d", idx ? ", " : "", c_type(cg, t), idx);
+        buf_printf(body,
+                   "    const char *_snm%d = zov_enum_%s_name(a%d);\n"
+                   "    zov_str _sz%d = { (const uint8_t *)_snm%d, "
+                   "strlen(_snm%d) };\n",
+                   idx, t->name, idx, idx, idx, idx);
         return;
     }
     if (t->kind == TY_PTR && t->nullable) {
-        ps->nul_tmp = ps->tmp;
-        buf_printf(pre, "%s *_p%d = (", c_type(cg, t), ps->tmp);
-        emit_expr(cg, e, 0);
-        buf_printf(pre, ");\n");
-        cg->cur = saved;
+        cg->needs_io = 1;
+        buf_printf(sig, "%svoid *a%d", idx ? ", " : "", idx);
+        buf_printf(body, "    char _spb%d[32];\n"
+                         "    zov_str _sz%d;\n"
+                         "    if (a%d == NULL) {\n"
+                         "        _sz%d.data = (const uint8_t *)\"null\";\n"
+                         "        _sz%d.len = 4u;\n"
+                         "    } else {\n"
+                         "        int _spl%d = snprintf(_spb%d, "
+                         "sizeof _spb%d, \"%%p\", a%d);\n"
+                         "        _sz%d.data = (const uint8_t *)_spb%d;\n"
+                         "        _sz%d.len = _spl%d < 0 ? 0u : "
+                         "(size_t)_spl%d;\n"
+                         "    }\n",
+                   idx, idx, idx, idx, idx, idx, idx, idx, idx, idx, idx,
+                   idx, idx, idx);
         return;
     }
-    buf_printf(pre, "%s _p%d = (", c_type(cg, t), ps->tmp);
-    emit_expr(cg, e, 0);
-    buf_printf(pre, ");\n");
-    cg->cur = saved;
+    if (ty_is_num(t->kind) || t->kind == TY_PTR) {
+        cg->needs_io = 1;
+        buf_printf(sig, "%s%s a%d", idx ? ", " : "", c_type(cg, t), idx);
+        buf_printf(body, "    char _snb%d[128]; int _snl%d = snprintf("
+                         "_snb%d, sizeof _snb%d, ", idx, idx, idx, idx);
+        if (t->kind == TY_PTR)
+            buf_printf(body, "\"%%p\", (void *)a%d);\n", idx);
+        else if (ty_is_float(t->kind))
+            buf_printf(body, "\"%%g\", (double)a%d);\n", idx);
+        else
+            buf_printf(body, "\"%%\" %s, a%d);\n", int_spec(t->kind), idx);
+        buf_printf(body,
+                   "    zov_str _sz%d = { (const uint8_t *)_snb%d, "
+                   "(size_t)(_snl%d < 0 ? 0 : _snl%d) };\n",
+                   idx, idx, idx, idx);
+        return;
+    }
+    fatal("internal: unprintable concat segment");
 }
 
-/* Case B: standalone str value rides a frame-local scratch buffer */
+static void emit_seg_args(CG *cg, ExprList *segs, Buf *b)
+{
+    for (size_t i = 0; i < segs->len; i++) {
+        if (i)
+            buf_puts(b, ", ");
+        emit_expr(cg, segs->items[i], 0);
+    }
+}
+
+/* Concatenation returns an owned String built by a generated C99 helper.
+ * Each operand is evaluated once at the call site, then appended by length;
+ * embedded NUL bytes survive and there is no fixed-size truncation. */
 static void emit_str_value(CG *cg, Expr *e)
 {
-    cg->needs_io = 1;
     Buf *b = &*cg->cur;
     ExprList segs = {0};
     flatten_concat(cg, e, &segs);
-    struct { PSeg *items; size_t len, cap; } ps = {0};
-    Buf pre = {0};
-    Buf txt = {0};   /* pending literal text */
-    Buf args = {0};
-    char texts[128][64]; /* text chunk per 'T' piece */
-    char macros[128][16]; /* macro name per 'S' piece */
-    char pieces[128];
-    size_t npieces = 0;
-    for (size_t i = 0; i < segs.len; i++) {
-        Expr *seg = segs.items[i];
-        PSeg one;
-        prepare_seg(cg, seg, &one, &pre);
-        da_push(&ps, one);
-        if (seg->kind == EX_STR) {
-            append_fmt_str(&txt, seg->u.slit.v, seg->u.slit.len);
-            continue;
-        }
-        Type *t = seg->type;
-        if (ty_is_num(t->kind)) {
-            if (ty_is_float(t->kind)) {
-                buf_puts(&txt, "%g");
-                buf_puts(&args, ", (double)(");
-            } else {
-                /* inttypes macros splice outside the literal: the '%' of
-                 * the conversion stays inside the preceding text chunk */
-                buf_puts(&txt, "%");
-                if (npieces < 128) {
-                    snprintf(texts[npieces], 64, "%s",
-                             txt.len ? txt.data : "");
-                    pieces[npieces++] = 'T';
-                }
-                if (npieces < 128) {
-                    snprintf(macros[npieces], 16, "%s", int_spec(t->kind));
-                    pieces[npieces++] = 'S';
-                }
-                txt.len = 0;
-                if (txt.data)
-                    txt.data[0] = '\0';
-                buf_printf(&args, ", (%s)(", c_type(cg, t));
-            }
-        } else if (t->kind == TY_BOOL) {
-            buf_puts(&txt, "%s");
-            buf_puts(&args, ", ((");
-        } else if (t->kind == TY_ENUM) {
-            buf_puts(&txt, "%s");
-            buf_printf(&args, ", zov_enum_%s_name((", t->name);
-            if (one.tmp)
-                buf_printf(&args, "_p%d", one.tmp);
-            else {
-                Buf *saved2 = cg->cur;
-                cg->cur = &args;
-                emit_expr(cg, seg, 0);
-                cg->cur = saved2;
-            }
-            buf_puts(&args, "))");
-            continue;
-        } else if (t->kind == TY_CHAR) {
-            buf_puts(&txt, "%.*s");
-            buf_printf(&args, ", _cl%d, _c%d", one.char_tmp, one.char_tmp);
-            continue;
-        } else if (t->kind == TY_STR) {
-            buf_puts(&txt, "%.*s");
-            buf_printf(&args, ", (int)_p%d.len, _p%d.data", one.tmp,
-                       one.tmp);
-            continue;
-        } else if (t->kind == TY_PTR && t->nullable) {
-            /* print "null" or the address without double evaluation */
-            buf_printf(&pre, "char _pb%d[32]; int _pn%d;\n", one.nul_tmp,
-                       one.nul_tmp);
-            buf_printf(&pre, "if (_p%d == NULL) { _pn%d = -1; }\n"
-                             "else { _pn%d = snprintf(_pb%d, sizeof(_pb%d), "
-                             "\"%%p\", (void *)_p%d); }\n",
-                       one.nul_tmp, one.nul_tmp, one.nul_tmp, one.nul_tmp,
-                       one.nul_tmp, one.nul_tmp);
-            buf_puts(&txt, "%.*s");
-            buf_printf(&args,
-                       ", (_pn%d < 0 ? 4 : _pn%d), (_pn%d < 0 ? \"null\" : "
-                       "_pb%d)", one.nul_tmp, one.nul_tmp, one.nul_tmp,
-                       one.nul_tmp);
-            continue;
-        } else if (t->kind == TY_PTR) {
-            buf_puts(&txt, "%p");
-            buf_puts(&args, ", (void *)(");
-        } else {
-            fatal("internal: unprintable concat segment");
-        }
-        if (one.tmp) {
-            buf_printf(&args, "_p%d", one.tmp);
-        } else {
-            Buf *saved = cg->cur; /* inline args stream into args buf */
-            cg->cur = &args;
-            emit_expr(cg, seg, 0);
-            cg->cur = saved;
-        }
-        if (t->kind == TY_BOOL)
-            buf_puts(&args, ") ? \"true\" : \"false\"");
-        buf_puts(&args, ")");
-    }
-    int id = cg->tmp_id++;
-    // 256-byte cap: snprintf truncation is the defined overflow policy
-    buf_printf(b, "({ char _sbuf%d[256];\n", id);
-    if (pre.len)
-        buf_puts(b, pre.data);
-    buf_printf(b, "int _slen%d = snprintf(_sbuf%d, sizeof(_sbuf%d), ", id,
-               id, id);
-    /* emit alternating quoted text and macro splices */
-    if (npieces == 0) {
-        buf_puts(b, "\"");
-        if (txt.len)
-            buf_puts(b, txt.data);
-        buf_puts(b, "\"");
-    } else {
-        for (size_t i = 0; i < npieces; i++) {
-            if (pieces[i] == 'T') {
-                buf_puts(b, "\"");
-                buf_puts(b, texts[i]);
-                buf_puts(b, "\" ");
-            } else {
-                buf_puts(b, macros[i]);
-                buf_puts(b, " ");
-            }
-        }
-        /* trailing literal text after the last splice */
-        buf_puts(b, "\"");
-        if (txt.len)
-            buf_puts(b, txt.data);
-        buf_puts(b, "\"");
-    }
-    buf_puts(b, " ");
-    if (args.len)
-        buf_puts(b, args.data);
-    buf_printf(b, ");\n(zov_str){ (const uint8_t *)_sbuf%d, "
-                  "(size_t)_slen%d }; })\n", id, id);
+    Buf sig = {0};
+    Buf body = {0};
+    for (size_t i = 0; i < segs.len; i++)
+        emit_seg_param(cg, segs.items[i], (int)i, &sig, &body);
+    int helper = cg->tmp_id++;
+    buf_printf(b, "_zov_cat%d(", helper);
+    emit_seg_args(cg, &segs, b);
+    buf_puts(b, ")");
+
+    cg->needs_string_owned = 1;
+    buf_printf(&cg->str_helpers, "static zov_type_String _zov_cat%d(",
+               helper);
+    buf_puts(&cg->str_helpers, sig.len ? sig.data : "void");
+    buf_puts(&cg->str_helpers, ")\n{\n"
+                              "    zov_type_String out;\n"
+                              "    zov_string_init(&out);\n");
+    if (body.len)
+        buf_puts(&cg->str_helpers, body.data);
+    for (size_t i = 0; i < segs.len; i++)
+        buf_printf(&cg->str_helpers,
+                   "    zov_string_append(&out, _sz%lu);\n",
+                   (unsigned long)i);
+    buf_puts(&cg->str_helpers, "    return out;\n}\n\n");
     free(segs.items);
-    free(ps.items);
-    free(pre.data);
-    free(txt.data);
-    free(args.data);
+    free(sig.data);
+    free(body.data);
+}
+
+/* std::io::{print,println} stream directly: no temporary String is built. */
+static void emit_print_call(CG *cg, Expr *e, int newline)
+{
+    Expr *arg = e->u.call.args.items[0];
+    Buf *b = &*cg->cur;
+    ExprList segs = {0};
+    if (ty_is_stringish(arg->type))
+        flatten_concat(cg, arg, &segs);
+    else
+        da_push(&segs, arg);
+    Buf sig = {0};
+    Buf body = {0};
+    for (size_t i = 0; i < segs.len; i++)
+        emit_seg_param(cg, segs.items[i], (int)i, &sig, &body);
+    int helper = cg->tmp_id++;
+    cg->needs_io = 1;
+    buf_printf(b, "_zov_print%d(", helper);
+    emit_seg_args(cg, &segs, b);
+    buf_puts(b, ")");
+
+    buf_printf(&cg->str_helpers, "static void _zov_print%d(", helper);
+    buf_puts(&cg->str_helpers, sig.len ? sig.data : "void");
+    buf_puts(&cg->str_helpers, ")\n{\n");
+    if (body.len)
+        buf_puts(&cg->str_helpers, body.data);
+    for (size_t i = 0; i < segs.len; i++)
+        buf_printf(&cg->str_helpers,
+                   "    if (_sz%lu.len) fwrite(_sz%lu.data, 1, "
+                   "_sz%lu.len, stdout);\n",
+                   (unsigned long)i, (unsigned long)i, (unsigned long)i);
+    if (newline)
+        buf_puts(&cg->str_helpers, "    fputc(10, stdout);\n");
+    buf_puts(&cg->str_helpers, "}\n\n");
+    free(segs.items);
+    free(sig.data);
+    free(body.data);
 }
 
 static int cg_union_idx(Type *u, Type *m)
@@ -792,7 +780,8 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
         emit_str_lit(b, cond->span.file, strlen(cond->span.file));
         buf_printf(b, ", %luu, 0); }\n", (unsigned long)cond->span.line);
     } else {
-        buf_puts(b, ")) { __builtin_trap(); }\n");
+        cg->needs_abort = 1;
+        buf_puts(b, ")) { abort(); }\n");
     }
     if (!as_stmt)
         buf_puts(b, "0; })\n");
@@ -801,6 +790,35 @@ static void emit_assert(CG *cg, Expr *e, int as_stmt)
 static void emit_call(CG *cg, Expr *e)
 {
     Expr *callee = e->u.call.callee;
+    if (e->builtin_str_ctor) {
+        cg->needs_string_owned = 1;
+        if (e->builtin_str_ctor == 2) {
+            buf_puts(&*cg->cur, "zov_string_new()");
+        } else {
+            buf_puts(&*cg->cur, "zov_string_from_str(");
+            emit_str_view(cg, e->u.call.args.items[0]);
+            buf_puts(&*cg->cur, ")");
+        }
+        return;
+    }
+    if (e->builtin_str_method) {
+        Expr *recv = callee->u.field.base;
+        cg->needs_string_owned = 1;
+        if (e->builtin_str_method == 1) {
+            buf_puts(&*cg->cur, "zov_string_free(&(");
+            emit_expr(cg, recv, 0);
+            buf_puts(&*cg->cur, "))");
+        } else {
+            buf_puts(&*cg->cur, "zov_string_view(");
+            emit_expr(cg, recv, 0);
+            buf_puts(&*cg->cur, ")");
+        }
+        return;
+    }
+    if (e->builtin_print) {
+        emit_print_call(cg, e, e->builtin_print == 2);
+        return;
+    }
     if (e->hash_ty) {
         cg->needs_hash = 1;
         if (e->hash_ty->kind == TY_STR) {
@@ -867,7 +885,7 @@ static void emit_call(CG *cg, Expr *e)
         if (extern_cstr && arg->type && arg->type->kind == TY_STR
             && arg->kind != EX_STR) {
             // str value into a char* param: pass the fat pointer's data
-            buf_puts(&*cg->cur, "(");
+            buf_puts(&*cg->cur, "(char *)(");
             emit_expr(cg, arg, 0);
             buf_puts(&*cg->cur, ").data");
         } else {
@@ -947,48 +965,41 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     }
     case EX_BINARY: {
         const char *op = NULL;
-        if (e->type && e->type->kind == TY_STR
+        if (e->type && ty_is_owned_string(e->type)
             && e->u.binary.op == TK_PLUS) {
-            /* str + T scripting chain: scratch-buffer zov_str value */
+            /* str/String + T: one owned String, no fixed-size buffer */
             emit_str_value(cg, e);
             break;
         }
         if ((e->u.binary.op == TK_LT || e->u.binary.op == TK_LE
              || e->u.binary.op == TK_GT || e->u.binary.op == TK_GE)
             && e->u.binary.lhs->type && e->u.binary.rhs->type
-            && e->u.binary.lhs->type->kind == TY_STR
-            && e->u.binary.rhs->type->kind == TY_STR) {
-            /* lexical ordering via memcmp helper over hoisted temps */
+            && ty_is_stringish(e->u.binary.lhs->type)
+            && ty_is_stringish(e->u.binary.rhs->type)) {
+            /* lexical ordering via memcmp helper over hoisted views */
             cg->needs_strcmp = 1;
             const char *op = e->u.binary.op == TK_LT ? "<"
                            : e->u.binary.op == TK_LE ? "<="
                            : e->u.binary.op == TK_GT ? ">" : ">=";
-            int a_id = cg->tmp_id++;
-            int b_id = cg->tmp_id++;
-            buf_printf(b, "({ zov_str _so%d = (", a_id);
-            emit_expr(cg, e->u.binary.lhs, 0);
-            buf_printf(b, "); zov_str _so%d = (", b_id);
-            emit_expr(cg, e->u.binary.rhs, 0);
-            buf_printf(b, "); (zov_str_cmp(_so%d, _so%d) %s 0); })",
-                       a_id, b_id, op);
+            buf_printf(b, "(zov_str_cmp((");
+            emit_str_view(cg, e->u.binary.lhs);
+            buf_puts(b, "), (");
+            emit_str_view(cg, e->u.binary.rhs);
+            buf_printf(b, ")) %s 0)", op);
             break;
         }
         if ((e->u.binary.op == TK_EQ || e->u.binary.op == TK_NEQ)
             && e->u.binary.lhs->type && e->u.binary.rhs->type
-            && e->u.binary.lhs->type->kind == TY_STR
-            && e->u.binary.rhs->type->kind == TY_STR) {
-            /* native str ==/!=: length + memcmp over hoisted fat ptrs */
-            int a_id = cg->tmp_id++;
-            int b_id = cg->tmp_id++;
+            && ty_is_stringish(e->u.binary.lhs->type)
+            && ty_is_stringish(e->u.binary.rhs->type)) {
+            /* native string ==/!=: C99 helper over one evaluation per side */
             cg->needs_string = 1;
-            buf_printf(b, "({ zov_str _se%d = (", a_id);
-            emit_expr(cg, e->u.binary.lhs, 0);
-            buf_printf(b, "); zov_str _se%d = (", b_id);
-            emit_expr(cg, e->u.binary.rhs, 0);
-            buf_printf(b, "); %s(_se%d.len == _se%d.len && memcmp(_se%d.data, "
-                          "_se%d.data, _se%d.len) == 0); })",
-                       e->u.binary.op == TK_EQ ? "" : "!",
-                       a_id, b_id, a_id, b_id, a_id);
+            buf_printf(b, "%szov_str_eq((",
+                       e->u.binary.op == TK_EQ ? "" : "!");
+            emit_str_view(cg, e->u.binary.lhs);
+            buf_puts(b, "), (");
+            emit_str_view(cg, e->u.binary.rhs);
+            buf_puts(b, "))");
             break;
         }
         switch (e->u.binary.op) {
@@ -1150,10 +1161,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         cg->needs_abort = 1;
         Type *bt = e->u.slice.base->type;
         int id = cg->tmp_id++;
-        if (bt->kind == TY_STR) {
-            /* str sub-slice: same fat-pointer type, offset data */
+        if (ty_is_stringish(bt)) {
+            /* str/String sub-slice: borrow the underlying bytes */
             buf_printf(b, "({ zov_str _sl%d = (", id);
-            emit_expr(cg, e->u.slice.base, 0);
+            emit_str_view(cg, e->u.slice.base);
             buf_printf(b, "); size_t _sa%d = (size_t)(", id);
             if (e->u.slice.start)
                 emit_expr(cg, e->u.slice.start, 0);
@@ -1269,6 +1280,15 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_puts(b, ") / sizeof((");
             emit_expr(cg, e->u.index.base, 0);
             buf_puts(b, ")[0]))]");
+        } else if (ty_is_owned_string(bt)) {
+            cg->needs_string = 1;
+            cg->needs_str_index = 1;
+            cg->needs_bounds = 1;
+            buf_puts(b, "zov_str_byte((");
+            emit_str_view(cg, e->u.index.base);
+            buf_puts(b, "), (size_t)(");
+            emit_expr(cg, e->u.index.index, 0);
+            buf_puts(b, "))");
         } else {
             emit_expr(cg, e->u.index.base, 0);
             buf_puts(b, ".data[zov_bounds((size_t)(");
@@ -1358,9 +1378,11 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                 emit_defers_down_to(cg, 0);
                 Type *rt = cg->fn_ret;
                 int ridx = rt ? cg_union_idx(rt, m) : -1;
-                buf_printf(b, "return ((%s){ %du", union_name(cg, rt), ridx);
+                buf_printf(b, "return ((%s){ .tag = %du",
+                           union_name(cg, rt), ridx);
                 if (member_has_payload(m))
-                    buf_printf(b, ", _q%d.u.v%lu", id, (unsigned long)i);
+                    buf_printf(b, ", .u.v%lu = _q%d.u.v%lu",
+                               (unsigned long)ridx, id, (unsigned long)i);
                 buf_printf(b, " });\n}\n");
             }
             Type *ok = union_ok_member(t);
@@ -1420,8 +1442,8 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
                            (unsigned long)e->span.line);
             } else {
                 cg->needs_abort = 1;
-                buf_printf(b, "); if (_u%d == NULL) "
-                              "{ __builtin_trap(); }\n", id);
+                buf_printf(b, "); if (_u%d == NULL) { abort(); }\n",
+                           id);
             }
             buf_printf(b, "_u%d; })", id);
         }
@@ -1430,9 +1452,10 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
     case EX_COERCE: {
         Type *u = e->u.coerce.target;
         Type *m = u->members.items[e->coerce_tag];
-        buf_printf(b, "((%s){ %du", union_name(cg, u), e->coerce_tag);
+        buf_printf(b, "((%s){ .tag = %du", union_name(cg, u),
+                   e->coerce_tag);
         if (e->u.coerce.e && member_has_payload(m)) {
-            buf_puts(b, ", ");
+            buf_printf(b, ", .u.v%d = ", e->coerce_tag);
             emit_expr(cg, e->u.coerce.e, 0);
         }
         buf_printf(b, " })");
@@ -1559,6 +1582,11 @@ static int emit_stmt(CG *cg, Stmt *s)
             buf_printf(cur, ");\nfor (size_t _i%d = 0; _i%d < %luu; "
                              "_i%d++) {\n", id, id,
                        (unsigned long)it->count, id);
+        } else if (ty_is_owned_string(it)) {
+            buf_puts(cur, "zov_str _zv_it = zov_string_view(");
+            emit_expr(cg, s->u.foreach.iter, 0);
+            buf_printf(cur, ");\nfor (size_t _i%d = 0; _i%d < "
+                             "(size_t)_zv_it.len; _i%d++) {\n", id, id, id);
         } else {
             emit_var(cur, cg, it, "_zv_it");
             buf_puts(cur, " = (");
@@ -1632,6 +1660,11 @@ static int emit_stmt(CG *cg, Stmt *s)
     case ST_EXPR:
         if (s->u.expr->kind == EX_CALL && s->u.expr->builtin_assert) {
             emit_assert(cg, s->u.expr, 1);
+            return 0;
+        }
+        if (s->u.expr->kind == EX_CALL && s->u.expr->builtin_print) {
+            emit_print_call(cg, s->u.expr, s->u.expr->builtin_print == 2);
+            buf_puts(&*cg->cur, ";\n");
             return 0;
         }
         if (s->u.expr->kind == EX_MATCH) {
@@ -1775,6 +1808,11 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     cg->debug = prog->debug;
 
     cg->cur = &cg->head;
+    if (!cg->freestanding)
+        /* hosted std::time/fs use POSIX symbols that strict C99 hides */
+        buf_puts(&*cg->cur,
+                 "#define _POSIX_C_SOURCE 200809L\n"
+                 "#define _DEFAULT_SOURCE 1\n");
     buf_puts(&*cg->cur,
              "#include <stdint.h>\n"
              "#include <stddef.h>\n"
@@ -1896,7 +1934,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
             buf_puts(&out, "#include <stdlib.h>\n"
                            "static size_t zov_bounds(size_t i, size_t n) {\n"
                            "    if (i >= n) {\n"
-                           "        __builtin_trap();\n"
+                           "        abort();\n"
                            "    }\n"
                            "    return i;\n"
                            "}\n");
@@ -1923,6 +1961,17 @@ char *codegen_generate_mode(Program *prog, int test_mode)
         if (cg->needs_string || cg->needs_strcmp || cg->needs_slice)
             /* memcmp stays a kernel-provided primitive at link time */
             buf_puts(&out, "#include <string.h>\n");
+        if (cg->needs_string)
+            buf_puts(&out,
+                     "static int zov_str_eq(zov_str a, zov_str b) {\n"
+                     "    return a.len == b.len\n"
+                     "        && (a.len == 0 || memcmp(a.data, b.data, a.len) == 0);\n"
+                     "}\n");
+        if (cg->needs_str_index)
+            buf_puts(&out,
+                     "static uint8_t zov_str_byte(zov_str s, size_t i) {\n"
+                     "    return s.data[zov_bounds(i, s.len)];\n"
+                     "}\n");
     } else {
         if (cg->needs_abort)
             buf_puts(&out, "#include <stdlib.h>\n");
@@ -1944,14 +1993,25 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "static size_t zov_slice_check(size_t a, size_t b, "
                      "size_t n, const char *f, unsigned long l) {\n"
                      "    if (a > b || b > n) {\n"
-                     "        __builtin_trap();\n"
+                     "        abort();\n"
                      "    }\n"
                      "    return a;\n"
                      "}\n");
             }
         }
-        if (cg->needs_string)
+        if (cg->needs_string) {
             buf_puts(&out, "#include <string.h>\n");
+            buf_puts(&out,
+                     "static int zov_str_eq(zov_str a, zov_str b) {\n"
+                     "    return a.len == b.len\n"
+                     "        && (a.len == 0 || memcmp(a.data, b.data, a.len) == 0);\n"
+                     "}\n");
+        }
+        if (cg->needs_str_index)
+            buf_puts(&out,
+                     "static uint8_t zov_str_byte(zov_str s, size_t i) {\n"
+                     "    return s.data[zov_bounds(i, s.len)];\n"
+                     "}\n");
     }
     if (cg->needs_strcmp) {
         buf_puts(&out, "#include <string.h>\n");
@@ -2014,6 +2074,83 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                  "    s.len = v ? strlen(v) : 0; return s;\n"
                  "}\n");
     }
+    if (cg->needs_string_owned) {
+        if (cg->freestanding) {
+            buf_puts(&out,
+                     "extern void *zov_rt_realloc(void *p, size_t n);\n"
+                     "extern void zov_rt_free(void *p);\n"
+                     "static void zov_string_oom(void) {\n"
+                     "    zov_panic(\"string allocation failed\", \"?\", 0);\n"
+                     "    for (;;) { }\n"
+                     "}\n");
+        } else {
+            buf_puts(&out,
+                     "#include <stdlib.h>\n#include <string.h>\n"
+                     "#include <stdio.h>\n"
+                     "static void zov_string_oom(void) {\n"
+                     "    fprintf(stderr, \"zov: out of memory\\n\");\n"
+                     "    abort();\n"
+                     "}\n");
+        }
+        buf_puts(&out,
+                 "static void zov_string_init(zov_type_String *s) {\n"
+                 "    s->zv_data = 0; s->zv_len = 0; s->zv_cap = 0;\n"
+                 "}\n"
+                 "static void zov_string_free(zov_type_String *s) {\n"
+                 "    if (s->zv_data) {\n");
+        if (cg->freestanding)
+            buf_puts(&out, "        zov_rt_free(s->zv_data);\n");
+        else
+            buf_puts(&out, "        free(s->zv_data);\n");
+        buf_puts(&out,
+                 "    }\n"
+                 "    zov_string_init(s);\n"
+                 "}\n"
+                 "static zov_str zov_string_view(zov_type_String s) {\n"
+                 "    zov_str r; r.data = (const uint8_t *)s.zv_data;\n"
+                 "    r.len = s.zv_len; return r;\n"
+                 "}\n"
+                 "static void zov_string_reserve(zov_type_String *s, "
+                 "size_t extra) {\n"
+                 "    size_t need, cap;\n"
+                 "    if (extra > SIZE_MAX - s->zv_len) zov_string_oom();\n"
+                 "    need = s->zv_len + extra;\n"
+                 "    if (need <= s->zv_cap) return;\n"
+                 "    cap = s->zv_cap ? s->zv_cap : 32u;\n"
+                 "    while (cap < need) {\n"
+                 "        if (cap > SIZE_MAX / 2u) { cap = need; break; }\n"
+                 "        cap *= 2u;\n"
+                 "    }\n");
+        if (cg->freestanding)
+            buf_puts(&out,
+                     "    { void *p = zov_rt_realloc(s->zv_data, cap);\n"
+                     "      if (!p) zov_string_oom();\n"
+                     "      s->zv_data = (uint8_t *)p; }\n");
+        else
+            buf_puts(&out,
+                     "    { void *p = realloc(s->zv_data, cap);\n"
+                     "      if (!p) zov_string_oom();\n"
+                     "      s->zv_data = (uint8_t *)p; }\n");
+        buf_puts(&out,
+                 "    s->zv_cap = cap;\n"
+                 "}\n"
+                 "static void zov_string_append(zov_type_String *s, "
+                 "zov_str v) {\n"
+                 "    if (!v.len) return;\n"
+                 "    zov_string_reserve(s, v.len);\n"
+                 "    { size_t i; for (i = 0; i < v.len; i++)\n"
+                 "        ((uint8_t *)s->zv_data)[s->zv_len + i] = "
+                 "v.data[i]; }\n"
+                 "    s->zv_len += v.len;\n"
+                 "}\n"
+                 "static zov_type_String zov_string_new(void) {\n"
+                 "    zov_type_String s; zov_string_init(&s); return s;\n"
+                 "}\n"
+                 "static zov_type_String zov_string_from_str(zov_str v) {\n"
+                 "    zov_type_String s; zov_string_init(&s);\n"
+                 "    zov_string_append(&s, v); return s;\n"
+                 "}\n");
+    }
     if (cg->needs_io) {
         buf_puts(&out, "#include <stdio.h>\n#include <inttypes.h>\n");
         if (cg->needs_utf8) {
@@ -2039,6 +2176,7 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "}\n");
         }
     }
+    buf_puts(&out, cg->str_helpers.data);
     for (size_t i = 0; i < cg->unions.len; i++) {
         Type *u = cg->unions.items[i];
         buf_printf(&out, "typedef struct { uint32_t tag;");
@@ -2068,5 +2206,6 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     free(cg->head.data);
     free(cg->protos.data);
     free(cg->body.data);
+    free(cg->str_helpers.data);
     return result;
 }

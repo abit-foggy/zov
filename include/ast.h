@@ -164,6 +164,11 @@ typedef struct Expr {
     Type *szarg;    /* EX_CALL to sizeof[T](): the type argument */
     int coerce_tag; /* EX_COERCE: deterministic member index in target */
     int builtin_assert; /* EX_CALL to built-in assert(bool) */
+    int builtin_print;  /* 1 = std::io::print, 2 = std::io::println */
+    int builtin_str_method; /* 1 = String.free(), 2 = String.view() */
+    struct Expr *str_recv;  /* receiver of a builtin String method */
+    int builtin_str_ctor;   /* 1 = String::from(str), 2 = String::new() */
+    int method_call;        /* receiver was inserted as argument 0 */
     const char *variant_c; /* EX_NS_IDENT enum variant: C spelling */
     TokenKind comp_op;     /* EX_ASSIGN: compound operator, 0 when plain = */
     Type *hash_ty;         /* EX_CALL to hash_val[T](): the key type */

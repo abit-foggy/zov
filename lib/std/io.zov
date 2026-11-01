@@ -28,45 +28,60 @@ use <unistd.h> as u;
 
 use std::mem as mem;
 
-export type IoError = !void;
+// Distinct variants: a blank line is a String of length 0, Eof means no
+// bytes remained, and IoError carries the read failure code.
+export type Eof = !void;
+export type IoError = !i32;
 
-// one line from stdin; trailing \n and \r are stripped, 255 bytes max
-export fn readline() str = {
-    let cap: usize = 256usize;
-    let buf: *u8 = mem::alloc[u8](cap);
+// one line from stdin; trailing \n and \r are stripped.  The returned
+// String owns its buffer and the caller must release it with free().
+export fn readline() (String | Eof | IoError) = {
+    let mut cap: usize = 256usize;
+    let mut buf: *u8 = mem::alloc[u8](cap);
     let one: [1]u8;
     let mut len: usize = 0usize;
     let mut got: bool = false;
-    while (len < cap - 1usize) {
+    while (true) {
         let n = u::read(0, (&one[0usize]) as *void, 1usize);
-        if (n != 1i64) {
+        if (n < 0i64) {
+            mem::free_ptr[u8](buf);
+            return 1;
+        };
+        if (n == 0i64) {
             break;
         };
         got = true;
         if (one[0usize] == 10u8) {
             break;
         };
+        if (len == cap) {
+            if (cap > 1073741824usize) {
+                mem::free_ptr[u8](buf);
+                return 2;
+            };
+            cap = cap * 2usize;
+            buf = mem::realloc_buf[u8](buf, cap);
+        };
         buf[len] = one[0usize];
         len += 1usize;
     };
     if (!got) {
         mem::free_ptr[u8](buf);
-        return "";
+        return Eof;
     };
     if (len > 0usize && buf[len - 1usize] == 13u8) {
         len -= 1usize;
     };
-    return zov_str_from_raw(buf, len);
+    return String{ data = buf, len = len, cap = cap };
 };
 
-// renders any printable value: '' + msg builds its str form
+// Streaming fallback for non-specialized callers.  The compiler lowers
+// ordinary io::print/println calls directly and does not allocate here.
 export fn print[T](msg: T) void = {
-    let s: str = "" + msg;
-    let mut i: usize = 0usize;
-    while (i < s.len) {
-        c::putchar(s.ptr[i] as i32);
-        i += 1usize;
-    };
+    let s = "" + msg;
+    let v: str = s.view();
+    c::fwrite(v.data as *void, 1usize, v.len, c::stdout);
+    s.free();
 };
 
 // forces pending stdout bytes to reach the terminal
