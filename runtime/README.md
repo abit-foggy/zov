@@ -23,7 +23,7 @@ A kernel implementation typically formats the code and message into its
 own log ring or serial console. It must not assume `stdio`, `stderr`,
 `abort()`, or a terminal exists.
 
-## Reserved allocator hooks
+## Allocator hooks
 
 ```c
 void *zov_rt_realloc(void *ptr, size_t size);
@@ -31,11 +31,24 @@ void  zov_rt_free(void *ptr);
 ```
 
 These follow `realloc`/`free` semantics (suitably aligned results,
-`free(NULL)` allowed, contents preserved on grow). **They are not
-called by current generated code.** Owned `String` allocation is
-rejected in freestanding builds if the program would need an allocator,
-and `std::mem` is hosted-only. The names are reserved so a future
-allocator contract does not need to change the ABI.
+`free(NULL)` allowed, contents preserved on grow). A freestanding Zov
+program uses them when it owns a `String`:
+
+- `String::from_owned(data, len, cap)` is allowed in freestanding builds;
+  the platform hands the program a buffer and `String.free()` releases it
+  through `zov_rt_free`.
+- `String::from`, string concatenation, `std::io`, `std::mem`,
+  `std::vec`, `std::map`, and `std::arena` are rejected in freestanding
+  mode with a diagnostic: they need an allocator or an operating system.
+- `zov_rt_realloc` is part of the ABI and is used by the String growth
+  helper; current freestanding programs cannot reach that helper because
+  allocation from a `str` is rejected. Define both hooks so the object
+  links now and future growth support needs no ABI change.
+
+If a freestanding program compares strings (`==`, `<`, or a string
+match), generated code calls the platform's `memcmp`, which therefore
+must also be provided. Programs that use neither `String` nor `memcmp`
+link against `zov_panic` alone.
 
 ## Minimal runtime
 
@@ -72,9 +85,13 @@ in the test suite). `zov_kmain` is defined by the object.
 ## Limits
 
 - No startup code, stack setup, or linker script is provided.
-- No allocator is wired into generated code yet; allocate through your
-  own runtime rather than `std::mem`.
-- No hosted headers are emitted, but `String` and `std::io` are
-  rejected in freestanding mode by design.
+- There is no general allocator API: `std::mem`, `std::vec`,
+  `std::map`, and `std::arena` are hosted-only. A kernel can still wrap
+  its own allocator as a C interface for Zov code.
+- No hosted headers are emitted, and `String::from`, concatenation,
+  `std::io`, `std::fs`, `std::env`, and `std::time` are rejected in
+  freestanding mode with `E0306` instead of a link failure.
+- `String::from_owned` is the only way to obtain an owned String; its
+  buffer must satisfy the platform's `zov_rt_free` contract.
 - This is not a claim of kernel readiness: it defines the boundary
   between a Zov program and the platform that runs it.

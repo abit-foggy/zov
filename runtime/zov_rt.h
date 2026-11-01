@@ -55,20 +55,21 @@ void zov_panic(const char *code, const char *msg, const char *file,
                int line, int col);
 
 /*
- * Reserved allocation hooks.
+ * Allocation hooks.
  *
- * The compiler does not call these yet: owned String allocation is
- * rejected in freestanding builds ("String allocation is unavailable in
- * freestanding mode").  `std::mem` also remains hosted-only.  When an
- * allocator contract is wired into freestanding code these are the
- * names it will use, with malloc/realloc/free-compatible semantics:
+ * A freestanding program that owns a String (created with
+ * String::from_owned) releases its buffer through zov_rt_free.  The
+ * String growth helper uses zov_rt_realloc; current freestanding builds
+ * reject the allocation operations that would reach it, so defining it
+ * now is optional but keeps the ABI stable for future growth support.
+ * Both follow malloc/realloc/free-compatible semantics:
  *
  *   zov_rt_realloc(NULL, n)  allocate n bytes, suitably aligned
  *   zov_rt_realloc(p, n)     grow/shrink, may move, preserves contents
  *   zov_rt_free(p)           release an earlier allocation (NULL is ok)
  *
- * A runtime may define them now so future compilers link without
- * changes; nothing in the current generated code requires them.
+ * String comparison and string match lowering call the platform's
+ * memcmp; a program that never compares strings does not need it.
  */
 void *zov_rt_realloc(void *ptr, size_t size);
 void zov_rt_free(void *ptr);
