@@ -34,6 +34,8 @@ value before storing the new one. The compiler emits one per-type helper
 happens in C99-sequenced order:
 
 - locals, struct fields, and fields reached through `&mut T` are covered;
+- fixed-array elements (`arr[i] = value`) release the previous element
+  before storing the replacement;
 - tagged unions destroy only the active payload before the new tag/payload
   is written;
 - the right-hand side is evaluated once, and self-assignment of a moved
@@ -45,14 +47,18 @@ reinitializes it without trying to release the old contents (`E0503` and
 struct is rejected (`E0510`) because the remaining fields still own
 resources.
 
-A place that may be initialized is rejected (`E0517`): if one branch of an
-`if` moves or frees a value and another leaves it live, a later overwrite
-has no single safe action. Move/free on every branch, or restructure so
-the assignment happens before the branch.
+Branch merges track surviving paths independently. If every surviving
+branch moves or frees the same value, the value is definitely
+uninitialized and a later assignment reinitializes it without `E0517`.
+A branch that returns, breaks, or continues contributes no state to the
+fallthrough. Only genuinely mixed state -- one surviving branch moves or
+frees, another leaves the value live -- is rejected with `E0517`, because
+the compiler cannot choose between destroying and reinitializing.
 
-Assignment through a raw-pointer index is not automatically destructive
-(the compiler does not track pointee ownership). Container APIs such as
-`Vec.set`, `Vec.replace`, and `Map.insert` perform the release themselves.
+Assignment through a raw-pointer index or a slice is not automatically
+destructive (the compiler does not track pointee ownership). Container
+APIs such as `Vec.set`, `Vec.replace`, and `Map.insert` perform the
+release themselves.
 
 ## Explicit destruction
 
@@ -131,10 +137,13 @@ calling `mem::drop[T]` for each initialized element, which resolves the
 element type at monomorphization. Nested containers work because a
 `Vec`'s `free` method is itself a drop hook.
 
-`Map[K,V]` destruction skips tombstones and copies values during growth
-without dropping them (ownership moves to the new tables). Hash keys
-currently support `str`, integers, and enums, not owned `String`
-(`E0806`).
+`Map[K,V]` destruction skips tombstones and copies keys/values during
+growth without dropping them (ownership moves to the new tables). Hash
+keys support `str`, owned `String` (hashed by bytes), integers, and enums.
+`insert` of an equal key releases both the old value and the duplicate
+`String` key passed by the caller. Read-only lookups (`get`, `getref`,
+`findref`, `contains`) consume and release the owned lookup key exactly
+once, matching their by-value signature.
 
 `Vec.get` and `Map.get` return a shallow copy of the stored value. That
 is safe only for copyable element types. Calling `get()` when the element
@@ -144,10 +153,12 @@ returned copy would alias the container's allocation.
 
 Use `Vec.getref(idx)` / `Map.getref(key)` for borrowed reads: they
 return `&T` / `&V`, keep the container borrowed while the reference is
-live, and abort on an out-of-bounds/missing key. Use `pop`, `remove`,
-`replace`, or `take` when ownership must move out of the container.
-These APIs are deliberately distinct from `get()`: no safe path hands out
-a second owner of a resource.
+live, and abort on an out-of-bounds/missing key. `Vec.findref(idx)` and
+`Map.findref(key)` are the fallible forms: they return `(&T | Empty)` /
+`(&V | MapNotFound)` and leave the container borrowed only on a hit.
+Use `pop`, `remove`, `replace`, or `take` when ownership must move out of
+the container. These APIs are deliberately distinct from `get()`: no
+safe path hands out a second owner of a resource.
 
 ## Arenas
 
@@ -187,11 +198,21 @@ splitting helpers are gated individually (`math::pow`, `strsplit::lines`,
 buffer and `String.free()` calls the `zov_rt_free` hook. See
 [runtime/README.md](../runtime/README.md).
 
+A module's `use <header.h> as alias;` binding is private to that module
+in both hosted and freestanding builds. Importers cannot call through
+`io::`'s private `u` alias, for example; a private alias is rejected with
+`E0306` just like an unexported Zov helper.
+
 ## Known limits
 
-- Overwrite destruction covers locals and struct fields. Assigning
-  through a raw-pointer index does not know the element's ownership;
-  prefer `Vec.set`/`replace` or index assignment only for trivial types.
+- Overwrite destruction covers locals, struct fields, and fixed-array
+  elements. Assigning through a raw-pointer index or a slice does not
+  know the element's ownership; prefer `Vec.set`/`replace` or index
+  assignment only for trivial types.
+- Individual array/Vec element moves are not tracked by element index.
+  Moving `arr[i]` out and then assigning a new value to `arr[i]` is not
+  currently proven safe; use `Vec.replace`/`Vec.remove` for owned
+  elements.
 - Dropping a raw-pointer value is a no-op: the pointer carries no
   ownership information. Dropping through `*p` is not checked against
   the allocation's real lifetime, so it belongs to the unsafe subset.
