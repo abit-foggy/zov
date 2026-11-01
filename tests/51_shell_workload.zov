@@ -1,0 +1,57 @@
+// small zovsh-style workload: owned line input, string comparison,
+// command splitting, file round-trip, and deterministic cleanup
+use std::io;
+use std::str as strings;
+use std::fs as fs;
+
+export fn main() i32 = {
+    let mut commands: i32 = 0;
+    while (true) {
+        let r = io::readline();
+        let line: String = match (r) {
+            case let s: String => s,
+            case Eof => break,
+            case IoError => return 2,
+        };
+        if (line == "exit") {
+            line.free();
+            break;
+        };
+        if (line.view().len == 0usize) {
+            line.free();
+            continue;
+        };
+        let parts = strings::split_byte(line.view(), 32u8);
+        let argc = parts.len();
+        io::println("cmd {argc}");
+        if (argc > 0usize) {
+            let head: str = parts.get(0usize);
+            if (head == "echo") {
+                let mut i: usize = 1usize;
+                while (i < argc) {
+                    io::println(parts.get(i));
+                    i += 1usize;
+                };
+            };
+        };
+        parts.free();
+        line.free();
+        commands += 1;
+    };
+
+    let w = fs::write_str("shell_history.txt", "history");
+    let wrote: bool = match (w) {
+        case _ => true,
+        case FsError => false,
+    };
+    if (!wrote) { return 3; };
+    let stored = fs::read_str("shell_history.txt");
+    let content: String = match (stored) {
+        case let s: String => s,
+        case FsError => return 4,
+    };
+    io::println("note={content.view()}");
+    content.free();
+    io::println("commands={commands}");
+    return 0;
+};
