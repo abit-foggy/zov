@@ -42,7 +42,11 @@ Zov has no implicit destructors. These operations release resources:
   - `Vec` / `Map` / `Arena`: calls their `free()` method, which releases
     elements and backing storage.
   `mem::drop` requires a place (variable, field, index, or dereference);
-  it rejects temporaries (`E0605`). The place is poisoned afterwards:
+  it rejects temporaries (`E0605`). If the place is reached through a
+  reference (`*r`, `r.field`, `r.items[i]`), it is rejected with `E0605`:
+  the owner would keep believing it still owns the resources, so a later
+  `free()` could double-free. Drop the owning binding instead. Raw-pointer
+  dereferences remain in the unchecked subset. The place is poisoned afterwards:
   use is `E0504`, a second drop is `E0509`, and dropping a moved value
   is `E0503`.
 - `Vec.free()` drops every initialized element and the backing array.
