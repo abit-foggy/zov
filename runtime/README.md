@@ -54,7 +54,9 @@ void zov_panic(const char *code, const char *msg, const char *file,
 `runtime/example/hosted_runtime.c` is a host-linkable reference
 implementation used by `tests/run.sh`; it adds a `main` shim so a
 freestanding object can be executed on a development machine. It is not
-kernel code.
+kernel code. `runtime/example/minimal_hosted_runtime.c` is the same shim
+with only the required `zov_panic` hook: linking against it proves the
+reserved allocator symbols are optional.
 
 ## Building and linking
 

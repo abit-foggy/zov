@@ -792,6 +792,51 @@ run_freestanding_link() {
     pass "freestanding panic hook"
 }
 
+/* The minimal runtime defines no allocator symbols: linking generated
+ * code against it must still succeed, so those hooks stay optional. */
+run_freestanding_minimal_runtime() {
+    require_cmd cc || return
+    require_file "$ROOT/runtime/example/minimal_hosted_runtime.c" || return
+
+    run_limited "$TMP/rt_min.c" "$TMP/rt_min.emit.err" \
+        "$ZOV" --freestanding --emit-c \
+        "$ROOT/tests/16_freestanding_smoke.zov"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding minimal runtime (emit exited $status)"
+        show_file "$TMP/rt_min.emit.err"
+        return
+    fi
+    run_limited "$TMP/rt_min.cc.out" "$TMP/rt_min.cc.err" \
+        cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+        -ffreestanding -c "$TMP/rt_min.c" -o "$TMP/rt_min.o"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding minimal runtime (object compile exited $status)"
+        show_file "$TMP/rt_min.cc.err"
+        return
+    fi
+    run_limited "$TMP/rt_min.link.out" "$TMP/rt_min.link.err" \
+        cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+        "$ROOT/runtime/example/minimal_hosted_runtime.c" "$TMP/rt_min.o" \
+        -o "$TMP/rt_min"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding minimal runtime (link exited $status)"
+        show_file "$TMP/rt_min.link.err"
+        return
+    fi
+    run_limited "$TMP/rt_min.out" "$TMP/rt_min.err" \
+        sh -c 'exec "$1" < /dev/null' sh "$TMP/rt_min"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "freestanding minimal runtime (program exited $status)"
+        show_file "$TMP/rt_min.err"
+        return
+    fi
+    pass "freestanding minimal runtime link"
+}
+
 run_strict_c99() {
     require_cmd cc || return
     strict_fail=0
@@ -1299,6 +1344,7 @@ run_lsp
 run_zovc_cc
 run_freestanding
 run_freestanding_link
+run_freestanding_minimal_runtime
 run_strict_c99
 run_freestanding_arch
 run_freestanding_package
