@@ -368,17 +368,26 @@ EOF
             ;;
     esac
 
-    if [ "$expect_code" != "-" ]; then
-        case $first_error in
-            *" error: [$expect_code] "*)
-                ;;
-            *)
-                fail "$base (expected error code [$expect_code])"
-                printf '    got:      %s\n' "$first_error"
-                return
-                ;;
-        esac
+    if [ "$expect_code" = "-" ] || [ -z "$expect_code" ]; then
+        fail "$base (expected.txt must assert a diagnostic code)"
+        return
     fi
+    case $expect_code in
+        [EW][0-9][0-9][0-9][0-9]) ;;
+        *)
+            fail "$base (malformed diagnostic code '$expect_code')"
+            return
+            ;;
+    esac
+    case $first_error in
+        *" error: [$expect_code] "*)
+            ;;
+        *)
+            fail "$base (expected error code [$expect_code])"
+            printf '    got:      %s\n' "$first_error"
+            return
+            ;;
+    esac
 
     if ! printf '%s\n' "$first_error" | grep -Fq "$expect_msg"; then
         fail "$base (diagnostic message does not contain '$expect_msg')"
@@ -424,12 +433,45 @@ run_check() {
         show_file "$TMP/check-invalid.err"
         return
     fi
-    expected_diag="$TMP/invalid.zov:2:5: error: cannot bind str to i32"
+    expected_diag="$TMP/invalid.zov:2:5: error: [E0601] cannot bind str to i32"
     if grep -Fq "$expected_diag" "$TMP/check-invalid.err"; then
         pass "--check invalid diagnostic location"
     else
         fail "--check invalid diagnostic location (missing '$expected_diag')"
         show_file "$TMP/check-invalid.err"
+    fi
+}
+
+run_diagnostic_registry() {
+    run_limited "$TMP/diagcodes.out" "$TMP/diagcodes.err" \
+        "$ZOV" diagnostics
+    status=$?
+    if [ "$status" -ne 0 ] || [ ! -s "$TMP/diagcodes.out" ]; then
+        fail "diagnostics listing (status $status)"
+        show_file "$TMP/diagcodes.err"
+        return
+    fi
+    dup=$(awk '{print $1}' "$TMP/diagcodes.out" | sort | uniq -d)
+    if [ -n "$dup" ]; then
+        fail "diagnostics listing has duplicate codes: $dup"
+        return
+    fi
+    if ! grep -q "^E0402  undefined symbol$" "$TMP/diagcodes.out" \
+        || ! grep -q "^E0503  use of moved value$" "$TMP/diagcodes.out"; then
+        fail "diagnostics listing is missing stable codes"
+        return
+    fi
+    pass "diagnostic code registry"
+
+    run_limited "$TMP/explain.out" "$TMP/explain.err" \
+        "$ZOV" explain E0402
+    status=$?
+    if [ "$status" -eq 0 ] && grep -q "undefined symbol" "$TMP/explain.out"; then
+        pass "explain diagnostic code"
+    else
+        fail "explain diagnostic code"
+        show_file "$TMP/explain.out"
+        show_file "$TMP/explain.err"
     fi
 }
 
@@ -986,6 +1028,7 @@ done
 # ---------------------------------------------------------------------------
 
 run_check
+run_diagnostic_registry
 run_lsp
 run_zovc_cc
 run_freestanding

@@ -120,7 +120,7 @@ static void scope_add(Sema *se, Sym sym)
 {
     for (size_t i = se->scope->syms.len; i > 0; i--)
         if (se->scope->syms.items[i - 1].name == sym.name)
-            fatal_at(sym.span, "duplicate definition of '%s'", sym.name);
+            fatal_at(E0409, sym.span, "duplicate definition of '%s'", sym.name);
     da_push(&se->scope->syms, sym);
 }
 
@@ -146,7 +146,7 @@ static Decl *find_struct_decl(Sema *se, const char *name)
 static void check_type_cycle(Sema *se, Decl *d, const char **path, int npath)
 {
     if (npath >= 64)
-        fatal_at(d->span, "type nesting is too deep");
+        fatal_at(E0805, d->span, "type nesting is too deep");
     path[npath] = d->u.type.name;
     for (size_t i = 0; i < d->u.type.fields.len; i++) {
         Field *f = &d->u.type.fields.items[i];
@@ -162,7 +162,7 @@ static void check_type_cycle(Sema *se, Decl *d, const char **path, int npath)
                     && !zstr_eq(m->name, "String")) {
                     for (int p = 0; p <= npath; p++)
                         if (path[p] == m->name || zstr_eq(path[p], m->name))
-                            fatal_at(f->span,
+                            fatal_at(E0410, f->span,
                                      "recursive type '%s' has infinite size; "
                                      "use a pointer or slice", m->name);
                 }
@@ -174,7 +174,7 @@ static void check_type_cycle(Sema *se, Decl *d, const char **path, int npath)
             continue;
         for (int p = 0; p <= npath; p++)
             if (path[p] == t->name || zstr_eq(path[p], t->name))
-                fatal_at(f->span,
+                fatal_at(E0410, f->span,
                          "recursive type '%s' has infinite size; "
                          "use a pointer or slice", t->name);
         Decl *next = find_struct_decl(se, t->name);
@@ -321,7 +321,7 @@ static void check_int_literal(Expr *e, Type *ty)
     if (!int_bounds(ty, &max, &is_signed))
         return;
     if (e->u.ilit.v > max)
-        fatal_at(e->span, "integer literal %llu does not fit in %s",
+        fatal_at(E0701, e->span, "integer literal %llu does not fit in %s",
                  (unsigned long long)e->u.ilit.v, type_spelling(ty));
 }
 
@@ -393,7 +393,7 @@ static void ns_call_diag(Sema *se, Expr *callee, Span span)
     const char *ns = callee->u.nident.ns;
     Sym *nsym = scope_find(se->scope, ns);
     if (nsym && nsym->kind == SYM_NS && nsym->is_zov)
-        fatal_at(span, "module '%s' has no function '%s'", ns,
+        fatal_at(E0403, span, "module '%s' has no function '%s'", ns,
                  callee->u.nident.name);
     const char *stdpath = NULL;
     if (strstr(ns, "::")) {
@@ -406,7 +406,7 @@ static void ns_call_diag(Sema *se, Expr *callee, Span span)
             stdpath = str_intern_c(probe);
     }
     if (stdpath)
-        fatal_at(span, "module '%s' is not imported; add `use %s;` "
+        fatal_at(E0404, span, "module '%s' is not imported; add `use %s;` "
                  "at the top of the file", ns, stdpath);
 }
 
@@ -447,7 +447,7 @@ static Type *resolve_type(Sema *se, Type *t)
         if (strstr(t->name, "::")) {
             Type *r = resolve_ns_type(se, t->name);
             if (!r)
-                fatal("unknown imported type '%s'", t->name);
+                diag_fatal_global(E0408, "unknown imported type '%s'", t->name);
             return r;
         }
         /* named aliases: !T error types and unions registered earlier */
@@ -687,13 +687,13 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
         }
     }
     if (!sym || sym->kind != SYM_TYPE || !sym->is_template || !sym->decl)
-        fatal("'%s' is not a generic type", tname);
+        diag_fatal_global(E0801, "'%s' is not a generic type", tname);
     /* canonicalize qualified names: the key must match receiver
      * instantiations built inside the defining module */
     tname = sym->decl->u.type.name;
     StrList *tps = &sym->decl->u.type.tparams;
     if (tps->len != args->len)
-        fatal("'%s' expects %lu type argument(s), got %lu", tname,
+        diag_fatal_global(E0802, "'%s' expects %lu type argument(s), got %lu", tname,
               (unsigned long)tps->len, (unsigned long)args->len);
     char *key = inst_key(tname, args);
     Decl *existing = find_decl_by_name(se, str_intern_c(key));
@@ -961,11 +961,11 @@ static Sym *instantiate_fn(Sema *se, const char *fname, TypeList *args,
 {
     Sym *sym = scope_find(se->scope, fname);
     if (!sym || sym->kind != SYM_FN || !sym->is_template || !sym->decl)
-        fatal_at(span, "'%s' is not a generic function",
+        fatal_at(E0801, span, "'%s' is not a generic function",
                  fn_display_name(sym));
     StrList *tps = &sym->decl->u.fn.tparams;
     if (tps->len != args->len)
-        fatal_at(span, "'%s' expects %lu type argument(s), got %lu",
+        fatal_at(E0802, span, "'%s' expects %lu type argument(s), got %lu",
                  fn_display_name(sym),
                  (unsigned long)tps->len, (unsigned long)args->len);
     char *key = inst_key(fname, args);
@@ -985,9 +985,9 @@ static Sym *instantiate_method(Sema *se, Sym *m, const char *key,
             td = d;
     }
     if (!td)
-        fatal("unknown generic struct '%s'", tmpl_sname);
+        diag_fatal_global(E0408, "unknown generic struct '%s'", tmpl_sname);
     if (td->u.type.tparams.len != inst_args->len)
-        fatal("'%s' instantiation arity mismatch", tmpl_sname);
+        diag_fatal_global(E0802, "'%s' instantiation arity mismatch", tmpl_sname);
     TypeList margs = {0};
     for (size_t i = 0; i < m->decl->u.fn.tparams.len; i++) {
         const char *want = m->decl->u.fn.tparams.items[i];
@@ -999,7 +999,7 @@ static Sym *instantiate_method(Sema *se, Sym *m, const char *key,
                 break;
             }
         if (!found)
-            fatal("method type parameter '%s' is not bound by the receiver",
+            diag_fatal_global(E0804, "method type parameter '%s' is not bound by the receiver",
                   want);
     }
     StrList *tps = &m->decl->u.fn.tparams;
@@ -1010,7 +1010,7 @@ static void require_bool(Expr *cond)
 {
     if (cond->type && cond->type->kind == TY_BOOL)
         return;
-    fatal_at(cond->span, "condition must be bool, got %s",
+    fatal_at(E0604, cond->span, "condition must be bool, got %s",
              type_spelling(cond->type));
 }
 
@@ -1022,7 +1022,7 @@ static void require_same(Expr *a, Expr *b, const char *op)
         return;
     if (type_eq(a->type, b->type))
         return;
-    fatal_at(a->span, "type mismatch for '%s': %s vs %s (use an 'as' cast)",
+    fatal_at(E0601, a->span, "type mismatch for '%s': %s vs %s (use an 'as' cast)",
              op, type_spelling(a->type), type_spelling(b->type));
 }
 
@@ -1065,7 +1065,7 @@ static Type *infer_tparam(Type *pt, Type *at, const char *tp)
 static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
 {
     if (e->u.call.args.len != fn->params.len)
-        fatal_at(e->span, "'%s' expects %lu argument(s), got %lu",
+        fatal_at(E0602, e->span, "'%s' expects %lu argument(s), got %lu",
                  fn_display_name(fn),
                  (unsigned long)fn->params.len,
                  (unsigned long)e->u.call.args.len);
@@ -1082,7 +1082,7 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
         if (null_fits(arg, pt))
             continue;
         if (!type_eq(arg->type, pt))
-            fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+            fatal_at(E0601, arg->span, "argument %lu of '%s': expected %s, got %s",
                      (unsigned long)(i + 1), fn_display_name(fn),
                      type_spelling(pt),
                      type_spelling(arg->type));
@@ -1094,7 +1094,7 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
                               : fn->decl->u.fn.name;
         if (zstr_eq(src, "print") || zstr_eq(src, "println")) {
             if (se->prog->freestanding)
-                fatal_at(e->span,
+                fatal_at(E0306, e->span,
                          "std::io is unavailable in freestanding builds; "
                          "use a platform output hook");
             e->builtin_print = zstr_eq(src, "print") ? 1 : 2;
@@ -1122,11 +1122,11 @@ static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
             && (pt->base->kind == TY_I8 || pt->base->kind == TY_U8))
             return;
         if (at->kind == TY_PTR && at->nullable)
-            fatal_at(arg->span,
+            fatal_at(E0607, arg->span,
                      "cannot pass nullable %s to '%s' parameter %lu: "
                      "narrow it via match or unwrap",
                      type_spelling(at), fname, (unsigned long)idx);
-        fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+        fatal_at(E0601, arg->span, "argument %lu of '%s': expected %s, got %s",
                  (unsigned long)idx, fname, type_spelling(pt),
                  type_spelling(at));
     }
@@ -1141,13 +1141,13 @@ static void check_c_arg(Sema *se, Expr *arg, Type *pt, const char *fname,
         if (at->kind == TY_STR
             && (pt->base->kind == TY_I8 || pt->base->kind == TY_U8))
             return;
-        fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+        fatal_at(E0601, arg->span, "argument %lu of '%s': expected %s, got %s",
                  (unsigned long)idx, fname, type_spelling(pt),
                  type_spelling(at));
     }
     if (type_eq(at, pt))
         return;
-    fatal_at(arg->span, "argument %lu of '%s': expected %s, got %s",
+    fatal_at(E0601, arg->span, "argument %lu of '%s': expected %s, got %s",
              (unsigned long)idx, fname, type_spelling(pt), type_spelling(at));
 }
 
@@ -1155,20 +1155,20 @@ static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
 {
     Sym *ns = scope_find(se->scope, callee->u.nident.ns);
     if (!ns)
-        fatal_at(callee->span, "unknown namespace '%s'", callee->u.nident.ns);
+        fatal_at(E0405, callee->span, "unknown namespace '%s'", callee->u.nident.ns);
     if (ns->kind != SYM_NS || !ns->hdr)
-        fatal_at(callee->span, "'%s' is not a C namespace",
+        fatal_at(E0405, callee->span, "'%s' is not a C namespace",
                  callee->u.nident.ns);
     CMember *fn = cimport_find(ns->hdr, callee->u.nident.name);
     if (!fn)
-        fatal_at(callee->span, "unknown C symbol '%s::%s'",
+        fatal_at(E0402, callee->span, "unknown C symbol '%s::%s'",
                  callee->u.nident.ns, callee->u.nident.name);
     if (fn->kind != CM_FN)
-        fatal_at(callee->span, "'%s::%s' is not a function",
+        fatal_at(E0406, callee->span, "'%s::%s' is not a function",
                  callee->u.nident.ns, callee->u.nident.name);
     if (e->u.call.args.len < fn->params.len
         || (!fn->variadic && e->u.call.args.len > fn->params.len))
-        fatal_at(e->span, "'%s' expects %lu argument(s)%s, got %lu",
+        fatal_at(E0602, e->span, "'%s' expects %lu argument(s)%s, got %lu",
                  fn->name, (unsigned long)fn->params.len,
                  fn->variadic ? " or more" : "",
                  (unsigned long)e->u.call.args.len);
@@ -1184,7 +1184,7 @@ static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
                 && at->kind != TY_STR && !is_ptrish(at)
                 && at->kind != TY_CHAR && at->kind != TY_BOOL
                 && at->kind != TY_UNION)
-                fatal_at(arg->span, "cannot pass %s through '...'",
+                fatal_at(E0604, arg->span, "cannot pass %s through '...'",
                          type_spelling(at));
         }
     }
@@ -1241,7 +1241,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                           "undefined symbol '%s'", e->u.ident);
         }
         if (sym->kind != SYM_VAR)
-            fatal_at(e->span, "'%s' is not a variable", e->u.ident);
+            fatal_at(E0406, e->span, "'%s' is not a variable", e->u.ident);
         sym->read_count++;
         e->type = sym->type;
         return e->type;
@@ -1249,7 +1249,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     case EX_NS_IDENT: {
         Sym *ns = scope_find(se->scope, e->u.nident.ns);
         if (!ns)
-            fatal_at(e->span, "unknown namespace '%s'", e->u.nident.ns);
+            fatal_at(E0405, e->span, "unknown namespace '%s'", e->u.nident.ns);
         /* enum variant: Color::Red resolves through the type registry */
         if (ns->kind == SYM_TYPE && ns->type && ns->type->kind == TY_ENUM) {
             Decl *ed = find_enum_decl(se, e->u.nident.ns);
@@ -1262,20 +1262,20 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     e->variant_c = str_intern_c(cbuf);
                     return e->type;
                 }
-            fatal_at(e->span, "enum '%s' has no variant '%s'",
+            fatal_at(E0407, e->span, "enum '%s' has no variant '%s'",
                      e->u.nident.ns, e->u.nident.name);
         }
         if (ns->kind != SYM_NS || !ns->hdr)
-            fatal_at(e->span, "'%s' is not a namespace", e->u.nident.ns);
+            fatal_at(E0405, e->span, "'%s' is not a namespace", e->u.nident.ns);
         CMember *m = cimport_find(ns->hdr, e->u.nident.name);
         if (!m)
-            fatal_at(e->span, "unknown symbol '%s::%s'", e->u.nident.ns,
+            fatal_at(E0402, e->span, "unknown symbol '%s::%s'", e->u.nident.ns,
                      e->u.nident.name);
         if (m->kind == CM_CONST) {
             e->type = m->ret;
             return e->type;
         }
-        fatal_at(e->span, "'%s::%s' is not a value", e->u.nident.ns,
+        fatal_at(E0406, e->span, "'%s::%s' is not a value", e->u.nident.ns,
                  e->u.nident.name);
         return NULL;
     }
@@ -1285,11 +1285,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (lhs->kind == EX_IDENT) {
             Sym *sym = scope_find(se->scope, lhs->u.ident);
             if (!sym)
-                fatal_at(lhs->span, "undefined symbol '%s'", lhs->u.ident);
+                fatal_at(E0402, lhs->span, "undefined symbol '%s'", lhs->u.ident);
             if (sym->kind != SYM_VAR)
-                fatal_at(lhs->span, "'%s' is not a variable", lhs->u.ident);
+                fatal_at(E0406, lhs->span, "'%s' is not a variable", lhs->u.ident);
             if (!sym->mut)
-                fatal_at(lhs->span,
+                fatal_at(E0516, lhs->span,
                          "cannot assign to immutable binding '%s'",
                          lhs->u.ident);
             lhs->type = sym->type;
@@ -1301,7 +1301,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         } else if (lhs->kind == EX_FIELD) {
             lt = check_expr(se, lhs, NULL);
         } else {
-            fatal_at(lhs->span, "invalid assignment target");
+            fatal_at(E0707, lhs->span, "invalid assignment target");
             return NULL;
         }
         Type *rt = check_expr(se, e->u.assign.rhs, lt);
@@ -1316,10 +1316,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                        || e->comp_op == TK_SHL_EQ
                        || e->comp_op == TK_SHR_EQ);
             if (!is_unknown(lt) && !ty_is_int(lt->kind))
-                fatal_at(e->span, "compound assignment requires an "
+                fatal_at(E0709, e->span, "compound assignment requires an "
                          "integer lvalue, got %s", type_spelling(lt));
             if (!bit && !is_unknown(lt) && !ty_is_num(lt->kind))
-                fatal_at(e->span, "compound assignment requires a "
+                fatal_at(E0709, e->span, "compound assignment requires a "
                          "numeric lvalue, got %s", type_spelling(lt));
             (void)rt;
             e->type = lt;
@@ -1328,7 +1328,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (!is_unknown(rt) && !is_unknown(lt) && !type_eq(lt, rt)
             && !ptr_widens(rt, lt)
             && !null_fits(e->u.assign.rhs, lt))
-            fatal_at(e->span, "cannot assign %s to %s", type_spelling(rt),
+            fatal_at(E0601, e->span, "cannot assign %s to %s", type_spelling(rt),
                      type_spelling(lt));
         e->type = lt;
         return e->type;
@@ -1353,13 +1353,13 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Type *rt = check_expr(se, e->u.binary.rhs, lt);
         if (bitwise) {
             if (!is_unknown(lt) && !ty_is_int(lt->kind))
-                fatal_at(e->span, "'%s' requires integer operands, got %s",
+                fatal_at(E0604, e->span, "'%s' requires integer operands, got %s",
                          op == TK_AMP ? "&" : op == TK_PIPE ? "|"
                          : op == TK_CARET ? "^" : op == TK_SHL ? "<<"
                                                              : ">>",
                          type_spelling(lt));
             if (!is_unknown(rt) && !ty_is_int(rt->kind))
-                fatal_at(e->u.binary.rhs->span,
+                fatal_at(E0604, e->u.binary.rhs->span,
                          "shift/bit operands must be integers, got %s",
                          type_spelling(rt));
             require_same(e->u.binary.lhs, e->u.binary.rhs, "<bitwise>");
@@ -1385,11 +1385,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             /* str/String + T scripting chain: any printable T.  The
              * result owns a fresh heap buffer and must be released. */
             if (!is_printable(lt) || !is_printable(e->u.binary.rhs->type))
-                fatal_at(e->span, "cannot concatenate %s with %s",
+                fatal_at(E0604, e->span, "cannot concatenate %s with %s",
                          type_spelling(lt),
                          type_spelling(e->u.binary.rhs->type));
             if (se->prog->freestanding)
-                fatal_at(e->span,
+                fatal_at(E0306, e->span,
                          "String concatenation needs an allocator; "
                          "freestanding builds must provide one explicitly");
             e->type = type_struct("String");
@@ -1398,7 +1398,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (comparison && (is_stringish(lt)
                            || is_stringish(e->u.binary.rhs->type))) {
             if (!is_stringish(lt) || !is_stringish(e->u.binary.rhs->type))
-                fatal_at(e->span,
+                fatal_at(E0604, e->span,
                          "cannot compare %s with %s", type_spelling(lt),
                          type_spelling(e->u.binary.rhs->type));
             e->type = type_prim(TY_BOOL);
@@ -1416,14 +1416,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                                    || t->kind == TY_BOOL))
                      || (!eq_ne && t->kind == TY_STR);
             if (!is_unknown(t) && !ok)
-                fatal_at(e->span,
+                fatal_at(E0604, e->span,
                          "relational operators require numeric or str "
                          "operands");
             e->type = type_prim(TY_BOOL);
         } else {
             Type *t = e->u.binary.lhs->type;
             if (!is_unknown(t) && !ty_is_num(t->kind))
-                fatal_at(e->span, "arithmetic requires numeric operands");
+                fatal_at(E0604, e->span, "arithmetic requires numeric operands");
             e->type = is_unknown(t) ? unknown() : t;
         }
         return e->type;
@@ -1440,7 +1440,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = lt;
             if (int_bounds(lt, &max, &is_signed) && lit->u.ilit.v > max) {
                 if (!(is_signed && max != UINT64_MAX && lit->u.ilit.v == max + 1))
-                    fatal_at(lit->span,
+                    fatal_at(E0701, lit->span,
                              "integer literal %llu does not fit in %s",
                              (unsigned long long)lit->u.ilit.v,
                              type_spelling(lt));
@@ -1451,12 +1451,12 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         switch (e->u.unary.op) {
         case TK_MINUS:
             if (!is_unknown(t) && !ty_is_num(t->kind))
-                fatal_at(e->span, "unary '-' requires a numeric operand");
+                fatal_at(E0604, e->span, "unary '-' requires a numeric operand");
             e->type = t;
             break;
         case TK_TILDE:
             if (!is_unknown(t) && !ty_is_int(t->kind))
-                fatal_at(e->span,
+                fatal_at(E0604, e->span,
                          "unary '~' requires an integer operand, got %s",
                          type_spelling(t));
             e->type = t;
@@ -1470,7 +1470,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = type_ref(t, e->borrow_mut);
             break;
         default:
-            fatal_at(e->span, "unsupported unary operator");
+            fatal_at(E0902, e->span, "unsupported unary operator");
         }
         return e->type;
     }
@@ -1480,27 +1480,27 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             && zstr_eq(callee->u.nident.ns, "String")) {
             if (zstr_eq(callee->u.nident.name, "new")) {
                 if (e->u.call.args.len != 0)
-                    fatal_at(e->span, "String::new takes no arguments");
+                    fatal_at(E0602, e->span, "String::new takes no arguments");
                 e->builtin_str_ctor = 2;
                 e->type = type_struct("String");
                 return e->type;
             }
             if (zstr_eq(callee->u.nident.name, "from_owned")) {
                 if (e->u.call.args.len != 3)
-                    fatal_at(e->span,
+                    fatal_at(E0602, e->span,
                              "String::from_owned takes data, len, and cap");
                 Type *dt = check_expr(se, e->u.call.args.items[0], NULL);
                 if (!is_unknown(dt)
                     && !(dt->kind == TY_PTR && dt->base
                          && dt->base->kind == TY_U8))
-                    fatal_at(e->u.call.args.items[0]->span,
+                    fatal_at(E0601, e->u.call.args.items[0]->span,
                              "String::from_owned expects *u8 data, got %s",
                              type_spelling(dt));
                 for (size_t ai = 1; ai < 3; ai++) {
                     Type *at = check_expr(se, e->u.call.args.items[ai],
                                           type_prim(TY_USIZE));
                     if (!is_unknown(at) && at->kind != TY_USIZE)
-                        fatal_at(e->u.call.args.items[ai]->span,
+                        fatal_at(E0601, e->u.call.args.items[ai]->span,
                                  "String::from_owned expects usize length "
                                  "and capacity, got %s", type_spelling(at));
                 }
@@ -1510,22 +1510,22 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             }
             if (zstr_eq(callee->u.nident.name, "from")) {
                 if (e->u.call.args.len != 1)
-                    fatal_at(e->span, "String::from takes one argument");
+                    fatal_at(E0602, e->span, "String::from takes one argument");
                 Type *at = check_expr(se, e->u.call.args.items[0],
                                       type_prim(TY_STR));
                 if (!is_unknown(at) && !is_stringish(at))
-                    fatal_at(e->u.call.args.items[0]->span,
+                    fatal_at(E0601, e->u.call.args.items[0]->span,
                              "String::from expects str or String, got %s",
                              type_spelling(at));
                 if (se->prog->freestanding)
-                    fatal_at(e->span,
+                    fatal_at(E0306, e->span,
                              "String allocation is unavailable in "
                              "freestanding mode; provide an allocator");
                 e->builtin_str_ctor = 1;
                 e->type = type_struct("String");
                 return e->type;
             }
-            fatal_at(callee->span, "String has no associated function '%s'",
+            fatal_at(E0407, callee->span, "String has no associated function '%s'",
                      callee->u.nident.name);
         }
         if (callee->kind == EX_NS_IDENT) {
@@ -1559,16 +1559,16 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             Type *bt = check_expr(se, callee->u.field.base, NULL);
             if (!bt || (bt->kind != TY_STRUCT && bt->kind != TY_REF
                         && bt->kind != TY_MUTREF))
-                fatal_at(callee->span,
+                fatal_at(E0414, callee->span,
                          "method calls require a struct receiver");
             Type *st = bt;
             while (st && (st->kind == TY_REF || st->kind == TY_MUTREF))
                 st = st->base;
             if (!st || st->kind != TY_STRUCT || !st->name)
-                fatal_at(callee->span, "methods require a struct receiver");
+                fatal_at(E0414, callee->span, "methods require a struct receiver");
             if (is_string_type(st)) {
                 if (e->u.call.args.len != 0)
-                    fatal_at(e->span, "String.%s takes no arguments",
+                    fatal_at(E0602, e->span, "String.%s takes no arguments",
                              callee->u.field.name);
                 Expr *recv = callee->u.field.base;
                 e->str_recv = recv;
@@ -1588,13 +1588,13 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     return e->type;
                 }
 
-                fatal_at(callee->span, "String has no method '%s'",
+                fatal_at(E0407, callee->span, "String has no method '%s'",
                          callee->u.field.name);
             }
             const char *sname = st->tmpl ? st->tmpl : st->name;
             Sym *m = find_method(se, sname, callee->u.field.name);
             if (!m)
-                fatal_at(callee->span, "struct '%s' has no method '%s'",
+                fatal_at(E0407, callee->span, "struct '%s' has no method '%s'",
                          sname, callee->u.field.name);
             if (m->is_template) {
                 char key[512];
@@ -1608,7 +1608,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 /* auto-borrow: &obj or &mut obj from a plain value */
                 if (bt->kind == TY_REF || bt->kind == TY_MUTREF) {
                     if (!type_eq(bt, rp->ty))
-                        fatal_at(recv->span,
+                        fatal_at(E0414, recv->span,
                                  "receiver expects %s, got %s",
                                  type_spelling(rp->ty), type_spelling(bt));
                 } else {
@@ -1643,19 +1643,19 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             && zstr_eq(callee->u.generic.base->u.ident, "hash_val")
             && !scope_find(se->scope, "hash_val")) {
             if (callee->u.generic.targs.len != 1)
-                fatal_at(callee->span,
+                fatal_at(E0806, callee->span,
                          "hash_val[T] takes one type argument");
             Type *kt = resolve_type(se, callee->u.generic.targs.items[0]);
             if (e->u.call.args.len != 1)
-                fatal_at(e->span, "hash_val[T] hashes exactly one value");
+                fatal_at(E0806, e->span, "hash_val[T] hashes exactly one value");
             Type *at = check_expr(se, e->u.call.args.items[0], kt);
             if (kt->kind != TY_STR && kt->kind != TY_ENUM
                 && !ty_is_int(kt->kind))
-                fatal_at(callee->span,
+                fatal_at(E0806, callee->span,
                          "hash_val supports str, integers, and enums, "
                          "not %s", type_spelling(kt));
             if (!is_unknown(at) && !type_eq(at, kt))
-                fatal_at(e->u.call.args.items[0]->span,
+                fatal_at(E0806, e->u.call.args.items[0]->span,
                          "hash_val[%s] argument must be %s, got %s",
                          type_spelling(kt), type_spelling(kt),
                          type_spelling(at));
@@ -1668,7 +1668,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             && zstr_eq(callee->u.generic.base->u.ident, "sizeof")
             && !scope_find(se->scope, "sizeof")) {
             if (callee->u.generic.targs.len != 1)
-                fatal_at(callee->span, "sizeof[T]() takes one type argument");
+                fatal_at(E0806, callee->span, "sizeof[T]() takes one type argument");
             e->szarg = resolve_type(se, callee->u.generic.targs.items[0]);
             e->type = type_prim(TY_USIZE);
             return e->type;
@@ -1677,7 +1677,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             /* swap in the specialized ident, then re-enter as a plain
              * user-fn call against the instantiated signature */
             if (callee->u.generic.base->kind != EX_IDENT)
-                fatal_at(callee->span,
+                fatal_at(E0804, callee->span,
                          "generic callee must be a plain identifier");
             TypeList targs = {0};
             for (size_t i = 0; i < callee->u.generic.targs.len; i++)
@@ -1696,7 +1696,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (!fn) {
                 if (zstr_eq(callee->u.ident, "zov_str_from_raw")) {
                     if (e->u.call.args.len != 2)
-                        fatal_at(e->span,
+                        fatal_at(E0806, e->span,
                                  "zov_str_from_raw takes a pointer and "
                                  "a length");
                     Type *pt = check_expr(se, e->u.call.args.items[0],
@@ -1704,10 +1704,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     Type *nt = check_expr(se, e->u.call.args.items[1],
                                          type_prim(TY_USIZE));
                     if (!is_unknown(pt) && !is_ptrish(pt))
-                        fatal_at(e->u.call.args.items[0]->span,
+                        fatal_at(E0806, e->u.call.args.items[0]->span,
                                  "zov_str_from_raw needs a pointer");
                     if (!is_unknown(nt) && !ty_is_int(nt->kind))
-                        fatal_at(e->u.call.args.items[1]->span,
+                        fatal_at(E0604, e->u.call.args.items[1]->span,
                                  "length must be an integer");
                     e->builtin_env_kind = 0;
                     e->type = type_prim(TY_STR);
@@ -1717,7 +1717,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 /* runtime-env builtins backing std::env */
                 if (zstr_eq(callee->u.ident, "zov_env_args_count")) {
                     if (e->u.call.args.len != 0)
-                        fatal_at(e->span, "zov_env_args_count takes no "
+                        fatal_at(E0806, e->span, "zov_env_args_count takes no "
                                           "arguments");
                     e->builtin_env_kind = 1;
                     e->type = type_prim(TY_USIZE);
@@ -1725,11 +1725,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 }
                 if (zstr_eq(callee->u.ident, "zov_env_arg_at")) {
                     if (e->u.call.args.len != 1)
-                        fatal_at(e->span, "zov_env_arg_at takes one index");
+                        fatal_at(E0806, e->span, "zov_env_arg_at takes one index");
                     Type *t = check_expr(se, e->u.call.args.items[0],
                                          type_prim(TY_USIZE));
                     if (!is_unknown(t) && !ty_is_int(t->kind))
-                        fatal_at(e->u.call.args.items[0]->span,
+                        fatal_at(E0604, e->u.call.args.items[0]->span,
                                  "argument index must be an integer");
                     e->builtin_env_kind = 2;
                     e->type = type_prim(TY_STR);
@@ -1737,11 +1737,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 }
                 if (zstr_eq(callee->u.ident, "zov_env_has")) {
                     if (e->u.call.args.len != 1)
-                        fatal_at(e->span, "zov_env_has takes one name");
+                        fatal_at(E0806, e->span, "zov_env_has takes one name");
                     Type *t = check_expr(se, e->u.call.args.items[0],
                                          type_prim(TY_STR));
                     if (!is_unknown(t) && t->kind != TY_STR)
-                        fatal_at(e->u.call.args.items[0]->span,
+                        fatal_at(E0806, e->u.call.args.items[0]->span,
                                  "environment names must be str");
                     e->builtin_env_kind = 3;
                     e->type = type_prim(TY_BOOL);
@@ -1749,11 +1749,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 }
                 if (zstr_eq(callee->u.ident, "zov_env_get_str")) {
                     if (e->u.call.args.len != 1)
-                        fatal_at(e->span, "zov_env_get_str takes one name");
+                        fatal_at(E0806, e->span, "zov_env_get_str takes one name");
                     Type *t = check_expr(se, e->u.call.args.items[0],
                                          type_prim(TY_STR));
                     if (!is_unknown(t) && t->kind != TY_STR)
-                        fatal_at(e->u.call.args.items[0]->span,
+                        fatal_at(E0806, e->u.call.args.items[0]->span,
                                  "environment names must be str");
                     e->builtin_env_kind = 4;
                     e->type = type_prim(TY_STR);
@@ -1762,11 +1762,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 if (zstr_eq(callee->u.ident, "assert")
                     && !scope_find(se->scope, "assert")) {
                     if (e->u.call.args.len != 1)
-                        fatal_at(e->span, "assert(cond) takes one "
+                        fatal_at(E0602, e->span, "assert(cond) takes one "
                                           "argument");
                     Type *t = check_expr(se, e->u.call.args.items[0], NULL);
                     if (!is_unknown(t) && t->kind != TY_BOOL)
-                        fatal_at(e->u.call.args.items[0]->span,
+                        fatal_at(E0604, e->u.call.args.items[0]->span,
                                  "assert requires bool, got %s",
                                  type_spelling(t));
                     e->builtin_assert = 1;
@@ -1786,21 +1786,21 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 }
             }
             if (fn->kind != SYM_FN)
-                fatal_at(callee->span, "'%s' is not callable",
+                fatal_at(E0413, callee->span, "'%s' is not callable",
                          callee->u.ident);
             if (fn->alias_to) {
                 /* module alias: rewrite to the registered spelling */
                 callee->u.ident = fn->alias_to;
                 fn = scope_find(se->scope, fn->alias_to);
                 if (!fn)
-                    fatal_at(callee->span, "unresolved module symbol '%s'",
+                    fatal_at(E0412, callee->span, "unresolved module symbol '%s'",
                              callee->u.ident);
             }
             if (fn->is_template) {
                 /* bare generic call: infer type args from the arguments */
                 StrList *tps = &fn->decl->u.fn.tparams;
                 if (e->u.call.args.len < fn->decl->u.fn.params.len)
-                    fatal_at(e->span, "'%s' expects %lu argument(s), "
+                    fatal_at(E0602, e->span, "'%s' expects %lu argument(s), "
                              "got %lu", fn_display_name(fn),
                              (unsigned long)fn->decl->u.fn.params.len,
                              (unsigned long)e->u.call.args.len);
@@ -1831,7 +1831,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 }
                 free(argtys.items);
                 if (!complete)
-                    fatal_at(callee->span,
+                    fatal_at(E0803, callee->span,
                              "generic function '%s' requires explicit type "
                              "arguments, e.g. %s[T](...)",
                              fn_display_name(fn), fn_display_name(fn));
@@ -1848,7 +1848,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (callee->kind == EX_NS_IDENT)
             return check_call_ns(se, e, callee);
-        fatal_at(callee->span, "expression is not callable");
+        fatal_at(E0413, callee->span, "expression is not callable");
         return NULL;
     }
     case EX_ARR_LIT: {
@@ -1860,7 +1860,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (!elem)
                 elem = t;
             else if (!is_unknown(t) && !type_eq(elem, t))
-                fatal_at(e->u.elems.items[i]->span,
+                fatal_at(E0601, e->u.elems.items[i]->span,
                          "array element %lu: expected %s, got %s",
                          (unsigned long)i, type_spelling(elem),
                          type_spelling(t));
@@ -1879,14 +1879,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         } else if (lt->kind == TY_UNION) {
             Type *payload = union_payload(lt);
             if (!payload)
-                fatal_at(e->span,
+                fatal_at(E0605, e->span,
                          "orelse requires exactly one non-error variant");
             result = payload;
             for (size_t i = 0; i < lt->members.len; i++)
                 if (lt->members.items[i] == payload)
                     payload_idx = (int)i;
         } else {
-            fatal_at(e->span,
+            fatal_at(E0605, e->span,
                      "orelse requires a nullable pointer or a tagged "
                      "union, got %s", type_spelling(lt));
         }
@@ -1898,7 +1898,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             Type *rt = check_expr(se, e->u.orelse.val, result);
             if (!is_unknown(rt) && !type_eq(result, rt)
                 && !ptr_widens(result, rt))
-                fatal_at(e->span, "orelse fallback is %s, expected %s",
+                fatal_at(E0601, e->span, "orelse fallback is %s, expected %s",
                          type_spelling(rt), type_spelling(result));
         }
         e->type = result;
@@ -1913,10 +1913,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                        ? check_expr(se, e->u.slice.end, type_prim(TY_USIZE))
                        : NULL;
         if (st && !is_unknown(st) && !ty_is_int(st->kind))
-            fatal_at(e->u.slice.start->span, "slice start must be an "
+            fatal_at(E0604, e->u.slice.start->span, "slice start must be an "
                      "integer, got %s", type_spelling(st));
         if (et && !is_unknown(et) && !ty_is_int(et->kind))
-            fatal_at(e->u.slice.end->span, "slice end must be an integer, "
+            fatal_at(E0604, e->u.slice.end->span, "slice end must be an integer, "
                      "got %s", type_spelling(et));
         if (bt->kind == TY_ARRAY || bt->kind == TY_SLICE) {
             e->type = type_slice(bt->base);
@@ -1931,14 +1931,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = type_slice(bt->base);
             return e->type;
         }
-        fatal_at(e->span, "cannot slice %s", type_spelling(bt));
+        fatal_at(E0605, e->span, "cannot slice %s", type_spelling(bt));
         return NULL;
     }
     case EX_INDEX: {
         Type *bt = check_expr(se, e->u.index.base, NULL);
         Type *it = check_expr(se, e->u.index.index, type_prim(TY_USIZE));
         if (!is_unknown(it) && !ty_is_int(it->kind))
-            fatal_at(e->u.index.index->span,
+            fatal_at(E0604, e->u.index.index->span,
                      "index must be an integer, got %s", type_spelling(it));
         if (is_unknown(bt))
             return unknown();
@@ -1952,14 +1952,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         }
         if (bt->kind == TY_PTR) {
             if (bt->nullable)
-                fatal_at(e->span, "cannot index nullable %s; narrow it "
+                fatal_at(E0605, e->span, "cannot index nullable %s; narrow it "
                                   "via match or unwrap",
                          type_spelling(bt));
             // raw pointer indexing: unchecked, for low-level containers
             e->type = bt->base;
             return e->type;
         }
-        fatal_at(e->span, "cannot index %s", type_spelling(bt));
+        fatal_at(E0605, e->span, "cannot index %s", type_spelling(bt));
         return NULL;
     }
     case EX_CAST: {
@@ -1967,13 +1967,13 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Type *dst = e->u.cast.t;
         if (!is_unknown(t) && !ty_is_num(t->kind) && t->kind != TY_CHAR
             && t->kind != TY_BOOL && !is_ptrish(t))
-            fatal_at(e->span, "cannot cast %s", type_spelling(t));
+            fatal_at(E0603, e->span, "cannot cast %s", type_spelling(t));
         if (!ty_is_num(dst->kind) && dst->kind != TY_CHAR
             && dst->kind != TY_BOOL && !is_ptrish(dst))
-            fatal_at(e->span, "cannot cast to %s", type_spelling(dst));
+            fatal_at(E0603, e->span, "cannot cast to %s", type_spelling(dst));
         if (t->kind == TY_PTR && t->nullable && dst->kind == TY_PTR
             && !dst->nullable)
-            fatal_at(e->span,
+            fatal_at(E0603, e->span,
                      "cannot cast %s to %s: narrow it via match "
                      "or '!' instead",
                      type_spelling(t), type_spelling(dst));
@@ -1982,19 +1982,19 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
     }
     case EX_GENERIC:
         /* call/literal sites handle their own instantiation */
-        fatal_at(e->span, "generic instantiation requires a call or struct "
+        fatal_at(E0804, e->span, "generic instantiation requires a call or struct "
                           "literal");
         return NULL;
     case EX_DEREF: {
         Type *t = check_expr(se, e->u.deref, NULL);
         if (t->kind == TY_PTR && t->nullable)
-            fatal_at(e->span,
+            fatal_at(E0605, e->span,
                      "cannot dereference nullable pointer; narrow it first");
         if (t->kind == TY_PTR || t->kind == TY_REF || t->kind == TY_MUTREF) {
             e->type = t->base;
             return e->type;
         }
-        fatal_at(e->span, "cannot dereference %s", type_spelling(t));
+        fatal_at(E0605, e->span, "cannot dereference %s", type_spelling(t));
         return NULL;
     }
     case EX_FIELD: {
@@ -2015,7 +2015,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 e->type = type_ptr(type_prim(TY_U8), 0);
                 return e->type;
             }
-            fatal_at(e->span, "str has no field '%s'", e->u.field.name);
+            fatal_at(E0407, e->span, "str has no field '%s'", e->u.field.name);
         }
         if (t->kind == TY_SLICE) {
             if (zstr_eq(e->u.field.name, "len")) {
@@ -2037,20 +2037,20 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             t = t->base;
         }
         if (is_string_type(t))
-            fatal_at(e->span,
+            fatal_at(E0415, e->span,
                      "String fields are private; use view(), len(), or "
                      "free()");
         if (t->kind != TY_STRUCT || !t->name)
-            fatal_at(e->span, "%s has no fields", type_spelling(t));
+            fatal_at(E0407, e->span, "%s has no fields", type_spelling(t));
         Decl *d = find_struct_decl(se, t->name);
         if (!d)
-            fatal_at(e->span, "unknown struct type '%s'", t->name);
+            fatal_at(E0408, e->span, "unknown struct type '%s'", t->name);
         for (size_t i = 0; i < d->u.type.fields.len; i++)
             if (d->u.type.fields.items[i].name == e->u.field.name) {
                 e->type = d->u.type.fields.items[i].ty;
                 return e->type;
             }
-        fatal_at(e->span, "struct '%s' has no field '%s'", t->name,
+        fatal_at(E0407, e->span, "struct '%s' has no field '%s'", t->name,
                  e->u.field.name);
         return NULL;
     }
@@ -2069,14 +2069,14 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 st = sym->type;
         }
         if (!st)
-            fatal_at(e->span, "'%s' is not a struct type", e->u.stlit.name);
+            fatal_at(E0408, e->span, "'%s' is not a struct type", e->u.stlit.name);
         if (is_string_type(st))
-            fatal_at(e->span,
+            fatal_at(E0605, e->span,
                      "String values must be built with String::new, "
                      "String::from, or String::from_owned");
         Decl *d = find_struct_decl(se, st->name);
         if (!d)
-            fatal_at(e->span, "unknown struct type '%s'", st->name);
+            fatal_at(E0408, e->span, "unknown struct type '%s'", st->name);
         for (size_t i = 0; i < e->u.stlit.fields.len; i++) {
             FieldInit *fi = &e->u.stlit.fields.items[i];
             Type *ft = NULL;
@@ -2084,7 +2084,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 if (d->u.type.fields.items[j].name == fi->name)
                     ft = d->u.type.fields.items[j].ty;
             if (!ft)
-                fatal_at(fi->span, "struct '%s' has no field '%s'",
+                fatal_at(E0407, fi->span, "struct '%s' has no field '%s'",
                          st->name, fi->name);
             Type *it = check_expr(se, fi->val, ft);
             if (ft->kind == TY_UNION) {
@@ -2096,7 +2096,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (ptr_widens(it, ft))
                 continue; /* *T widens to nullable *T */
             if (!is_unknown(it) && !type_eq(it, ft))
-                fatal_at(fi->span, "field '%s' expects %s, got %s", fi->name,
+                fatal_at(E0601, fi->span, "field '%s' expects %s, got %s", fi->name,
                          type_spelling(ft), type_spelling(it));
         }
         /* resource literals stay explicit; plain structs rely on
@@ -2109,7 +2109,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     if (e->u.stlit.fields.items[i].name == fn)
                         found = 1;
                 if (!found)
-                    fatal_at(e->span,
+                    fatal_at(E0606, e->span,
                              "missing field '%s' in resource '%s' literal",
                              fn, st->name);
             }
@@ -2129,7 +2129,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 if (a->kind == PAT_WILDCARD)
                     wild = 1;
                 else if (a->kind == PAT_NULL)
-                    fatal_at(a->span,
+                    fatal_at(E0610, a->span,
                              "'null' pattern requires a nullable pointer");
                 else if (a->kind == PAT_TYPE_VAL) {
                     /* qualified error names (mod::NotFound) split first */
@@ -2147,23 +2147,23 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                                            vname))
                                 idx = (int)k;
                     if (idx < 0)
-                        fatal_at(a->span, "'%s' is not a variant of %s",
+                        fatal_at(E0407, a->span, "'%s' is not a variant of %s",
                                  a->name, type_spelling(st));
                 } else {
                     a->ty = resolve_type(se, a->ty);
                     idx = union_member_index(st, a->ty);
                     if (idx < 0)
-                        fatal_at(a->span, "%s has no variant %s",
+                        fatal_at(E0407, a->span, "%s has no variant %s",
                                  type_spelling(st), type_spelling(a->ty));
                     if (st->members.items[idx]->is_error)
-                        fatal_at(a->span,
+                        fatal_at(E0610, a->span,
                                  "cannot bind error variant %s; match it "
                                  "by name",
                                  type_spelling(st->members.items[idx]));
                 }
                 if (idx >= 0) {
                     if (cover & ((size_t)1 << idx))
-                        fatal_at(a->span, "duplicate match arm for %s",
+                        fatal_at(E0609, a->span, "duplicate match arm for %s",
                                  type_spelling(st->members.items[idx]));
                     cover |= (size_t)1 << idx;
                 }
@@ -2171,7 +2171,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (!wild && cover != ((size_t)1 << st->members.len) - 1)
                 for (size_t k = 0; k < st->members.len; k++)
                     if (!(cover & ((size_t)1 << k)))
-                        fatal_at(e->span,
+                        fatal_at(E0608, e->span,
                                  "non-exhaustive match: missing variant %s",
                                  type_spelling(st->members.items[k]));
             e->type = type_prim(TY_VOID);
@@ -2198,7 +2198,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     if (!mty)
                         mty = at;
                     else if (!is_unknown(at) && !type_eq(mty, at))
-                        fatal_at(a->span, "match arm type %s differs from %s",
+                        fatal_at(E0601, a->span, "match arm type %s differs from %s",
                                  type_spelling(at), type_spelling(mty));
                 }
                 pop_scope(se);
@@ -2218,16 +2218,16 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                 else if (a->kind == PAT_TYPE_BIND) {
                     a->ty = resolve_type(se, a->ty);
                     if (!type_eq(a->ty, nonnull))
-                        fatal_at(a->span, "bind pattern must be %s, got %s",
+                        fatal_at(E0610, a->span, "bind pattern must be %s, got %s",
                                  type_spelling(nonnull),
                                  type_spelling(a->ty));
                     has_val = 1;
                 } else {
-                    fatal_at(a->span, "pointer match has no named variants");
+                    fatal_at(E0610, a->span, "pointer match has no named variants");
                 }
             }
             if (!wild && (!has_null || !has_val))
-                fatal_at(e->span,
+                fatal_at(E0608, e->span,
                          "non-exhaustive match on nullable: must cover "
                          "'null' and '%s' (or use '_')",
                          type_spelling(nonnull));
@@ -2253,7 +2253,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     if (!mty)
                         mty = at;
                     else if (!is_unknown(at) && !type_eq(mty, at))
-                        fatal_at(a->span, "match arm type %s differs from %s",
+                        fatal_at(E0601, a->span, "match arm type %s differs from %s",
                                  type_spelling(at), type_spelling(mty));
                 }
                 pop_scope(se);
@@ -2264,7 +2264,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (st->kind == TY_ENUM) {
             Decl *ed = find_enum_decl(se, st->name);
             if (!ed)
-                fatal_at(e->span, "unknown enum '%s'", st->name);
+                fatal_at(E0408, e->span, "unknown enum '%s'", st->name);
             /* exhaustiveness bitmask over variant indices */
             size_t cover = 0;
             int wild = 0;
@@ -2276,23 +2276,23 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     continue;
                 }
                 if (a->kind != PAT_TYPE_VAL || !a->name)
-                    fatal_at(a->span,
+                    fatal_at(E0610, a->span,
                              "enum match arms must be Enum::Variant or '_'");
                 const char *sep = strstr(a->name, "::");
                 size_t enlen = strlen(st->name);
                 if (!sep || (size_t)(sep - a->name) != enlen
                     || strncmp(a->name, st->name, enlen) != 0)
-                    fatal_at(a->span, "'%s' is not a variant of %s",
+                    fatal_at(E0407, a->span, "'%s' is not a variant of %s",
                              a->name, st->name);
                 int idx = -1;
                 for (size_t k = 0; k < ed->u.type.variants.len; k++)
                     if (zstr_eq(ed->u.type.variants.items[k].name, sep + 2))
                         idx = (int)k;
                 if (idx < 0)
-                    fatal_at(a->span, "enum '%s' has no variant '%s'",
+                    fatal_at(E0407, a->span, "enum '%s' has no variant '%s'",
                              st->name, sep + 2);
                 if (cover & ((size_t)1 << idx))
-                    fatal_at(a->span, "duplicate match arm for %s::%s",
+                    fatal_at(E0609, a->span, "duplicate match arm for %s::%s",
                              st->name, sep + 2);
                 cover |= (size_t)1 << idx;
                 a->vidx = idx;
@@ -2300,7 +2300,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (!wild && cover != ((size_t)1 << ed->u.type.variants.len) - 1)
                 for (size_t k = 0; k < ed->u.type.variants.len; k++)
                     if (!(cover & ((size_t)1 << k)))
-                        fatal_at(e->span,
+                        fatal_at(E0608, e->span,
                                  "non-exhaustive match: missing variant "
                                  "%s::%s",
                                  st->name, ed->u.type.variants.items[k].name);
@@ -2316,7 +2316,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     if (!mty)
                         mty = at;
                     else if (!is_unknown(at) && !type_eq(mty, at))
-                        fatal_at(a->span, "match arm type %s differs from %s",
+                        fatal_at(E0601, a->span, "match arm type %s differs from %s",
                                  type_spelling(at), type_spelling(mty));
                 }
                 pop_scope(se);
@@ -2335,11 +2335,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     continue;
                 }
                 if (a->kind != PAT_LIT || !a->pat)
-                    fatal_at(a->span,
+                    fatal_at(E0610, a->span,
                              "value match arms must be literals or '_'");
                 Type *pt = check_expr(se, a->pat, st);
                 if (!is_unknown(pt) && !type_eq(pt, st))
-                    fatal_at(a->span, "pattern %s does not match %s",
+                    fatal_at(E0610, a->span, "pattern %s does not match %s",
                              type_spelling(pt), type_spelling(st));
                 if (st->kind == TY_BOOL && a->pat->kind == EX_BOOL) {
                     if (a->pat->u.blit.v)
@@ -2350,11 +2350,11 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             }
             if (st->kind == TY_BOOL) {
                 if (!wild && (!has_t || !has_f))
-                    fatal_at(e->span, "non-exhaustive bool match: cover "
+                    fatal_at(E0608, e->span, "non-exhaustive bool match: cover "
                                       "'true' and 'false' (or use '_')");
             } else if (!wild) {
                 /* integers, char, and str have open domains: demand '_' */
-                fatal_at(e->span, "value match on %s requires a case _ => "
+                fatal_at(E0608, e->span, "value match on %s requires a case _ => "
                                   "arm for exhaustiveness",
                          type_spelling(st));
             }
@@ -2370,7 +2370,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
                     if (!mty)
                         mty = at;
                     else if (!is_unknown(at) && !type_eq(mty, at))
-                        fatal_at(a->span, "match arm type %s differs from %s",
+                        fatal_at(E0601, a->span, "match arm type %s differs from %s",
                                  type_spelling(at), type_spelling(mty));
                 }
                 pop_scope(se);
@@ -2378,7 +2378,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = mty ? mty : type_prim(TY_VOID);
             return e->type;
         }
-        fatal_at(e->span, "match requires a tagged union or nullable "
+        fatal_at(E0605, e->span, "match requires a tagged union or nullable "
                           "pointer, got %s", type_spelling(st));
         return NULL;
     }
@@ -2387,20 +2387,20 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         Type *rt = se->fn_ret;
         if (t->kind == TY_UNION) {
             if (union_has_error(t) && (!rt || rt->kind != TY_UNION))
-                fatal_at(e->span,
+                fatal_at(E0605, e->span,
                          "'?' cannot propagate: enclosing function returns %s",
                          rt ? type_spelling(rt) : "void");
             for (size_t i = 0; i < t->members.len; i++) {
                 Type *m = t->members.items[i];
                 if (m->is_error && rt && union_member_index(rt, m) < 0)
-                    fatal_at(e->span,
+                    fatal_at(E0605, e->span,
                              "'?' error variant %s is not in the enclosing "
                              "return type %s", type_spelling(m),
                              type_spelling(rt));
             }
             Type *payload = union_payload(t);
             if (!payload)
-                fatal_at(e->span,
+                fatal_at(E0605, e->span,
                          "'?' requires exactly one non-error variant");
             e->type = payload;
             return e->type;
@@ -2408,13 +2408,13 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (t->kind == TY_PTR && t->nullable) {
             if (!rt || rt->kind != TY_PTR || !rt->nullable
                 || !type_eq(rt->base, t->base))
-                fatal_at(e->span,
+                fatal_at(E0605, e->span,
                          "'?' on a nullable requires the enclosing function "
                          "to return %s", type_spelling(type_ptr(t->base, 1)));
             e->type = type_ptr(t->base, 0);
             return e->type;
         }
-        fatal_at(e->span, "'?' requires a tagged union or nullable pointer");
+        fatal_at(E0605, e->span, "'?' requires a tagged union or nullable pointer");
         return NULL;
     }
     case EX_UNWRAP: {
@@ -2422,7 +2422,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         if (t->kind == TY_UNION) {
             Type *payload = union_payload(t);
             if (!payload)
-                fatal_at(e->span,
+                fatal_at(E0605, e->span,
                          "'!' requires exactly one non-error variant");
             e->type = payload;
             return e->type;
@@ -2431,7 +2431,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             e->type = type_ptr(t->base, 0);
             return e->type;
         }
-        fatal_at(e->span, "'!' requires a tagged union or nullable pointer");
+        fatal_at(E0605, e->span, "'!' requires a tagged union or nullable pointer");
         return NULL;
     }
     case EX_COERCE:
@@ -2440,7 +2440,7 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
         e->type = e->u.coerce.target;
         return e->type;
     }
-    fatal_at(e->span, "invalid expression");
+    fatal_at(E0902, e->span, "invalid expression");
     return NULL;
 }
 
@@ -2452,7 +2452,7 @@ static void check_let(Sema *se, Stmt *s)
         /* init-less lets: arrays and structs zero-initialize */
         if (!s->u.let.ty || (s->u.let.ty->kind != TY_ARRAY
                              && s->u.let.ty->kind != TY_STRUCT))
-            fatal_at(s->span,
+            fatal_at(E0708, s->span,
                      "let without an initializer requires an array or "
                      "struct type");
         Sym sym;
@@ -2473,7 +2473,7 @@ static void check_let(Sema *se, Stmt *s)
     Type *declared = s->u.let.ty;
     if (!declared) {
         if (is_unknown(it))
-            fatal_at(s->span,
+            fatal_at(E0605, s->span,
                      "cannot infer type from extern call; "
                      "add an explicit type annotation");
         declared = it;
@@ -2481,7 +2481,7 @@ static void check_let(Sema *se, Stmt *s)
         if (!is_unknown(it) && !type_eq(declared, it)
             && !ptr_widens(it, declared)
             && !null_fits(s->u.let.init, declared))
-            fatal_at(s->span, "cannot bind %s to %s", type_spelling(it),
+            fatal_at(E0601, s->span, "cannot bind %s to %s", type_spelling(it),
                      type_spelling(declared));
     }
     s->u.let.ty = declared; /* writeback so codegen sees the resolved type */
@@ -2572,11 +2572,11 @@ static void check_stmt(Sema *se, Stmt *s)
         Type *et = check_expr(se, s->u.forr.end, NULL);
         Type *st = check_expr(se, s->u.forr.start, et);
         if (!is_unknown(st) && !ty_is_int(st->kind))
-            fatal_at(s->u.forr.start->span,
+            fatal_at(E0604, s->u.forr.start->span,
                      "range start must be an integer, got %s",
                      type_spelling(st));
         if (is_unknown(st) || is_unknown(et))
-            fatal_at(s->span, "range bounds must have concrete types");
+            fatal_at(E0605, s->span, "range bounds must have concrete types");
         require_same(s->u.forr.start, s->u.forr.end, "range");
         s->u.forr.ty = st;
         push_scope(se);
@@ -2602,7 +2602,7 @@ static void check_stmt(Sema *se, Stmt *s)
         if (is_stringish(it))
             elem = type_prim(TY_U8);
         if (!elem)
-            fatal_at(s->span, "cannot iterate %s", type_spelling(it));
+            fatal_at(E0605, s->span, "cannot iterate %s", type_spelling(it));
         s->u.foreach.ty = elem;
         push_scope(se);
         Sym iv;
@@ -2634,13 +2634,13 @@ static void check_stmt(Sema *se, Stmt *s)
         if (s->u.ret) {
             Type *t = check_expr(se, s->u.ret, ret);
             if (ret->kind == TY_VOID)
-                fatal_at(s->span, "void function cannot return a value");
+                fatal_at(E0706, s->span, "void function cannot return a value");
             if (ret->kind == TY_UNION)
                 s->u.ret = maybe_coerce(s->u.ret, ret);
             t = s->u.ret->type;
             if (!is_unknown(t) && !type_eq(ret, t)
                 && !null_fits(s->u.ret, ret))
-                fatal_at(s->span, "returning %s from a %s function",
+                fatal_at(E0601, s->span, "returning %s from a %s function",
                          type_spelling(t), type_spelling(ret));
         } else if (ret->kind != TY_VOID) {
             /* bare return may build a void-payload union member */
@@ -2659,14 +2659,14 @@ static void check_stmt(Sema *se, Stmt *s)
                 }
             }
             if (!s->u.ret)
-                fatal_at(s->span, "missing return value");
+                fatal_at(E0702, s->span, "missing return value");
         }
         break;
     }
     case ST_BREAK:
     case ST_CONTINUE:
         if (se->loop_depth == 0)
-            fatal_at(s->span, "%s outside of a loop",
+            fatal_at(E0705, s->span, "%s outside of a loop",
                      s->kind == ST_BREAK ? "break" : "continue");
         break;
     case ST_EXPR: {
@@ -2677,7 +2677,7 @@ static void check_stmt(Sema *se, Stmt *s)
         if (t && s->u.expr->kind != EX_ASSIGN
             && (t->kind == TY_ERR
                 || (t->kind == TY_UNION && union_has_error(t))))
-            fatal_at(s->span,
+            fatal_at(E0704, s->span,
                      "error-typed value must be handled: use '?', 'match', "
                      "or 'let _ = ...'");
         break;
@@ -2741,7 +2741,7 @@ static void register_decl(Sema *se, Decl *d)
         if (!h)
             h = cimport_header(d->u.use.path, 0);
         if (!h)
-            fatal_at(d->span, "cannot import C header '%s'", d->u.use.path);
+            fatal_at(E0303, d->span, "cannot import C header '%s'", d->u.use.path);
         if (prior && prior->kind == SYM_NS && prior->hdr) {
             /* same alias over different headers: merge member tables */
             for (size_t i = 0; i < h->members.len; i++) {
@@ -2795,7 +2795,7 @@ static void register_decl(Sema *se, Decl *d)
             for (size_t i = 0; i < d->u.type.fields.len; i++) {
                 TypeKind fk = d->u.type.fields.items[i].ty->kind;
                 if (fk == TY_REF || fk == TY_MUTREF)
-                    fatal_at(d->u.type.fields.items[i].span,
+                    fatal_at(E0605, d->u.type.fields.items[i].span,
                              "borrowed reference cannot be stored in struct "
                              "field; use an owned value or *T");
             }
@@ -2821,7 +2821,7 @@ static void register_decl(Sema *se, Decl *d)
             d->regname = sym.name;
         int is_method = d->u.fn.recv != NULL;
         if (is_method && !d->u.fn.sname)
-            fatal_at(d->span, "method registration requires a struct name");
+            fatal_at(E0414, d->span, "method registration requires a struct name");
         if (is_method) {
             /* template methods keep their receiver unresolved until the
              * call site supplies concrete struct args */
@@ -2883,7 +2883,7 @@ static void register_decl(Sema *se, Decl *d)
         if (zstr_eq(d->u.fn.name, "main")) {
             se->has_main = 1;
             if (d->u.fn.params.len != 0)
-                fatal_at(d->span, "'main' must take no parameters");
+                fatal_at(E0411, d->span, "'main' must take no parameters");
         }
         break;
     }
@@ -2913,7 +2913,7 @@ static void check_fn(Sema *se, Decl *d)
     check_block(se, d->u.fn.body);
     if (d->u.fn.ret->kind != TY_VOID
         && !block_terminates(d->u.fn.body))
-        fatal_at(d->span,
+        fatal_at(E0703, d->span,
                  "function '%s' does not return a value on all paths",
                  d->u.fn.name);
     se->fn_ret = prev_ret;
@@ -2972,7 +2972,7 @@ void sema_check(Program *prog, int test_mode)
     check_all_type_cycles(se);
     /* freestanding kernels may use kmain or no entry at all */
     if (!se->has_main && !test_mode && !prog->freestanding)
-        fatal("no 'fn main' found in program");
+        diag_fatal_global(E0411, "no 'fn main' found in program");
     /* is_move fixpoint: a struct is linear if it is a resource or has a
      * linear field; iterate until the mark stops propagating */
     for (int changed = 1; changed;) {

@@ -67,10 +67,13 @@ typedef struct UseRec {
     int pos;
 } UseRec;
 
-static void bfatal(Span sp, const char *fmt, ...)
+static void bfatal(const char *code, Span sp, const char *fmt, ...)
 {
     char msg[1024];
     va_list ap;
+    if (!diag_code_lookup(code))
+        fatal("unknown diagnostic code '%s' emitted for: %s",
+              code ? code : "(null)", fmt);
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
@@ -78,6 +81,7 @@ static void bfatal(Span sp, const char *fmt, ...)
     Diagnostic d;
     memset(&d, 0, sizeof(d));
     d.severity = DIAG_ERR;
+    d.code = code;
     d.message = msg;
     d.primary.file = sp.file;
     d.primary.line = (int)sp.line;
@@ -354,15 +358,15 @@ static void check_ref_place_write(Borrow *b, Expr *e, const char *ref)
     if (!bv)
         return;
     if (bv->moved)
-        bfatal(e->span, "use of moved value '%s'", ref);
+        bfatal(E0503, e->span, "use of moved value '%s'", ref);
     if (bv->ty->kind == TY_REF)
-        bfatal(e->span, "cannot write through shared reference '%s'", ref);
+        bfatal(E0505, e->span, "cannot write through shared reference '%s'", ref);
     Loan *lk = root_locked(b, ref);
     if (lk)
-        bfatal(e->span, "cannot write through '%s': mutably borrowed by '%s'",
+        bfatal(E0505, e->span, "cannot write through '%s': mutably borrowed by '%s'",
                ref, lk->holder);
     if (root_shared(b, ref) > 0)
-        bfatal(e->span,
+        bfatal(E0505, e->span,
                "cannot write through '%s': shared borrow is active", ref);
 }
 
@@ -372,10 +376,10 @@ static void check_ref_place_read(Borrow *b, Expr *e, const char *ref)
     if (!bv)
         return;
     if (bv->moved)
-        bfatal(e->span, "use of moved value '%s'", ref);
+        bfatal(E0503, e->span, "use of moved value '%s'", ref);
     Loan *lk = root_locked(b, ref);
     if (lk)
-        bfatal(e->span, "cannot read '%s' while mutably borrowed by '%s'",
+        bfatal(E0507, e->span, "cannot read '%s' while mutably borrowed by '%s'",
                ref, lk->holder);
 }
 
@@ -589,7 +593,7 @@ static void bx_borrow_operand(Borrow *b, Expr *e)
         if (bv && bv->ty->kind != TY_REF && bv->ty->kind != TY_MUTREF
             && ty_is_move(b, bv->ty, 0)) {
             if (bv->moved)
-                bfatal(e->span, "cannot borrow '%s': value was moved",
+                bfatal(E0503, e->span, "cannot borrow '%s': value was moved",
                        bv->name);
             return; /* lending is not a move */
         }
@@ -610,17 +614,17 @@ static void check_borrow(Borrow *b, Expr *e, int borrow_mut)
         if (!rv)
             return;
         if (rv->moved)
-            bfatal(e->span, "use of moved value '%s'", ref);
+            bfatal(E0503, e->span, "use of moved value '%s'", ref);
         if (borrow_mut && rv->ty->kind != TY_MUTREF)
-            bfatal(e->span,
+            bfatal(E0505, e->span,
                    "cannot mutably borrow through shared reference '%s'",
                    ref);
         Loan *lk = root_locked(b, ref);
         if (lk)
-            bfatal(e->span, "'%s' is already mutably borrowed by '%s'",
+            bfatal(E0506, e->span, "'%s' is already mutably borrowed by '%s'",
                    ref, lk->holder);
         if (borrow_mut && root_shared(b, ref) > 0)
-            bfatal(e->span,
+            bfatal(E0506, e->span,
                    "cannot mutably borrow '%s': shared borrow is active",
                    ref);
         return;
@@ -632,25 +636,25 @@ static void check_borrow(Borrow *b, Expr *e, int borrow_mut)
     if (!bv)
         return;
     if (bv->moved)
-        bfatal(e->span, "cannot borrow '%s': value was moved", root);
+        bfatal(E0503, e->span, "cannot borrow '%s': value was moved", root);
     if (bv->freed)
-        bfatal(e->span, "cannot borrow '%s': value was freed", root);
+        bfatal(E0504, e->span, "cannot borrow '%s': value was freed", root);
     Loan *lk = root_locked(b, root);
     if (borrow_mut) {
         if (!bv->mut)
-            bfatal(e->span,
+            bfatal(E0516, e->span,
                    "'&mut %s' requires a mutable binding (let mut %s)",
                    root, root);
         if (lk)
-            bfatal(e->span, "'%s' is already mutably borrowed by '%s'",
+            bfatal(E0506, e->span, "'%s' is already mutably borrowed by '%s'",
                    root, lk->holder);
         if (root_shared(b, root) > 0)
-            bfatal(e->span,
+            bfatal(E0506, e->span,
                    "cannot mutably borrow '%s': shared borrow is active",
                    root);
     } else {
         if (lk)
-            bfatal(e->span,
+            bfatal(E0506, e->span,
                    "cannot borrow '%s': active mutable borrow in '%s'",
                    root, lk->holder);
     }
@@ -662,16 +666,16 @@ static void check_root_write(Borrow *b, Expr *e, const char *root)
     if (!bv)
         return;
     if (bv->moved)
-        bfatal(e->span, "use of moved value '%s'", root);
+        bfatal(E0503, e->span, "use of moved value '%s'", root);
     if (bv->freed)
-        bfatal(e->span, "use of freed value '%s'", root);
+        bfatal(E0504, e->span, "use of freed value '%s'", root);
     if (!bv->mut)
-        bfatal(e->span, "cannot mutate immutable binding '%s'", root);
+        bfatal(E0516, e->span, "cannot mutate immutable binding '%s'", root);
     if (root_locked(b, root))
-        bfatal(e->span, "cannot mutate '%s': mutably borrowed by '%s'",
+        bfatal(E0508, e->span, "cannot mutate '%s': mutably borrowed by '%s'",
                root, root_locked(b, root)->holder);
     if (root_shared(b, root) > 0)
-        bfatal(e->span, "cannot mutate '%s': shared borrow is active",
+        bfatal(E0508, e->span, "cannot mutate '%s': shared borrow is active",
                root);
 }
 
@@ -681,12 +685,12 @@ static void check_root_read(Borrow *b, Expr *e, const char *root)
     if (!bv)
         return;
     if (bv->moved)
-        bfatal(e->span, "use of moved value '%s'", root);
+        bfatal(E0503, e->span, "use of moved value '%s'", root);
     if (bv->freed)
-        bfatal(e->span, "use of freed value '%s'", root);
+        bfatal(E0504, e->span, "use of freed value '%s'", root);
     Loan *lk = root_locked(b, root);
     if (lk)
-        bfatal(e->span, "cannot read '%s' while mutably borrowed by '%s'",
+        bfatal(E0507, e->span, "cannot read '%s' while mutably borrowed by '%s'",
                root, lk->holder);
 }
 
@@ -701,11 +705,11 @@ static void bx_assign(Borrow *b, Expr *e)
         if (!bv)
             return;
         if (root_locked(b, lhs->u.ident))
-            bfatal(lhs->span,
+            bfatal(E0508, lhs->span,
                    "cannot assign to '%s': mutably borrowed by '%s'",
                    lhs->u.ident, root_locked(b, lhs->u.ident)->holder);
         if (root_shared(b, lhs->u.ident) > 0)
-            bfatal(lhs->span,
+            bfatal(E0508, lhs->span,
                    "cannot assign to '%s': shared borrow is active",
                    lhs->u.ident);
         bv->moved = 0; /* fresh value: MOVED -> OWNED reinitialization */
@@ -745,7 +749,7 @@ static void bx_assign(Borrow *b, Expr *e)
              * the binding: no mutability requirement on the pointer */
             if (bv && bv->ty->kind == TY_PTR) {
                 if (bv->moved)
-                    bfatal(lhs->span, "use of moved value '%s'", root);
+                    bfatal(E0503, lhs->span, "use of moved value '%s'", root);
                 return;
             }
             check_root_write(b, lhs, root);
@@ -767,28 +771,28 @@ static void check_free_receiver(Borrow *b, Expr *recv)
     if (!bv)
         return;
     if (bv->moved)
-        bfatal(recv->span, "use of moved value '%s'", root);
+        bfatal(E0503, recv->span, "use of moved value '%s'", root);
     if (bv->freed)
-        bfatal(recv->span, "value was already freed: '%s'", root);
+        bfatal(E0509, recv->span, "value was already freed: '%s'", root);
     if (bv->defer_free)
-        bfatal(recv->span,
+        bfatal(E0515, recv->span,
                "cannot free '%s': a deferred cleanup already frees it",
                root);
     const char *field = place_field_name(recv);
     if (field && field_freed(bv, field))
-        bfatal(recv->span, "value was already freed: '%s.%s'", root,
+        bfatal(E0509, recv->span, "value was already freed: '%s.%s'", root,
                field);
 
     Loan *l = root_loan(b, root);
     if (l)
-        bfatal(recv->span,
+        bfatal(E0502, recv->span,
                "cannot free '%s': it is still borrowed by '%s'", root,
                l->holder);
     /* track the direct owner and released fields separately, so freeing
      * h.name does not poison h.id but does catch a second h.name.free() */
     if (recv->kind == EX_IDENT) {
         if (bv->nmoved_fields > 0)
-            bfatal(recv->span,
+            bfatal(E0510, recv->span,
                    "cannot free '%s': a field was already moved", root);
         bv->freed = 1;
         clear_freed_fields(bv);
@@ -834,10 +838,10 @@ static void bx_call(Borrow *b, Expr *e)
                 && formal->kind == TY_MUTREF
                 && type_eq(av->ty, formal)) {
                 if (av->moved)
-                    bfatal(arg->span, "use of moved value '%s'", av->name);
+                    bfatal(E0503, arg->span, "use of moved value '%s'", av->name);
                 Loan *lk = root_locked(b, av->name);
                 if (lk)
-                    bfatal(arg->span,
+                    bfatal(E0506, arg->span,
                            "'%s' is already mutably borrowed by '%s'",
                            av->name, lk->holder);
                 continue;
@@ -865,7 +869,7 @@ static void bx_call(Borrow *b, Expr *e)
         for (size_t j = i + 1; j < temps.len; j++)
             if (temps.items[i].root == temps.items[j].root
                 && (temps.items[i].exclusive || temps.items[j].exclusive))
-                bfatal(temps.items[j].span,
+                bfatal(E0514, temps.items[j].span,
                        "conflicting borrows of '%s' in call arguments",
                        temps.items[i].root);
     free(temps.items);
@@ -1158,24 +1162,24 @@ static void bx_expr(Borrow *b, Expr *e)
         if (!bv)
             return;
         if (bv->freed)
-            bfatal(e->span, "use of freed value '%s'", bv->name);
+            bfatal(E0504, e->span, "use of freed value '%s'", bv->name);
         if (bv->ty->kind == TY_REF)
             return; /* shared references are Copy */
         if (bv->ty->kind == TY_MUTREF) {
             /* &mut T is linear: using it as a value moves the invitation */
             if (bv->moved)
-                bfatal(e->span, "use of moved value '%s'", bv->name);
+                bfatal(E0503, e->span, "use of moved value '%s'", bv->name);
             if (bv->defer_used)
-                bfatal(e->span,
+                bfatal(E0515, e->span,
                        "cannot move '%s': a deferred cleanup still uses it",
                        bv->name);
             Loan *lk = root_locked(b, bv->name);
             if (lk)
-                bfatal(e->span,
+                bfatal(E0502, e->span,
                        "cannot move '%s': mutably borrowed by '%s'",
                        bv->name, lk->holder);
             if (root_shared(b, bv->name) > 0)
-                bfatal(e->span,
+                bfatal(E0506, e->span,
                        "cannot move '%s': shared borrow is active",
                        bv->name);
             bv->moved = 1;
@@ -1188,17 +1192,17 @@ static void bx_expr(Borrow *b, Expr *e)
         }
         if (ty_is_move(b, bv->ty, 0)) {
             if (bv->moved)
-                bfatal(e->span, "use of moved value '%s'", bv->name);
+                bfatal(E0503, e->span, "use of moved value '%s'", bv->name);
             if (bv->nmoved_fields > 0)
-                bfatal(e->span,
+                bfatal(E0510, e->span,
                        "cannot move '%s': a field was already moved",
                        bv->name);
             if (bv->nfreed_fields > 0)
-                bfatal(e->span,
+                bfatal(E0510, e->span,
                        "cannot move '%s': a field was already freed",
                        bv->name);
             if (bv->defer_used)
-                bfatal(e->span,
+                bfatal(E0515, e->span,
                        "cannot move '%s': a deferred cleanup still uses it",
                        bv->name);
             Loan *rl = root_loan(b, bv->name);
@@ -1231,7 +1235,7 @@ static void bx_expr(Borrow *b, Expr *e)
                 exit(1);
             }
             if (rl)
-                bfatal(e->span,
+                bfatal(E0502, e->span,
                        "cannot move '%s': it is still borrowed by '%s'",
                        bv->name, rl->holder);
             bv->moved = 1;
@@ -1270,23 +1274,23 @@ static void bx_expr(Borrow *b, Expr *e)
         const char *field = place_field_name(e);
         BVar *bv = root ? var_find(b, root) : NULL;
         if (field && field_moved(bv, field))
-            bfatal(e->span, "use of moved value '%s.%s'", root, field);
+            bfatal(E0503, e->span, "use of moved value '%s.%s'", root, field);
         if (!b->read_only && ty_is_move(b, e->type, 0)) {
             /* A direct owned field may be moved out, leaving the outer
              * binding partially moved; deeper or borrowed fields cannot. */
             if (e->u.field.base->kind != EX_IDENT || !root || !bv
                 || !type_is_resource(b, bv->ty))
-                bfatal(e->span,
+                bfatal(E0511, e->span,
                        "cannot move field '%s' out of a resource container; "
                        "move the whole value instead", e->u.field.name);
             check_root_read(b, e, root);
             Loan *loan = root_loan(b, root);
             if (loan)
-                bfatal(e->span,
+                bfatal(E0502, e->span,
                        "cannot move '%s.%s': it is still borrowed by '%s'",
                        root, e->u.field.name, loan->holder);
             if (field && field_freed(bv, field))
-                bfatal(e->span, "use of freed value '%s.%s'", root, field);
+                bfatal(E0504, e->span, "use of freed value '%s.%s'", root, field);
             mark_field_moved(bv, e->u.field.name);
             return;
         }
@@ -1294,7 +1298,7 @@ static void bx_expr(Borrow *b, Expr *e)
             /* reading a field is a use of the root, never a move of it */
             check_root_read(b, e, root);
             if (field && field_freed(bv, field))
-                bfatal(e->span, "use of freed value '%s.%s'", root, field);
+                bfatal(E0504, e->span, "use of freed value '%s.%s'", root, field);
             Expr *base = e->u.field.base;
             while (base && base->kind == EX_FIELD)
                 base = base->u.field.base;
@@ -1403,7 +1407,7 @@ static void check_return_escape(Borrow *b, Expr *raw)
     if (e->kind == EX_UNARY && e->u.unary.op == TK_AMP) {
         const char *root = resolve_root(b, e->u.unary.e);
         if (root && root_is_local(b, root))
-            bfatal(e->span,
+            bfatal(E0512, e->span,
                    "cannot return reference to local variable '%s'", root);
         return;
     }
@@ -1413,7 +1417,7 @@ static void check_return_escape(Borrow *b, Expr *raw)
     collect_view_roots(b, e, &roots);
     for (size_t i = 0; i < roots.len; i++)
         if (roots.items[i].root && root_is_local(b, roots.items[i].root))
-            bfatal(e->span, "cannot return borrowed data from local '%s'",
+            bfatal(E0512, e->span, "cannot return borrowed data from local '%s'",
                    roots.items[i].root);
     free(roots.items);
 }
@@ -1451,7 +1455,7 @@ static void scan_defer_idents(Borrow *b, Expr *e)
             BVar *bv = var_find(b, e->str_recv->u.ident);
             if (bv) {
                 if (bv->freed)
-                    bfatal(e->span,
+                    bfatal(E0509, e->span,
                            "cannot defer free of already-freed '%s'",
                            bv->name);
                 bv->defer_free = 1;
@@ -1679,7 +1683,7 @@ static int b_foreach(Borrow *b, Stmt *s)
     keep_outer_loans(b, base, nvars);
     for (size_t i = 0; i < nvars && i < b->vars.len; i++)
         if (!base[i].moved && b->vars.items[i].moved)
-            bfatal(s->span,
+            bfatal(E0513, s->span,
                    "'%s' moved inside loop body without reinitialization",
                    base[i].name);
     b->vars.len = nvars;
@@ -1707,7 +1711,7 @@ static int b_range(Borrow *b, Stmt *s)
     keep_outer_loans(b, base, nvars);
     for (size_t i = 0; i < nvars && i < b->vars.len; i++)
         if (!base[i].moved && b->vars.items[i].moved)
-            bfatal(s->span,
+            bfatal(E0513, s->span,
                    "'%s' moved inside loop body without reinitialization",
                    base[i].name);
     b->vars.len = nvars;
@@ -1758,7 +1762,7 @@ static int b_stmt(Borrow *b, Stmt *s)
                 if (sk == TY_MUTREF) {
                     /* &mut T moves; its loan follows the new owner */
                     if (src->moved)
-                        bfatal(init->span, "use of moved value '%s'",
+                        bfatal(E0503, init->span, "use of moved value '%s'",
                                src->name);
                     Loan *l = holder_loan(b, src->name);
                     if (l) {
@@ -1817,7 +1821,7 @@ static int b_stmt(Borrow *b, Stmt *s)
          * next iteration */
         for (size_t i = 0; i < nvars && i < b->vars.len; i++)
             if (!base[i].moved && b->vars.items[i].moved)
-                bfatal(s->span,
+                bfatal(E0513, s->span,
                        "'%s' moved inside loop body without "
                        "reinitialization", base[i].name);
         b->vars.len = nvars;

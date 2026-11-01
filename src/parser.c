@@ -25,6 +25,7 @@
  */
 
 #include "parser.h"
+#include "diag.h"
 
 typedef struct Parser {
     Lexer lx;
@@ -48,7 +49,7 @@ static void advance(Parser *p)
 static void expect(Parser *p, TokenKind k, const char *what)
 {
     if (kind(p) != k)
-        fatal_at(tok(p)->span, "expected %s", what);
+        fatal_at(E0201, tok(p)->span, "expected %s", what);
     advance(p);
 }
 
@@ -119,7 +120,7 @@ static Type *parse_primitive(Parser *p)
             advance(p);
             return type_prim(tab[i].ty);
         }
-    fatal_at(tok(p)->span, "expected type");
+    fatal_at(E0203, tok(p)->span, "expected type");
     return NULL;
 }
 
@@ -168,7 +169,7 @@ static Type *parse_type(Parser *p)
             return type_slice(parse_type(p));
         }
         if (!at(p, TK_INT))
-            fatal_at(tok(p)->span, "expected array length");
+            fatal_at(E0201, tok(p)->span, "expected array length");
         size_t n = (size_t)tok(p)->int_val;
         advance(p);
         expect(p, TK_RBRACKET, "']'");
@@ -183,7 +184,7 @@ static Type *parse_type(Parser *p)
                 // qualified C type: ns::Name resolves in sema via cimport
                 advance(p);
                 if (!at(p, TK_IDENT))
-                    fatal_at(tok(p)->span, "expected type name after '::'");
+                    fatal_at(E0208, tok(p)->span, "expected type name after '::'");
                 char joined[256];
                 snprintf(joined, sizeof(joined), "%s::%s", name,
                          tok(p)->name);
@@ -266,7 +267,7 @@ static Expr *build_string_expr(Parser *p, const char *val, size_t len)
         while (i < len && val[i] != '}')
             i++;
         if (i >= len)
-            fatal_at(p->lx.tok.span, "unterminated '{' interpolation");
+            fatal_at(E0204, p->lx.tok.span, "unterminated '{' interpolation");
         char *src = zalloc(i - inner_start + 1);
         memcpy(src, val + inner_start, i - inner_start);
         src[i - inner_start] = '\0';
@@ -275,7 +276,7 @@ static Expr *build_string_expr(Parser *p, const char *val, size_t len)
         lex_next(&sub->lx);
         Expr *hole = parse_expr(sub);
         if (sub->lx.tok.kind != TK_EOF)
-            fatal_at(sub->lx.tok.span, "unexpected token in interpolation");
+            fatal_at(E0204, sub->lx.tok.span, "unexpected token in interpolation");
         if (!chain) {
             chain = hole;
             i++;
@@ -364,7 +365,7 @@ static Expr *parse_match(Parser *p)
             advance(p);
             advance(p);
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected variant name after '::'");
+                fatal_at(E0208, tok(p)->span, "expected variant name after '::'");
             snprintf(joined + strlen(joined), sizeof(joined) - strlen(joined),
                      "::%s", tok(p)->name);
             arm.name = str_intern_c(joined);
@@ -373,7 +374,7 @@ static Expr *parse_match(Parser *p)
             arm.kind = PAT_TYPE_BIND;
             advance(p);
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected binder name in case let");
+                fatal_at(E0205, tok(p)->span, "expected binder name in case let");
             arm.name = tok(p)->name;
             advance(p);
             expect(p, TK_COLON, "':' in case let pattern");
@@ -383,7 +384,7 @@ static Expr *parse_match(Parser *p)
             arm.name = tok(p)->name;
             advance(p);
         } else {
-            fatal_at(tok(p)->span, "expected match pattern");
+            fatal_at(E0205, tok(p)->span, "expected match pattern");
         }
         expect(p, TK_FATARROW, "'=>' in match arm");
         if (at(p, TK_RETURN) || at(p, TK_BREAK) || at(p, TK_CONTINUE)) {
@@ -480,7 +481,7 @@ static Expr *parse_primary(Parser *p)
         return e;
     }
     default:
-        fatal_at(sp, "expected expression, found %s", tok_desc(p));
+        fatal_at(E0202, sp, "expected expression, found %s", tok_desc(p));
         return NULL;
     }
 }
@@ -546,7 +547,7 @@ static Expr *parse_postfix_bracket(Parser *p, Expr *base)
             while (at(p, TK_COMMA)) {
                 advance(p);
                 if (!at(p, TK_IDENT))
-                    fatal_at(tok(p)->span,
+                    fatal_at(E0203, tok(p)->span,
                               "expected type argument identifier");
                 da_push(&g->u.generic.targs, type_struct(tok(p)->name));
                 advance(p);
@@ -626,7 +627,7 @@ static Expr *parse_struct_lit(Parser *p, Expr *base)
     if (base->kind == EX_GENERIC) {
         Expr *gb = base->u.generic.base;
         if (gb->kind != EX_IDENT)
-            fatal_at(base->span, "struct literal name must be an identifier");
+            fatal_at(E0206, base->span, "struct literal name must be an identifier");
         e->u.stlit.name = gb->u.ident;
         e->u.stlit.targs.items = base->u.generic.targs.items;
         e->u.stlit.targs.len = base->u.generic.targs.len;
@@ -634,7 +635,7 @@ static Expr *parse_struct_lit(Parser *p, Expr *base)
     } else if (base->kind == EX_IDENT) {
         e->u.stlit.name = base->u.ident;
     } else {
-        fatal_at(base->span, "invalid struct literal");
+        fatal_at(E0206, base->span, "invalid struct literal");
     }
     expect(p, TK_LBRACE, "'{' in struct literal");
     while (!at(p, TK_RBRACE)) {
@@ -646,7 +647,7 @@ static Expr *parse_struct_lit(Parser *p, Expr *base)
         if (at(p, TK_DOT))
             advance(p); /* accept .field = e and field = e */
         if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected field name in struct literal");
+            fatal_at(E0206, tok(p)->span, "expected field name in struct literal");
         FieldInit fi;
         memset(&fi, 0, sizeof(fi));
         fi.name = tok(p)->name;
@@ -681,7 +682,7 @@ static Expr *parse_postfix_after(Parser *p, Expr *e)
         case TK_DOT:
             advance(p);
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected field name after '.'");
+                fatal_at(E0208, tok(p)->span, "expected field name after '.'");
             {
                 Expr *f = expr_new(EX_FIELD, e->span);
                 f->u.field.base = e;
@@ -693,7 +694,7 @@ static Expr *parse_postfix_after(Parser *p, Expr *e)
         case TK_COLONCOLON: {
             advance(p);
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected symbol after '::'");
+                fatal_at(E0208, tok(p)->span, "expected symbol after '::'");
             if (e->kind == EX_NS_IDENT) {
                 /* std::io::println: fold deeper segments into the qualifier */
                 char joined[256];
@@ -705,7 +706,7 @@ static Expr *parse_postfix_after(Parser *p, Expr *e)
                 break;
             }
             if (e->kind != EX_IDENT)
-                fatal_at(e->span, "namespace qualifier must be an identifier");
+                fatal_at(E0208, e->span, "namespace qualifier must be an identifier");
             Expr *ns = expr_new(EX_NS_IDENT, e->span);
             ns->u.nident.ns = e->u.ident;
             ns->u.nident.name = tok(p)->name;
@@ -880,7 +881,7 @@ static void check_defer_target(Stmt *inner)
     case ST_RETURN:
     case ST_BREAK:
     case ST_CONTINUE:
-        fatal_at(inner->span, "defer cannot wrap %s",
+        fatal_at(E0209, inner->span, "defer cannot wrap %s",
                  inner->kind == ST_RETURN ? "return"
                  : inner->kind == ST_BREAK ? "break" : "continue");
     default:
@@ -924,7 +925,7 @@ static Stmt *parse_stmt(Parser *p)
             advance(p);
         }
         if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected binding name");
+            fatal_at(E0207, tok(p)->span, "expected binding name");
         s->u.let.name = tok(p)->name;
         advance(p);
         if (at(p, TK_COLON)) {
@@ -991,7 +992,7 @@ static Stmt *parse_stmt(Parser *p)
         expect(p, TK_LET, "'let' in range for");
         Stmt *s = stmt_new(ST_FOR_RANGE, sp);
         if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected loop variable name");
+            fatal_at(E0207, tok(p)->span, "expected loop variable name");
         s->u.forr.name = tok(p)->name;
         advance(p);
         expect(p, TK_IN, "'in' after loop variable");
@@ -1014,7 +1015,7 @@ static Stmt *parse_stmt(Parser *p)
         return s;
     }
     case TK_ENUM:
-        fatal_at(sp, "'enum' is not supported in v0.4");
+        fatal_at(E0211, sp, "'enum' is not supported in v0.4");
         return NULL;
     default: {
         Stmt *s = stmt_new(ST_EXPR, sp);
@@ -1040,7 +1041,7 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
         while (!at(p, TK_GT) && !at(p, TK_EOF))
             advance(p);
         if (start == tok(p)->start)
-            fatal_at(tok(p)->span, "empty C header path");
+            fatal_at(E0212, tok(p)->span, "empty C header path");
         d->u.use.is_c_header = 1;
         d->u.use.path = str_intern(start, tok(p)->start);
         advance(p); /* '>' */
@@ -1076,17 +1077,17 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
         d->u.use.path = path.items;
         d->u.use.alias = last; /* default alias: last module segment */
     } else {
-        fatal_at(tok(p)->span, "expected '<header.h>', \"header.h\" or "
+        fatal_at(E0212, tok(p)->span, "expected '<header.h>', \"header.h\" or "
                                 "module path after 'use'");
     }
     if (at(p, TK_AS)) {
         advance(p);
         if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected alias name after 'as'");
+            fatal_at(E0212, tok(p)->span, "expected alias name after 'as'");
         d->u.use.alias = tok(p)->name;
         advance(p);
     } else if (d->u.use.is_c_header) {
-        fatal_at(tok(p)->span, "C header imports require 'as <alias>'");
+        fatal_at(E0212, tok(p)->span, "C header imports require 'as <alias>'");
     }
     expect(p, TK_SEMI, "';' after use declaration");
     return d;
@@ -1096,7 +1097,7 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
 {
     advance(p); /* 'type' */
     if (!at(p, TK_IDENT))
-        fatal_at(tok(p)->span, "expected type name");
+        fatal_at(E0203, tok(p)->span, "expected type name");
     Decl *d = decl_new(DL_TYPE, sp);
     d->exported = exported;
     d->u.type.name = tok(p)->name;
@@ -1105,7 +1106,7 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
         advance(p);
         for (;;) {
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected type parameter name");
+                fatal_at(E0207, tok(p)->span, "expected type parameter name");
             da_push(&d->u.type.tparams, tok(p)->name);
             advance(p);
             if (at(p, TK_COMMA)) {
@@ -1128,7 +1129,7 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
         long long next = 0;
         while (!at(p, TK_RBRACE)) {
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected variant name");
+                fatal_at(E0207, tok(p)->span, "expected variant name");
             EnumVariant v;
             memset(&v, 0, sizeof(v));
             v.name = tok(p)->name;
@@ -1142,7 +1143,7 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
                     advance(p);
                 }
                 if (!at(p, TK_INT))
-                    fatal_at(tok(p)->span,
+                    fatal_at(E0213, tok(p)->span,
                              "enum variant values must be integer literals");
                 v.value = (long long)tok(p)->int_val;
                 if (neg)
@@ -1169,7 +1170,7 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
         expect(p, TK_LBRACE, "'{'");
         while (!at(p, TK_RBRACE)) {
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected field name");
+                fatal_at(E0207, tok(p)->span, "expected field name");
             Field f;
             f.name = tok(p)->name;
             f.span = tok(p)->span;
@@ -1206,7 +1207,7 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
         Param recv;
         memset(&recv, 0, sizeof(recv));
         if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected receiver name");
+            fatal_at(E0207, tok(p)->span, "expected receiver name");
         recv.name = tok(p)->name;
         recv.span = tok(p)->span;
         advance(p);
@@ -1216,7 +1217,7 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
         *d->u.fn.recv = recv;
         expect(p, TK_RPAREN, "')' after receiver type");
         if (!at(p, TK_IDENT))
-            fatal_at(tok(p)->span, "expected method name");
+            fatal_at(E0207, tok(p)->span, "expected method name");
         /* receiver structs name their methods: Vec__push, Point__len */
         Type *sname = recv.ty;
         while (sname) {
@@ -1228,7 +1229,7 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
                 break;
         }
         if (!sname || sname->kind != TY_STRUCT || !sname->name)
-            fatal_at(recv.span, "receiver must be a struct type");
+            fatal_at(E0214, recv.span, "receiver must be a struct type");
         char mangled[256];
         snprintf(mangled, sizeof(mangled), "%s__%s", sname->name,
                  tok(p)->name);
@@ -1237,7 +1238,7 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
         d->u.fn.mname = tok(p)->name;
     }
     if (!at(p, TK_IDENT))
-        fatal_at(tok(p)->span, "expected function name");
+        fatal_at(E0207, tok(p)->span, "expected function name");
     if (!d->u.fn.name)
         d->u.fn.name = tok(p)->name;
     advance(p);
@@ -1245,7 +1246,7 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
         advance(p);
         for (;;) {
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected type parameter name");
+                fatal_at(E0207, tok(p)->span, "expected type parameter name");
             da_push(&d->u.fn.tparams, tok(p)->name);
             advance(p);
             if (at(p, TK_COMMA)) {
@@ -1260,7 +1261,7 @@ static Decl *parse_fn_decl(Parser *p, Span sp, int exported)
     if (!at(p, TK_RPAREN)) {
         for (;;) {
             if (!at(p, TK_IDENT))
-                fatal_at(tok(p)->span, "expected parameter name");
+                fatal_at(E0207, tok(p)->span, "expected parameter name");
             Param pm;
             pm.name = tok(p)->name;
             pm.span = tok(p)->span;
@@ -1315,7 +1316,7 @@ void parse_program(const char *src, const char *file, Program *prog)
             advance(p);
             Decl *d = decl_new(DL_TEST, sp);
             if (!at(p, TK_STR))
-                fatal_at(tok(p)->span,
+                fatal_at(E0207, tok(p)->span,
                          "expected test description string");
             d->u.test.desc = str_intern_c(tok(p)->str_val);
             advance(p);
@@ -1325,7 +1326,7 @@ void parse_program(const char *src, const char *file, Program *prog)
             break;
         }
         default:
-            fatal_at(sp, "expected 'use', 'type' or 'fn' at top level, "
+            fatal_at(E0215, sp, "expected 'use', 'type' or 'fn' at top level, "
                          "found %s", tok_desc(p));
         }
     }

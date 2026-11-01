@@ -1,59 +1,59 @@
 # Expected compiler diagnostics for tests/neg/*.zov.
-# Format: fixture|line|column|error-code-or-dash|message-substring
-# The code field is "-" when the current diagnostic has no stable code yet.
-01_nullable_into_fclose.zov|6|15|-|cannot pass nullable
-02_nonexhaustive_union.zov|7|18|-|missing variant Eof
-03_missing_case_null.zov|6|23|-|must cover 'null'
-04_must_use_error_union.zov|7|5|-|error-typed value must be handled
-05_try_without_ret_variant.zov|8|12|-|error variant Eof
-06_use_after_move.zov|9|10|-|use of moved value 'r'
-07_move_in_one_branch.zov|11|10|-|use of moved value 'r'
-08_ref_in_struct_field.zov|2|28|-|borrowed reference cannot be stored
-09_aliasing_call_args.zov|10|23|-|conflicting borrows of 'x'
-10_mutate_under_shared.zov|7|5|-|shared borrow is active
-11_return_ref_to_local.zov|4|12|-|cannot return reference to local
-12_unprintable_concat.zov|32|17|-|cannot concatenate str with S
-13_push_after_free.zov|8|5|-|value was moved
-14_push_on_immutable.zov|6|5|-|requires a mutable binding
-15_assert_non_bool.zov|7|12|-|assert requires bool
-16_borrow_violation_in_test.zov|11|10|-|use of moved value 'r'
-17_enum_match_missing_variant.zov|6|5|-|missing variant Light::Broken
-18_scalar_match_missing_wildcard.zov|4|5|-|requires a case _ => arm
-19_mutate_array_under_slice.zov|31|8|-|cannot mutate 'arr'
-20_map_use_after_free.zov|8|5|-|value was moved
+# Format: fixture|line|column|error-code|message-substring
+# Every entry must assert a stable code from include/diag.h.
+01_nullable_into_fclose.zov|6|15|E0607|cannot pass nullable
+02_nonexhaustive_union.zov|7|18|E0608|missing variant Eof
+03_missing_case_null.zov|6|23|E0608|must cover 'null'
+04_must_use_error_union.zov|7|5|E0704|error-typed value must be handled
+05_try_without_ret_variant.zov|8|12|E0605|error variant Eof
+06_use_after_move.zov|9|10|E0503|use of moved value 'r'
+07_move_in_one_branch.zov|11|10|E0503|use of moved value 'r'
+08_ref_in_struct_field.zov|2|28|E0605|borrowed reference cannot be stored
+09_aliasing_call_args.zov|10|23|E0514|conflicting borrows of 'x'
+10_mutate_under_shared.zov|7|5|E0508|shared borrow is active
+11_return_ref_to_local.zov|4|12|E0512|cannot return reference to local
+12_unprintable_concat.zov|32|17|E0604|cannot concatenate str with S
+13_push_after_free.zov|8|5|E0503|value was moved
+14_push_on_immutable.zov|6|5|E0516|requires a mutable binding
+15_assert_non_bool.zov|7|12|E0604|assert requires bool
+16_borrow_violation_in_test.zov|11|10|E0503|use of moved value 'r'
+17_enum_match_missing_variant.zov|6|5|E0608|missing variant Light::Broken
+18_scalar_match_missing_wildcard.zov|4|5|E0608|requires a case _ => arm
+19_mutate_array_under_slice.zov|31|8|E0508|cannot mutate 'arr'
+20_map_use_after_free.zov|8|5|E0503|value was moved
 21_slice_use_after_vec_free.zov|34|5|E0502|cannot move 'v'
-22_vec_push_while_slice_live.zov|34|5|-|cannot mutably borrow 'v'
-23_qualified_call_missing_import.zov|27|5|-|module 'io' is not imported
-24_module_fn_arity.zov|30|5|-|expects 1 argument(s), got 0
-25_string_use_after_move.zov|8|5|-|use of moved value 'a'
-26_view_outlives_string.zov|7|5|-|cannot free 's': it is still borrowed by 'v'
-27_copied_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 'w'
-28_trim_view_outlives_string.zov|9|5|-|cannot free 's': it is still borrowed by 't'
-29_nested_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 't'
-30_write_through_shared.zov|3|5|-|cannot write through shared reference 'p'
-31_copy_mut_ref.zov|7|5|-|use of moved value 'r'
-32_reborrow_alias.zov|4|5|-|mutably borrowed by 'b'
-33_return_ref_binding.zov|5|12|-|cannot return borrowed data from local 'x'
-34_move_resource_field.zov|7|20|-|cannot move field 'inner'
-35_return_local_view.zov|4|12|-|cannot return borrowed data from local 's'
-36_container_view_outlives_string.zov|7|5|-|cannot free 's': it is still borrowed by 'parts'
-37_invalid_string_literal.zov|3|13|-|String values must be built
-38_private_string_fields.zov|4|18|-|String fields are private
-39_double_string_free.zov|5|5|-|value was already freed
-40_use_after_free.zov|7|18|-|use of freed value 's'
-41_missing_return.zov|1|1|-|does not return a value on all paths
-42_missing_return_branch.zov|1|1|-|does not return a value on all paths
-43_int_literal_overflow.zov|2|17|-|does not fit in i8
-44_unsigned_literal_overflow.zov|2|13|-|does not fit in u8
-45_nullable_cast.zov|3|20|-|cannot cast nullable *i32 to *i32
-46_call_view_outlives_string.zov|11|5|-|cannot free 's': it is still borrowed by 'v'
-47_str_assign_view.zov|6|5|-|cannot free 's': it is still borrowed by 'v'
-48_double_field_free.zov|5|5|-|value was already freed: 'h.name'
-49_return_match_view.zov|3|12|-|cannot return borrowed data from local 's'
-50_match_init_view.zov|8|5|-|cannot free 's': it is still borrowed by 'v'
-51_partial_move_use.zov|10|13|-|cannot move 'b': a field was already moved
-52_nested_double_free.zov|10|23|-|use of moved value 'b.items'
-53_recursive_type.zov|2|26|-|recursive type 'A' has infinite size
-54_branch_view.zov|8|5|-|cannot free 's': it is still borrowed by 'v'
-55_lines_view_outlives_string.zov|8|5|-|cannot free 's': it is still borrowed by 'ls'
-56_loop_view_outlives_string.zov|13|5|-|cannot free 's': it is still borrowed by 't'
+22_vec_push_while_slice_live.zov|34|5|E0506|cannot mutably borrow 'v'
+23_qualified_call_missing_import.zov|27|5|E0404|module 'io' is not imported
+24_module_fn_arity.zov|30|5|E0602|expects 1 argument(s), got 0
+25_string_use_after_move.zov|8|5|E0503|use of moved value 'a'
+26_view_outlives_string.zov|7|5|E0502|cannot free 's': it is still borrowed by 'v'
+27_copied_view_outlives_string.zov|8|5|E0502|cannot free 's': it is still borrowed by 'w'
+28_trim_view_outlives_string.zov|9|5|E0502|cannot free 's': it is still borrowed by 't'
+29_nested_view_outlives_string.zov|8|5|E0502|cannot free 's': it is still borrowed by 't'
+30_write_through_shared.zov|3|5|E0505|cannot write through shared reference 'p'
+31_copy_mut_ref.zov|7|5|E0503|use of moved value 'r'
+32_reborrow_alias.zov|4|5|E0505|mutably borrowed by 'b'
+33_return_ref_binding.zov|5|12|E0512|cannot return borrowed data from local 'x'
+34_move_resource_field.zov|7|20|E0511|cannot move field 'inner'
+35_return_local_view.zov|4|12|E0512|cannot return borrowed data from local 's'
+36_container_view_outlives_string.zov|7|5|E0502|cannot free 's': it is still borrowed by 'parts'
+37_invalid_string_literal.zov|3|13|E0605|String values must be built
+38_private_string_fields.zov|4|18|E0415|String fields are private
+39_double_string_free.zov|5|5|E0509|value was already freed
+40_use_after_free.zov|7|18|E0504|use of freed value 's'
+41_missing_return.zov|1|1|E0703|does not return a value on all paths
+42_missing_return_branch.zov|1|1|E0703|does not return a value on all paths
+43_int_literal_overflow.zov|2|17|E0701|does not fit in i8
+44_unsigned_literal_overflow.zov|2|13|E0701|does not fit in u8
+45_nullable_cast.zov|3|20|E0603|cannot cast nullable *i32 to *i32
+46_call_view_outlives_string.zov|11|5|E0502|cannot free 's': it is still borrowed by 'v'
+47_str_assign_view.zov|6|5|E0502|cannot free 's': it is still borrowed by 'v'
+48_double_field_free.zov|5|5|E0509|value was already freed: 'h.name'
+49_return_match_view.zov|3|12|E0512|cannot return borrowed data from local 's'
+50_match_init_view.zov|8|5|E0502|cannot free 's': it is still borrowed by 'v'
+51_partial_move_use.zov|10|13|E0510|cannot move 'b': a field was already moved
+52_nested_double_free.zov|10|23|E0503|use of moved value 'b.items'
+53_recursive_type.zov|2|26|E0410|recursive type 'A' has infinite size
+54_branch_view.zov|8|5|E0502|cannot free 's': it is still borrowed by 'v'
+55_lines_view_outlives_string.zov|8|5|E0502|cannot free 's': it is still borrowed by 'ls'
+56_loop_view_outlives_string.zov|13|5|E0502|cannot free 's': it is still borrowed by 't'

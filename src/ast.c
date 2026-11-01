@@ -166,6 +166,17 @@ void fatal(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
+    fprintf(stderr, "zovc: internal error: ");
+    vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+    va_end(ap);
+    exit(70);
+}
+
+void failure(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
     fprintf(stderr, "zovc: error: ");
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
@@ -173,10 +184,13 @@ void fatal(const char *fmt, ...)
     exit(1);
 }
 
-void fatal_at(Span span, const char *fmt, ...)
+void fatal_at(const char *code, Span span, const char *fmt, ...)
 {
     char msg[1024];
     va_list ap;
+    if (!diag_code_lookup(code))
+        fatal("unknown diagnostic code '%s' emitted for: %s",
+              code ? code : "(null)", fmt);
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
@@ -184,6 +198,7 @@ void fatal_at(Span span, const char *fmt, ...)
     Diagnostic d;
     memset(&d, 0, sizeof(d));
     d.severity = DIAG_ERR;
+    d.code = code;
     d.message = msg;
     d.primary.file = span.file;
     d.primary.line = (int)span.line;

@@ -25,6 +25,7 @@
  */
 
 #include "token.h"
+#include "diag.h"
 #include "ast.h"
 
 typedef struct Keyword {
@@ -115,7 +116,7 @@ static void skip_ws(Lexer *lx)
             lx->pos += 2;
             for (;;) {
                 if (peek(lx) == '\0') {
-                    fatal_at(here(lx, open, open), "unterminated block comment");
+                    fatal_at(E0101, here(lx, open, open), "unterminated block comment");
                     return;
                 }
                 if (peek(lx) == '\n') {
@@ -158,14 +159,14 @@ static uint32_t lex_escape(Lexer *lx)
         uint32_t v = 0;
         for (int i = 0; i < 2; i++) {
             if (!is_hex(peek(lx)))
-                fatal_at(here(lx, at, at), "invalid \\x escape");
+                fatal_at(E0102, here(lx, at, at), "invalid \\x escape");
             v = v * 16 + (uint32_t)strtoul(lx->pos, NULL, 16);
             lx->pos++;
         }
         return v;
     }
     default:
-        fatal_at(here(lx, at, at), "unknown escape sequence '\\%c'", c);
+        fatal_at(E0103, here(lx, at, at), "unknown escape sequence '\\%c'", c);
         return 0;
     }
 }
@@ -178,7 +179,7 @@ static void lex_string(Lexer *lx)
     for (;;) {
         char c = peek(lx);
         if (c == '\0' || c == '\n')
-            fatal_at(here(lx, at, at), "unterminated string literal");
+            fatal_at(E0104, here(lx, at, at), "unterminated string literal");
         if (c == '"') {
             lx->pos++;
             break;
@@ -211,14 +212,14 @@ static void lex_char(Lexer *lx)
     if (peek(lx) == '\\') {
         v = lex_escape(lx);
     } else if (peek(lx) == '\0' || peek(lx) == '\n') {
-        fatal_at(here(lx, at, at), "unterminated character literal");
+        fatal_at(E0105, here(lx, at, at), "unterminated character literal");
         return;
     } else {
         v = (unsigned char)peek(lx);
         lx->pos++;
     }
     if (peek(lx) != '\'')
-        fatal_at(here(lx, at, at), "unterminated character literal");
+        fatal_at(E0105, here(lx, at, at), "unterminated character literal");
     lx->pos++;
     lx->tok.kind = TK_CHAR;
     lx->tok.char_val = v;
@@ -275,9 +276,9 @@ static void lex_number(Lexer *lx)
         lx->pos++;
     const char *suf = str_intern(num_end, lx->pos);
     if (!is_type_suffix(suf))
-        fatal_at(here(lx, at, at), "invalid numeric suffix '%s'", suf);
+        fatal_at(E0106, here(lx, at, at), "invalid numeric suffix '%s'", suf);
     if (is_float && *suf && !(*suf == 'f'))
-        fatal_at(here(lx, at, at), "float literal with integer suffix '%s'", suf);
+        fatal_at(E0107, here(lx, at, at), "float literal with integer suffix '%s'", suf);
 
     // digit separators are stripped before the numeric conversion
     char buf[64];
@@ -440,7 +441,7 @@ void lex_next(Lexer *lx)
     case ',': t->kind = TK_COMMA; lx->pos++; break;
     case ';': t->kind = TK_SEMI; lx->pos++; break;
     default:
-        fatal_at(t->span, "unexpected character '%c'", c);
+        fatal_at(E0108, t->span, "unexpected character '%c'", c);
         return;
     }
     t->end = lx->pos;

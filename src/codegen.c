@@ -25,6 +25,7 @@
  */
 
 #include "codegen.h"
+#include "diag.h"
 
 typedef struct Buf {
     char *data;
@@ -1332,7 +1333,7 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         if (right_hoisted
             && (e->u.binary.op == TK_ANDAND
                 || e->u.binary.op == TK_OROR)) {
-            fatal_at(e->span,
+            fatal_at(E0901, e->span,
                      "cannot lower '?'/'orelse' inside a short-circuit "
                      "operand");
         }

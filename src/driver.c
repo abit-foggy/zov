@@ -87,18 +87,18 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
     off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                             " -lm -o '%s' -", out_path);
     if (off >= sizeof(cmd)) {
-        fatal("link command too long");
+        failure("link command too long");
         return 1;
     }
     FILE *cc = popen(cmd, "w");
     if (!cc) {
-        fatal("failed to spawn cc");
+        failure("failed to spawn cc");
         return 1;
     }
     fputs(c_src, cc);
     int st = pclose(cc);
     if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-        fatal("cc failed with status %d", st);
+        failure("cc failed with status %d", st);
         return 1;
     }
     return 0;
@@ -179,18 +179,18 @@ static int compile_via_cc_fs(const char *c_src, const char *out_path)
     off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                             " -o '%s' -", out_path);
     if (off >= sizeof(cmd)) {
-        fatal("freestanding link command too long");
+        failure("freestanding link command too long");
         return 1;
     }
     FILE *cc = popen(cmd, "w");
     if (!cc) {
-        fatal("failed to spawn cc");
+        failure("failed to spawn cc");
         return 1;
     }
     fputs(c_src, cc);
     int st = pclose(cc);
     if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-        fatal("cc failed with status %d", st);
+        failure("cc failed with status %d", st);
         return 1;
     }
     return 0;

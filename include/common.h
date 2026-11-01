@@ -67,8 +67,12 @@ int zstr_eq(const char *a, const char *b);
 #define ZOV_NORETURN
 #endif
 
+/* Compiler bug or resource exhaustion: reported as an internal error. */
 void ZOV_NORETURN fatal(const char *fmt, ...);
-void ZOV_NORETURN fatal_at(Span span, const char *fmt, ...);
+/* Environment failure (I/O, missing toolchain): reported as a plain error. */
+void ZOV_NORETURN failure(const char *fmt, ...);
+/* User-facing diagnostic at a source span; code must exist in diag.c. */
+void ZOV_NORETURN fatal_at(const char *code, Span span, const char *fmt, ...);
 
 /* Typed dynamic array; POD storage, geometric growth. */
 #define DA(T) struct { T *items; size_t len; size_t cap; }
