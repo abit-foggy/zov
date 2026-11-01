@@ -1,0 +1,8 @@
+// MUST FAIL: type aliases cannot form a cycle
+export type X = Y;
+
+export type Y = X;
+
+export fn main() i32 = {
+    return 0;
+};

@@ -61,3 +61,8 @@
 58_unexpected_token.zov|3|20|E0201|expected ';' after let
 59_undefined_symbol.zov|3|12|E0402|undefined symbol 'missing'
 60_type_mismatch.zov|3|5|E0601|cannot bind str to i32
+61_recursive_value_type.zov|3|5|E0410|recursive type 'Bad' has infinite size
+62_indirect_recursive_type.zov|7|5|E0410|A -> B -> A
+63_recursive_union_type.zov|2|1|E0410|recursive type 'U'
+64_alias_cycle.zov|2|1|E0416|type alias cycle: X -> Y -> X
+65_recursive_generic_type.zov|2|1|E0410|expands without bound

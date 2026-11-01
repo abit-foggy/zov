@@ -276,6 +276,8 @@ static const DiagCodeInfo g_codes[] = {
      "A method receiver must be a struct type, written as (self: &T)."},
     {"E0415", "field is private",
      "Use the type's accessor methods instead of its raw fields."},
+    {"E0416", "type alias cycle",
+     "An alias must resolve to a concrete type; remove the cycle."},
 
     {"E0502", "move while borrowed",
      "Consume the borrow before moving or freeing the value."},
@@ -421,6 +423,12 @@ struct diag_explain {
 };
 
 static const struct diag_explain g_explains[] = {
+    {"E0416", "type alias cycle",
+     "Two or more type aliases refer to each other, so none of them "
+     "names a concrete type. Point at least one alias at a real "
+     "struct, union, or primitive instead of another alias.",
+     "type Handle = *Conn;",
+     "type A = B; type B = A;"},
     {"E0401", "undefined function",
      "The function name was not found in any visible scope or imported "
      "module. Check the spelling, or add the corresponding `use` "

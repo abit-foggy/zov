@@ -1,0 +1,24 @@
+// legal recursion: pointer indirection breaks the layout cycle, and
+// forward references resolve regardless of declaration order
+use std::io;
+
+export type Node = struct {
+    value: i32,
+    next: nullable *Node,
+};
+
+export type A = struct {
+    b: *B,
+};
+
+export type B = struct {
+    a: *A,
+};
+
+export fn main() i32 = {
+    let n = Node{ value = 1, next = null };
+    if (n.next != null) { return 1; };
+    io::println("node={n.value}");
+    assert(n.value == 1);
+    return 0;
+};

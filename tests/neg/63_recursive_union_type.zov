@@ -1,0 +1,6 @@
+// MUST FAIL: a union member cannot contain the union by value
+export type U = (i32 | U);
+
+export fn main() i32 = {
+    return 0;
+};

@@ -98,6 +98,7 @@ typedef struct {
 #define E0413 "E0413"
 #define E0414 "E0414"
 #define E0415 "E0415"
+#define E0416 "E0416"
 #define E0502 "E0502"
 #define E0503 "E0503"
 #define E0504 "E0504"

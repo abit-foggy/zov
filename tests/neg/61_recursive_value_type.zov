@@ -1,0 +1,8 @@
+// MUST FAIL: a struct cannot contain itself by value
+export type Bad = struct {
+    x: Bad,
+};
+
+export fn main() i32 = {
+    return 0;
+};

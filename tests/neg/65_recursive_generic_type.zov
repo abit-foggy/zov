@@ -1,0 +1,13 @@
+// MUST FAIL: Box[T] contains Box[T], so instantiation never terminates
+export type Box[T] = struct {
+    inner: Box[T],
+    v: T,
+};
+
+export fn touch(b: Box[i32]) void = {
+    assert(b.v == 1);
+};
+
+export fn main() i32 = {
+    return 0;
+};

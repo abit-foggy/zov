@@ -61,6 +61,7 @@ typedef struct Sema {
     Type *fn_ret;
     int loop_depth;
     int has_main;
+    int inst_depth; /* nested generic instantiations; guards recursive types */
     Program *prog;
     DA(struct Meth) methods;
 } Sema;
@@ -141,57 +142,136 @@ static Decl *find_struct_decl(Sema *se, const char *name)
     return NULL;
 }
 
-/* A struct that contains itself by value has infinite size. Pointers,
- * slices, and references break the cycle; arrays and unions do not. */
-static void check_type_cycle(Sema *se, Decl *d, const char **path, int npath)
+/* A type that contains itself by value has infinite size.  Pointers,
+ * slices, references, and owned String (which stores a pointer) break
+ * the cycle; arrays, unions, and aliases do not. */
+typedef struct CycCtx {
+    Sema *se;
+    const char *path[64];
+    int alias_path[64]; /* path[i] was entered through a type alias */
+    int npath;
+} CycCtx;
+
+static Decl *find_type_decl_any(Sema *se, const char *name)
 {
-    if (npath >= 64)
-        fatal_at(E0805, d->span, "type nesting is too deep");
-    path[npath] = d->u.type.name;
-    for (size_t i = 0; i < d->u.type.fields.len; i++) {
-        Field *f = &d->u.type.fields.items[i];
-        Type *t = f->ty;
-        while (t && t->kind == TY_ARRAY)
-            t = t->base;
-        if (t && t->kind == TY_UNION) {
-            for (size_t k = 0; k < t->members.len; k++) {
-                Type *m = t->members.items[k];
-                while (m && m->kind == TY_ARRAY)
-                    m = m->base;
-                if (m && m->kind == TY_STRUCT && m->name
-                    && !zstr_eq(m->name, "String")) {
-                    for (int p = 0; p <= npath; p++)
-                        if (path[p] == m->name || zstr_eq(path[p], m->name))
-                            fatal_at(E0410, f->span,
-                                     "recursive type '%s' has infinite size; "
-                                     "use a pointer or slice", m->name);
-                }
-            }
+    for (size_t i = 0; i < se->prog->decls.len; i++) {
+        Decl *d = se->prog->decls.items[i];
+        if (d->kind == DL_TYPE && d->u.type.tparams.len == 0
+            && !d->u.type.is_enum && zstr_eq(d->u.type.name, name))
+            return d;
+    }
+    return NULL;
+}
+
+/* Renders the active path from `from` plus the repeated name. */
+static const char *cycle_chain(CycCtx *c, int from, const char *again)
+{
+    static char buf[512];
+    size_t off = 0;
+    buf[0] = '\0';
+    for (int i = from; i < c->npath && off + 4 < sizeof(buf); i++)
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, "%s -> ",
+                                c->path[i]);
+    snprintf(buf + off, sizeof(buf) - off, "%s", again);
+    return buf;
+}
+
+static void cyc_walk_type(CycCtx *c, Type *t, Span span);
+
+static void cyc_walk_decl(CycCtx *c, Decl *d, Span span)
+{
+    for (int i = 0; i < c->npath; i++) {
+        if (!zstr_eq(c->path[i], d->u.type.name))
             continue;
+        int all_alias = d->u.type.alias_ty != NULL;
+        for (int j = i; j < c->npath; j++)
+            if (!c->alias_path[j])
+                all_alias = 0;
+        if (all_alias)
+            fatal_at(E0416, span, "type alias cycle: %s",
+                     cycle_chain(c, i, d->u.type.name));
+        fatal_at(E0410, span,
+                 "recursive type '%s' has infinite size: %s; "
+                 "use a pointer or slice", d->u.type.name,
+                 cycle_chain(c, i, d->u.type.name));
+    }
+    if (c->npath >= 60)
+        fatal_at(E0805, d->u.type.name ? span : span,
+                 "type nesting is too deep");
+    c->alias_path[c->npath] = d->u.type.alias_ty != NULL;
+    c->path[c->npath++] = d->u.type.name;
+    if (d->u.type.alias_ty) {
+        cyc_walk_type(c, d->u.type.alias_ty, span);
+    } else {
+        for (size_t i = 0; i < d->u.type.fields.len; i++) {
+            Field *f = &d->u.type.fields.items[i];
+            cyc_walk_type(c, f->ty, f->span);
         }
-        if (!t || t->kind != TY_STRUCT || !t->name
-            || zstr_eq(t->name, "String"))
-            continue;
-        for (int p = 0; p <= npath; p++)
-            if (path[p] == t->name || zstr_eq(path[p], t->name))
-                fatal_at(E0410, f->span,
-                         "recursive type '%s' has infinite size; "
-                         "use a pointer or slice", t->name);
-        Decl *next = find_struct_decl(se, t->name);
-        if (next)
-            check_type_cycle(se, next, path, npath + 1);
+    }
+    c->npath--;
+}
+
+static void cyc_walk_type(CycCtx *c, Type *t, Span span)
+{
+    if (!t)
+        return;
+    switch (t->kind) {
+    case TY_ARRAY:
+        cyc_walk_type(c, t->base, span);
+        break;
+    case TY_UNION:
+        /* name the union in the chain: S -> (S | !void) -> S */
+        for (size_t k = 0; k < t->members.len; k++) {
+            Type *m = t->members.items[k];
+            while (m && m->kind == TY_ARRAY)
+                m = m->base;
+            if (!m || m->kind != TY_STRUCT || !m->name
+                || zstr_eq(m->name, "String"))
+                continue;
+            for (int i = 0; i < c->npath; i++) {
+                if (!zstr_eq(c->path[i], m->name))
+                    continue;
+                char chain[512];
+                size_t off = 0;
+                for (int j = i; j < c->npath && off + 4 < sizeof(chain); j++)
+                    off += (size_t)snprintf(chain + off, sizeof(chain) - off,
+                                           "%s -> ", c->path[j]);
+                snprintf(chain + off, sizeof(chain) - off, "%s -> %s",
+                         type_spelling(t), m->name);
+                fatal_at(E0410, span,
+                         "recursive type '%s' has infinite size: %s; "
+                         "use a pointer or slice", m->name, chain);
+            }
+        }
+        for (size_t k = 0; k < t->members.len; k++)
+            cyc_walk_type(c, t->members.items[k], span);
+        break;
+    case TY_STRUCT: {
+        /* owned String stores a heap pointer, so it never nests */
+        if (!t->name || zstr_eq(t->name, "String"))
+            return;
+        Decl *d = find_type_decl_any(c->se, t->name);
+        if (d)
+            cyc_walk_decl(c, d, span);
+        break;
+    }
+    default:
+        break; /* pointers, slices, references, scalars stop the cycle */
     }
 }
 
 static void check_all_type_cycles(Sema *se)
 {
+    CycCtx c;
+    memset(&c, 0, sizeof(c));
+    c.se = se;
     for (size_t i = 0; i < se->prog->decls.len; i++) {
         Decl *d = se->prog->decls.items[i];
-        if (d->kind != DL_TYPE || d->u.type.alias_ty
-            || d->u.type.is_enum || d->u.type.tparams.len > 0)
+        if (d->kind != DL_TYPE || d->u.type.is_enum
+            || d->u.type.tparams.len > 0)
             continue;
-        const char *path[64];
-        check_type_cycle(se, d, path, 0);
+        c.npath = 0;
+        cyc_walk_decl(&c, d, d->span);
     }
 }
 
@@ -688,6 +768,13 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
     }
     if (!sym || sym->kind != SYM_TYPE || !sym->is_template || !sym->decl)
         diag_fatal_global(E0801, "'%s' is not a generic type", tname);
+    if (se->inst_depth >= 64)
+        /* Box[T] containing Box[Box[T]] never reaches a finite layout */
+        fatal_at(E0410, sym->decl->span,
+                 "recursive generic type '%s' expands without bound; "
+                 "break the cycle with a concrete type",
+                 sym->decl->u.type.name);
+    se->inst_depth++;
     /* canonicalize qualified names: the key must match receiver
      * instantiations built inside the defining module */
     tname = sym->decl->u.type.name;
@@ -697,8 +784,10 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
               (unsigned long)tps->len, (unsigned long)args->len);
     char *key = inst_key(tname, args);
     Decl *existing = find_decl_by_name(se, str_intern_c(key));
-    if (existing)
+    if (existing) {
+        se->inst_depth--;
         return type_struct(existing->u.type.name);
+    }
     Decl *d = decl_new(DL_TYPE, sym->decl->span);
     d->u.type.name = str_intern_c(key);
     for (size_t i = 0; i < sym->decl->u.type.fields.len; i++) {
@@ -717,6 +806,7 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
     it->tmpl = sym->decl->u.type.name;
     for (size_t i = 0; i < args->len; i++)
         da_push(&it->inst_args, args->items[i]);
+    se->inst_depth--;
     return it;
 }
 
