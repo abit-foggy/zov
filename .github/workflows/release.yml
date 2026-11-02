@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+          - target: linux-aarch64
+            os: ubuntu-24.04-arm
+          - target: macos-x86_64
+            os: macos-13
+          - target: macos-aarch64
+            os: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and package
+        run: |
+          if [ "${{ matrix.target }}" = "linux-aarch64" ] && [ "$(uname -m)" != "aarch64" ]; then
+            sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+            make CC=aarch64-linux-gnu-gcc USE_LIBTCC=0
+            make dist TARGET=${{ matrix.target }}
+          elif [ "${{ matrix.target }}" = "macos-x86_64" ] && [ "$(uname -m)" != "x86_64" ]; then
+            make USE_LIBTCC=0 CFLAGS="-std=c99 -Wall -Wextra -O2 -Iinclude -arch x86_64"
+            make dist TARGET=${{ matrix.target }}
+          else
+            make
+            make dist TARGET=${{ matrix.target }}
+          fi
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built archives
+        uses: actions/download-artifact@v4
+        with:
+          path: all-dist
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd all-dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            all-dist/*.tar.gz
+            all-dist/SHA256SUMS
+            install.sh
+          generate_release_notes: true

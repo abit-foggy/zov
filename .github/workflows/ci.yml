@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test-linux:
+    name: Test (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools and compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang
+
+      - name: Build zovc, zov-lsp, and sklad
+        run: make
+
+      - name: Run standard test suite
+        run: bash tests/run.sh
+
+      - name: Run sanitizer sweep (ASan / UBSan)
+        run: ZOV_SANITIZE=1 bash tests/run.sh
+
+      - name: Test packaging and installer
+        run: |
+          make dist
+          ./install.sh --from-dir dist --prefix /tmp/zov-staged
+          /tmp/zov-staged/bin/zovc --version
+          /tmp/zov-staged/bin/sklad version
+
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build zovc, zov-lsp, and sklad
+        run: make
+
+      - name: Run test suite
+        run: bash tests/run.sh
+
+      - name: Test packaging and installer
+        run: |
+          make dist
+          ./install.sh --from-dir dist --prefix /tmp/zov-staged
+          /tmp/zov-staged/bin/zovc --version
+          /tmp/zov-staged/bin/sklad version
