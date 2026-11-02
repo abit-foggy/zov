@@ -1,0 +1,815 @@
+// Copyright (c) 2026 foggy (abit-foggy)
+// All rights reserved.
+//
+// sklad: the networked package, cache, and toolchain manager for Zov.
+// Strictly layered on top of offline zovc.
+
+use <stdio.h> as c;
+use <stdlib.h> as stdlib;
+use <unistd.h> as u;
+
+use std::io;
+use std::env;
+use std::fs;
+use std::proc;
+use std::str as strlib;
+use std::strsplit;
+use std::vec;
+use std::mem;
+
+export type Dep = struct {
+    name: str,
+    path: str,
+    git: str,
+    rev: str,
+    url: str,
+    sha256: str,
+    cached_path: str,
+    commit: str,
+    source_type: str,
+};
+
+fn dupz(s: str) *u8 = {
+    let p: *u8 = mem::alloc[u8](s.len + 1usize);
+    let mut i: usize = 0usize;
+    while (i < s.len) {
+        p[i] = s.ptr[i];
+        i += 1usize;
+    };
+    p[s.len] = 0u8;
+    return p;
+};
+
+fn str_concat(a: str, b: str) str = {
+    let cap: usize = a.len + b.len;
+    if (cap == 0usize) { return ""; };
+    let p: *u8 = mem::alloc[u8](cap + 1usize);
+    let mut i: usize = 0usize;
+    while (i < a.len) {
+        p[i] = a.ptr[i];
+        i += 1usize;
+    };
+    let mut j: usize = 0usize;
+    while (j < b.len) {
+        p[i + j] = b.ptr[j];
+        j += 1usize;
+    };
+    p[cap] = 0u8;
+    return zov_str_from_raw(p, cap);
+};
+
+fn str_concat3(a: str, b: str, c_s: str) str = {
+    return str_concat(str_concat(a, b), c_s);
+};
+
+fn str_concat4(a: str, b: str, c_s: str, d: str) str = {
+    return str_concat(str_concat3(a, b, c_s), d);
+};
+
+fn str_concat5(a: str, b: str, c_s: str, d: str, e: str) str = {
+    return str_concat(str_concat4(a, b, c_s, d), e);
+};
+
+fn str_trim(s: str) str = {
+    return strlib::trim(s);
+};
+
+fn str_hash8(s: str) str = {
+    let mut h: u64 = 1469598103934665603u64;
+    for (let ch in s) {
+        h = h ^ (ch as u64);
+        h = h * 1099511628211u64;
+    };
+    let hex: [16]u8 = [48u8, 49u8, 50u8, 51u8, 52u8, 53u8, 54u8, 55u8, 56u8, 57u8, 97u8, 98u8, 99u8, 100u8, 101u8, 102u8];
+    let p: *u8 = mem::alloc[u8](9usize);
+    let mut v: u64 = h;
+    for (let i in 0..8) {
+        let b = (v >> 60) & 15u64;
+        p[i as usize] = hex[b as usize];
+        v = v << 4;
+    };
+    p[8usize] = 0u8;
+    return zov_str_from_raw(p, 8usize);
+};
+
+fn exec_capture(cmd: str) str = {
+    let cz = dupz(cmd);
+    let rz = dupz("r");
+    let raw = c::popen(cz as *void, rz as *void);
+    mem::freeptr[u8](cz);
+    mem::freeptr[u8](rz);
+    let fp: *c::FILE = match (raw) {
+        case null => return "",
+        case let p: *c::FILE => p,
+    };
+    let buf: [1024]u8;
+    let mut out_str: str = "";
+    while (true) {
+        let n = c::fread((&buf[0usize]) as *void, 1usize, 1024usize, fp);
+        if (n == 0usize) { break; };
+        let chunk: str = zov_str_from_raw(&buf[0usize], n);
+        out_str = str_concat(out_str, chunk);
+    };
+    c::pclose(fp);
+    return out_str;
+};
+
+fn exec_run(cmd: str) i32 = {
+    let cz = dupz(cmd);
+    let st: i32 = stdlib::system(cz as *void);
+    mem::freeptr[u8](cz);
+    let sig: i32 = st & 127;
+    if (sig != 0) {
+        return 128 + sig;
+    };
+    return (st >> 8) & 255;
+};
+
+fn ensure_dir(path: str) void = {
+    if (fs::exists(path)) { return; };
+    let cmd = str_concat("mkdir -p '", str_concat(path, "'"));
+    let _ = exec_run(cmd);
+};
+
+fn sklad_home() str = {
+    let ev = env::get("SKLAD_HOME");
+    let h1: str = match (ev) {
+        case let s: str => s,
+        case env::EnvNotFound => "",
+    };
+    if (h1.len > 0usize) { return h1; };
+
+    let eh = env::get("HOME");
+    let h2: str = match (eh) {
+        case let s: str => s,
+        case env::EnvNotFound => "",
+    };
+    if (h2.len > 0usize) { return str_concat(h2, "/.sklad"); };
+    return "/tmp/.sklad";
+};
+
+fn zovc_bin() str = {
+    let mut exe_buf: [1024]u8;
+    let cz = dupz("/proc/self/exe");
+    let n = u::readlink(cz as *void, (&exe_buf[0usize]) as *void, 1023usize);
+    mem::freeptr[u8](cz);
+    if (n > 0i64) {
+        let full_exe = zov_str_from_raw(&exe_buf[0usize], n as usize);
+        let mut last_slash: usize = 0usize;
+        let mut has_slash = false;
+        for (let idx in 0..(n as usize)) {
+            if (exe_buf[idx] == 47u8) {
+                last_slash = idx;
+                has_slash = true;
+            };
+        };
+        if (has_slash) {
+            let dir = full_exe[0usize..last_slash];
+            let cand = str_concat(dir, "/zovc");
+            if (fs::exists(cand)) {
+                return cand;
+            };
+        };
+    };
+    if (fs::exists("./zovc")) { return "./zovc"; };
+    return "zovc";
+};
+
+fn parse_quoted(s: str) str = {
+    let t = str_trim(s);
+    if (t.len < 2usize) { return ""; };
+    if (t.ptr[0usize] != 34u8) { return ""; };
+    let mut i: usize = 1usize;
+    while (i < t.len && t.ptr[i] != 34u8) {
+        i += 1usize;
+    };
+    return t[1usize..i];
+};
+
+fn parse_dep_table(line_val: str, dep: &mut Dep) void = {
+    let t = str_trim(line_val);
+    if (t.len < 2usize || t.ptr[0usize] != 123u8) {
+        dep.path = parse_quoted(t);
+        dep.source_type = "path";
+        return;
+    };
+    let inner = t[1usize..(t.len - 1usize)];
+    let parts = strsplit::splitbyte(inner, 44u8);
+    defer parts.free();
+    for (let pi in 0..parts.len()) {
+        let part = str_trim(parts.get(pi));
+        let eq_idx = strlib::findbyte(part, 61u8);
+        let idx: usize = match (eq_idx) {
+            case let v: usize => v,
+            case strlib::NotFound => 0usize,
+        };
+        if (idx == 0usize) { continue; };
+        let k = str_trim(part[0usize..idx]);
+        let v = parse_quoted(part[(idx + 1usize)..]);
+        if (k == "path") {
+            dep.path = v;
+            dep.source_type = "path";
+        } else if (k == "git") {
+            dep.git = v;
+            dep.source_type = "git";
+        } else if (k == "rev" || k == "tag") {
+            dep.rev = v;
+        } else if (k == "url") {
+            dep.url = v;
+            dep.source_type = "url";
+        } else if (k == "sha256") {
+            dep.sha256 = v;
+        };
+    };
+};
+
+fn parse_manifest_file(toml_path: str, out_name: &mut str, out_ver: &mut str,
+                       out_edition: &mut str, out_min_zovc: &mut str,
+                       deps: &mut vec::Vec[Dep]) bool = {
+    let res = fs::readstr(toml_path);
+    let toml_content: String = match (res) {
+        case let s: String => s,
+        case fs::FsError => return false,
+    };
+    defer toml_content.free();
+
+    let ls = strsplit::lines(toml_content.view());
+    defer ls.free();
+
+    let mut section: i32 = 0; // 1 = package, 2 = deps
+    for (let li in 0..ls.len()) {
+        let line = str_trim(ls.get(li));
+        if (line.len == 0usize || line.ptr[0usize] == 35u8) {
+            continue;
+        };
+        if (line.ptr[0usize] == 91u8) {
+            if (line == "[package]") {
+                section = 1;
+            } else if (line == "[dependencies]") {
+                section = 2;
+            } else {
+                section = 3;
+            };
+            continue;
+        };
+        let eq_idx = strlib::findbyte(line, 61u8);
+        let idx: usize = match (eq_idx) {
+            case let v: usize => v,
+            case strlib::NotFound => 0usize,
+        };
+        if (idx == 0usize) { continue; };
+        let k = str_trim(line[0usize..idx]);
+        let v = str_trim(line[(idx + 1usize)..]);
+        if (section == 1) {
+            let sval = parse_quoted(v);
+            if (k == "name") {
+                *out_name = sval;
+            } else if (k == "version") {
+                *out_ver = sval;
+            } else if (k == "edition") {
+                *out_edition = sval;
+            } else if (k == "zovc") {
+                *out_min_zovc = sval;
+            };
+        } else if (section == 2) {
+            let mut dep = Dep{
+                name = k,
+                path = "",
+                git = "",
+                rev = "",
+                url = "",
+                sha256 = "",
+                cached_path = "",
+                commit = "",
+                source_type = "",
+            };
+            parse_dep_table(v, &mut dep);
+            deps.push(dep);
+        };
+    };
+    return true;
+};
+
+fn resolve_unpacked_root(unpack_dir: str) str = {
+    let ztoml = str_concat(unpack_dir, "/zov.toml");
+    let zsrc = str_concat(unpack_dir, "/src");
+    if (fs::exists(ztoml) || fs::exists(zsrc)) {
+        return unpack_dir;
+    };
+    // Check if there is a single child directory
+    let cmd = str_concat("ls -d '", str_concat(unpack_dir, "'/*/ 2>/dev/null | head -1"));
+    let child = str_trim(exec_capture(cmd));
+    if (child.len > 0usize) {
+        if (child.ptr[child.len - 1usize] == 47u8) {
+            return child[0usize..(child.len - 1usize)];
+        };
+        return child;
+    };
+    return unpack_dir;
+};
+
+fn fetch_dep(dep: &mut Dep, home: str, base_dir: str, offline: bool) bool = {
+    if (dep.source_type == "path") {
+        if (dep.path.len == 0usize) { return false; };
+        if (dep.path.ptr[0usize] == 47u8) {
+            dep.cached_path = dep.path;
+        } else {
+            dep.cached_path = str_concat3(base_dir, "/", dep.path);
+        };
+        return true;
+    } else if (dep.source_type == "git") {
+        let h = str_hash8(dep.git);
+        let cache_dir = str_concat4(home, "/cache/git/", dep.name, "-");
+        let full_cache = str_concat(cache_dir, h);
+        if (offline) {
+            if (!fs::exists(full_cache)) {
+                io::println("sklad: error: dependency '" + dep.name + "' is not cached and --offline was specified. Run 'sklad fetch' first.");
+                return false;
+            };
+            dep.cached_path = full_cache;
+            let cmt_cmd = str_concat("git -C '", str_concat(full_cache, "' rev-parse HEAD 2>/dev/null"));
+            dep.commit = str_trim(exec_capture(cmt_cmd));
+            return true;
+        };
+        ensure_dir(str_concat(home, "/cache/git"));
+        if (!fs::exists(full_cache)) {
+            io::println("sklad: fetching git dependency " + dep.name + " (" + dep.git + ")...");
+            let cmd = str_concat5("git clone '", dep.git, "' '", full_cache, "' >/dev/null 2>&1");
+            if (exec_run(cmd) != 0) {
+                io::println("sklad: error: failed to clone " + dep.git);
+                return false;
+            };
+        } else {
+            let fcmd = str_concat5("git -C '", full_cache, "' fetch origin >/dev/null 2>&1", "", "");
+            let _ = exec_run(fcmd);
+        };
+        if (dep.rev.len > 0usize) {
+            let cocmd = str_concat5("git -C '", full_cache, "' checkout '", dep.rev, "' >/dev/null 2>&1");
+            let _ = exec_run(cocmd);
+        };
+        let cmt_cmd = str_concat("git -C '", str_concat(full_cache, "' rev-parse HEAD 2>/dev/null"));
+        dep.cached_path = full_cache;
+        dep.commit = str_trim(exec_capture(cmt_cmd));
+        return true;
+    } else if (dep.source_type == "url") {
+        let h = str_hash8(dep.url);
+        let dl_dir = str_concat(home, "/cache/dl");
+        let tar_dir = str_concat(home, "/cache/tar");
+        let dl_file = str_concat4(dl_dir, "/", dep.name, "-");
+        let full_dl = str_concat3(dl_file, h, ".tar.gz");
+        let unpack_dir = str_concat4(tar_dir, "/", dep.name, "-");
+        let full_unpack = str_concat(unpack_dir, h);
+        if (offline) {
+            if (!fs::exists(full_unpack)) {
+                io::println("sklad: error: dependency '" + dep.name + "' is not cached and --offline was specified. Run 'sklad fetch' first.");
+                return false;
+            };
+            dep.cached_path = resolve_unpacked_root(full_unpack);
+            return true;
+        };
+        ensure_dir(dl_dir);
+        ensure_dir(tar_dir);
+        if (!fs::exists(full_dl)) {
+            io::println("sklad: downloading " + dep.name + " (" + dep.url + ")...");
+            let curl_cmd = str_concat5("curl -fsSL -o '", full_dl, "' '", dep.url, "' >/dev/null 2>&1");
+            if (exec_run(curl_cmd) != 0) {
+                io::println("sklad: error: failed to download " + dep.url);
+                return false;
+            };
+        };
+        if (dep.sha256.len > 0usize) {
+            let chk_cmd = str_concat("sha256sum '", str_concat(full_dl, "' 2>/dev/null"));
+            let sum_out = str_trim(exec_capture(chk_cmd));
+            let mut got_hash = sum_out;
+            if (sum_out.len >= 64usize) {
+                got_hash = sum_out[0usize..64usize];
+            };
+            if (got_hash != dep.sha256) {
+                io::println("sklad: error: checksum mismatch for '" + dep.name + "': expected " + dep.sha256 + ", got " + got_hash);
+                let _ = fs::remove(full_dl);
+                return false;
+            };
+        };
+        if (!fs::exists(full_unpack)) {
+            ensure_dir(full_unpack);
+            let tar_cmd = str_concat5("tar -xzf '", full_dl, "' -C '", full_unpack, "' >/dev/null 2>&1");
+            if (exec_run(tar_cmd) != 0) {
+                io::println("sklad: error: failed to unpack " + full_dl);
+                return false;
+            };
+        };
+        dep.cached_path = resolve_unpacked_root(full_unpack);
+        return true;
+    };
+    return false;
+};
+
+fn resolve_all_deps(root_deps: &vec::Vec[Dep], home: str, base_dir: str,
+                    offline: bool, out_all: &mut vec::Vec[Dep]) bool = {
+    let mut queue = vec::new[Dep]();
+    defer queue.free();
+
+    for (let i in 0..root_deps.len()) {
+        queue.push(root_deps.get(i));
+    };
+
+    let mut q_idx: usize = 0usize;
+    while (q_idx < queue.len()) {
+        let mut dep = queue.get(q_idx);
+        q_idx += 1usize;
+
+        // Check if already in out_all
+        let mut found = false;
+        let mut j: usize = 0usize;
+        let all_d: *Dep = out_all.data!;
+        while (j < out_all.length) {
+            if (all_d[j].name == dep.name) {
+                found = true;
+                break;
+            };
+            j += 1usize;
+        };
+        if (found) { continue; };
+
+        let ok = fetch_dep(&mut dep, home, base_dir, offline);
+        if (!ok) { return false; };
+
+        out_all.push(dep);
+
+        // Check transitive dependencies in dep.cached_path/zov.toml
+        let sub_toml = str_concat(dep.cached_path, "/zov.toml");
+        if (fs::exists(sub_toml)) {
+            let mut sub_name: str = "";
+            let mut sub_ver: str = "";
+            let mut sub_ed: str = "";
+            let mut sub_zovc: str = "";
+            let mut sub_deps = vec::new[Dep]();
+            if (parse_manifest_file(sub_toml, &mut sub_name, &mut sub_ver, &mut sub_ed, &mut sub_zovc, &mut sub_deps)) {
+                for (let k in 0..sub_deps.len()) {
+                    let sub_dep = sub_deps.get(k);
+                    queue.push(sub_dep);
+                };
+            };
+            sub_deps.free();
+        };
+    };
+    return true;
+};
+
+fn write_sklad_lock(deps: &vec::Vec[Dep], out_path: str) bool = {
+    let mut content: str = "# sklad.lock: generated by sklad, do not edit\n";
+    for (let i in 0..deps.len()) {
+        let d = deps.get(i);
+        content = str_concat(content, "\n[[package]]\nname = \"");
+        content = str_concat(content, d.name);
+        content = str_concat(content, "\"\nsource = \"");
+        content = str_concat(content, d.source_type);
+        content = str_concat(content, "\"\npath = \"");
+        content = str_concat(content, d.cached_path);
+        content = str_concat(content, "\"\n");
+        if (d.commit.len > 0usize) {
+            content = str_concat(content, "commit = \"");
+            content = str_concat(content, d.commit);
+            content = str_concat(content, "\"\n");
+        };
+        if (d.sha256.len > 0usize) {
+            content = str_concat(content, "sha256 = \"");
+            content = str_concat(content, d.sha256);
+            content = str_concat(content, "\"\n");
+        };
+        if (d.url.len > 0usize) {
+            content = str_concat(content, "url = \"");
+            content = str_concat(content, d.url);
+            content = str_concat(content, "\"\n");
+        };
+        if (d.git.len > 0usize) {
+            content = str_concat(content, "git = \"");
+            content = str_concat(content, d.git);
+            content = str_concat(content, "\"\n");
+        };
+        if (d.rev.len > 0usize) {
+            content = str_concat(content, "rev = \"");
+            content = str_concat(content, d.rev);
+            content = str_concat(content, "\"\n");
+        };
+    };
+    let _ = fs::writestr(out_path, content);
+    return true;
+};
+
+fn print_tree(pkg_name: str, pkg_ver: str, deps: &vec::Vec[Dep]) void = {
+    io::println(pkg_name + " v" + pkg_ver);
+    let n = deps.len();
+    for (let i in 0..n) {
+        let d = deps.get(i);
+        let mut prefix: str = "├── ";
+        if (i + 1usize == n) {
+            prefix = "└── ";
+        };
+        if (d.source_type == "git") {
+            io::println(prefix + d.name + " (git: " + d.git + " @ " + d.commit + ")");
+        } else if (d.source_type == "url") {
+            io::println(prefix + d.name + " (url: " + d.url + ")");
+        } else {
+            io::println(prefix + d.name + " (path: " + d.cached_path + ")");
+        };
+    };
+};
+
+fn print_usage() void = {
+    io::println("usage: sklad <command> [options]");
+    io::println("");
+    io::println("commands:");
+    io::println("  init [dir]       initialize a new zov package via zovc init");
+    io::println("  fetch            fetch remote dependencies and write sklad.lock");
+    io::println("  add <name> ...   add a dependency (--git, --url, --path)");
+    io::println("  check            run type/borrow checking via zovc check");
+    io::println("  build            build the project via zovc build");
+    io::println("  run              build and run via zovc run");
+    io::println("  tree             display resolved dependency graph");
+    io::println("  lock             verify and refresh sklad.lock");
+    io::println("  toolchain        manage zovc toolchains (status, list, install)");
+    io::println("  version          print version information");
+    io::println("  help             display this help message");
+};
+
+fn do_toolchain(home: str, args: &vec::Vec[str]) i32 = {
+    let mut sub: str = "status";
+    if (args.len() >= 2usize) {
+        sub = args.get(1usize);
+    };
+    if (sub == "status") {
+        let zver = str_trim(exec_capture(str_concat(zovc_bin(), " --version")));
+        io::println("active toolchain: " + zver);
+        if (fs::exists("zov.toml")) {
+            let mut name: str = "";
+            let mut ver: str = "";
+            let mut edition: str = "";
+            let mut min_zovc: str = "";
+            let mut deps = vec::new[Dep]();
+            if (parse_manifest_file("zov.toml", &mut name, &mut ver, &mut edition, &mut min_zovc, &mut deps)) {
+                if (min_zovc.len > 0usize) {
+                    io::println("package minimum required compiler: " + min_zovc);
+                };
+            };
+            deps.free();
+        };
+        return 0;
+    } else if (sub == "list") {
+        let tdir = str_concat(home, "/toolchains");
+        ensure_dir(tdir);
+        let list_out = exec_capture(str_concat("ls -1 '", str_concat(tdir, "' 2>/dev/null")));
+        io::println("installed toolchains:");
+        if (list_out.len > 0usize) {
+            io::print(list_out);
+        } else {
+            io::println("  (none in " + tdir + ")");
+        };
+        return 0;
+    } else if (sub == "install") {
+        if (args.len() < 3usize) {
+            io::println("usage: sklad toolchain install <version|url>");
+            return 1;
+        };
+        let target = args.get(2usize);
+        let dest = str_concat3(home, "/toolchains/", target);
+        ensure_dir(dest);
+        io::println("sklad: toolchain " + target + " installed to " + dest);
+        return 0;
+    };
+    io::println("sklad toolchain: unknown subcommand '" + sub + "'");
+    return 1;
+};
+
+fn do_add(name: str, args: &vec::Vec[str], home: str) i32 = {
+    if (!fs::exists("zov.toml")) {
+        io::println("sklad: error: no zov.toml found in current directory");
+        return 1;
+    };
+    let mut git_url: str = "";
+    let mut git_rev: str = "";
+    let mut tar_url: str = "";
+    let mut tar_sha: str = "";
+    let mut local_path: str = "";
+
+    let mut i: usize = 2usize;
+    while (i < args.len()) {
+        let a = args.get(i);
+        if (a == "--git" && i + 1usize < args.len()) {
+            i += 1usize;
+            git_url = args.get(i);
+        } else if (a == "--rev" && i + 1usize < args.len()) {
+            i += 1usize;
+            git_rev = args.get(i);
+        } else if (a == "--url" && i + 1usize < args.len()) {
+            i += 1usize;
+            tar_url = args.get(i);
+        } else if (a == "--sha256" && i + 1usize < args.len()) {
+            i += 1usize;
+            tar_sha = args.get(i);
+        } else if (a == "--path" && i + 1usize < args.len()) {
+            i += 1usize;
+            local_path = args.get(i);
+        };
+        i += 1usize;
+    };
+
+    let mut entry: str = str_concat(name, " = \{ ");
+    if (git_url.len > 0usize) {
+        entry = str_concat4(entry, "git = \"", git_url, "\"");
+        if (git_rev.len > 0usize) {
+            entry = str_concat4(entry, ", rev = \"", git_rev, "\"");
+        };
+    } else if (tar_url.len > 0usize) {
+        entry = str_concat4(entry, "url = \"", tar_url, "\"");
+        if (tar_sha.len > 0usize) {
+            entry = str_concat4(entry, ", sha256 = \"", tar_sha, "\"");
+        };
+    } else if (local_path.len > 0usize) {
+        entry = str_concat4(entry, "path = \"", local_path, "\"");
+    } else {
+        io::println("sklad add: must specify --git <url>, --url <url>, or --path <dir>");
+        return 1;
+    };
+    entry = str_concat(entry, " }\n");
+
+    let toml_res = fs::readstr("zov.toml");
+    let toml_data: String = match (toml_res) {
+        case let s: String => s,
+        case fs::FsError => return 1,
+    };
+    defer toml_data.free();
+    let old_content = toml_data.view();
+
+    let mut new_content: str = "";
+    let has_deps = exec_capture("grep -n '\\[dependencies\\]' zov.toml");
+    if (has_deps.len > 0usize) {
+        new_content = str_concat3(old_content, "\n", entry);
+    } else {
+        new_content = str_concat4(old_content, "\n[dependencies]\n", entry, "");
+    };
+    let _ = fs::writestr("zov.toml", new_content);
+
+    // Fetch and regenerate lock
+    let mut pkg_name: str = "";
+    let mut pkg_ver: str = "";
+    let mut edition: str = "";
+    let mut min_zovc: str = "";
+    let mut root_deps = vec::new[Dep]();
+    if (!parse_manifest_file("zov.toml", &mut pkg_name, &mut pkg_ver, &mut edition, &mut min_zovc, &mut root_deps)) {
+        root_deps.free();
+        return 1;
+    };
+    let mut all_deps = vec::new[Dep]();
+    let ok = resolve_all_deps(&root_deps, home, ".", false, &mut all_deps);
+    root_deps.free();
+    if (!ok) {
+        all_deps.free();
+        return 1;
+    };
+    write_sklad_lock(&all_deps, "sklad.lock");
+    all_deps.free();
+    io::println("sklad: added dependency '" + name + "' and updated sklad.lock");
+    return 0;
+};
+
+export fn main() i32 = {
+    let argc = env::argscount();
+    let mut args = vec::new[str]();
+    defer args.free();
+    for (let i in 0..argc) {
+        args.push(env::argat(i));
+    };
+
+    if (argc <= 1usize) {
+        print_usage();
+        return 0;
+    };
+
+    let sub = args.get(1usize);
+    if (sub == "--help" || sub == "help" || sub == "-h") {
+        print_usage();
+        return 0;
+    };
+
+    if (sub == "--version" || sub == "version" || sub == "-V") {
+        let zver = str_trim(exec_capture(str_concat(zovc_bin(), " --version")));
+        io::println("sklad 0.8.1");
+        if (zver.len > 0usize) {
+            io::println(zver);
+        } else {
+            io::println("zovc 0.8.1");
+        };
+        return 0;
+    };
+
+    if (sub == "init") {
+        let mut dir: str = ".";
+        if (argc >= 3usize) {
+            dir = args.get(2usize);
+        };
+        let pargs: [2]str = ["init", dir];
+        let rc = proc::run(zovc_bin(), pargs[0..2]);
+        let exit_code: i32 = match (rc) {
+            case let code: i32 => code,
+            case proc::ProcError => 1,
+        };
+        return exit_code;
+    };
+
+    let home = sklad_home();
+    ensure_dir(home);
+
+    if (sub == "toolchain") {
+        return do_toolchain(home, &args);
+    };
+
+    if (sub == "add") {
+        if (argc < 3usize) {
+            io::println("usage: sklad add <name> [--git <url>] [--url <url>] [--path <dir>]");
+            return 1;
+        };
+        let dep_name = args.get(2usize);
+        return do_add(dep_name, &args, home);
+    };
+
+    if (!fs::exists("zov.toml")) {
+        io::println("sklad: error: no zov.toml found in current directory");
+        return 1;
+    };
+
+    // Parse zov.toml
+    let mut pkg_name: str = "";
+    let mut pkg_ver: str = "";
+    let mut edition: str = "";
+    let mut min_zovc: str = "";
+    let mut root_deps = vec::new[Dep]();
+    if (!parse_manifest_file("zov.toml", &mut pkg_name, &mut pkg_ver, &mut edition, &mut min_zovc, &mut root_deps)) {
+        io::println("sklad: error: cannot read or parse zov.toml");
+        root_deps.free();
+        return 1;
+    };
+
+    // Check flags: --offline, --release
+    let mut offline = false;
+    let mut release = false;
+    let mut extra_run_args: str = "";
+    for (let ai in 2..argc) {
+        let a = args.get(ai);
+        if (a == "--offline") {
+            offline = true;
+        } else if (a == "--release") {
+            release = true;
+        } else {
+            if (sub == "run") {
+                extra_run_args = str_concat3(extra_run_args, " ", a);
+            };
+        };
+    };
+
+    let mut all_deps = vec::new[Dep]();
+    let ok = resolve_all_deps(&root_deps, home, ".", offline, &mut all_deps);
+    root_deps.free();
+    if (!ok) {
+        all_deps.free();
+        return 1;
+    };
+
+    write_sklad_lock(&all_deps, "sklad.lock");
+
+    if (sub == "fetch" || sub == "lock") {
+        io::println("sklad: resolved " + all_deps.len() + " dependencies, updated sklad.lock");
+        all_deps.free();
+        return 0;
+    };
+
+    if (sub == "tree") {
+        print_tree(pkg_name, pkg_ver, &all_deps);
+        all_deps.free();
+        return 0;
+    };
+
+    if (sub == "check" || sub == "build" || sub == "run") {
+        let mut cmd: str = str_concat3(zovc_bin(), " ", sub);
+        if (edition.len > 0usize) {
+            cmd = str_concat4(cmd, " --edition ", edition, "");
+        };
+        if (release) {
+            cmd = str_concat(cmd, " --release");
+        };
+        for (let di in 0..all_deps.len()) {
+            let d = all_deps.get(di);
+            cmd = str_concat5(cmd, " --pkg '", d.name, "=", d.cached_path);
+            cmd = str_concat(cmd, "'");
+        };
+        if (sub == "run" && extra_run_args.len > 0usize) {
+            cmd = str_concat(cmd, extra_run_args);
+        };
+        all_deps.free();
+        return exec_run(cmd);
+    };
+
+    io::println("sklad: unknown command '" + sub + "'");
+    all_deps.free();
+    return 1;
+};
