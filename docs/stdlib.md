@@ -75,3 +75,5 @@ in each environment and what they depend on.
   not visible to importers in hosted or freestanding builds.
 - Owned `String` buffers obtained from `String::fromowned` are released
   through `zov_rt_free`; see [runtime/README.md](../runtime/README.md).
+- Packaging and dependencies are managed via `sklad`; see [sklad.md](sklad.md)
+  for package manifests (`zov.toml`), remote fetching, and caching.
