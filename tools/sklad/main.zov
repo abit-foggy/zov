@@ -175,6 +175,18 @@ fn zovc_bin() str = {
     return "zovc";
 };
 
+fn str_dup(s: str) str = {
+    if (s.len == 0usize) { return ""; };
+    let p: *u8 = mem::alloc[u8](s.len + 1usize);
+    let mut i: usize = 0usize;
+    while (i < s.len) {
+        p[i] = s.ptr[i];
+        i += 1usize;
+    };
+    p[s.len] = 0u8;
+    return zov_str_from_raw(p, s.len);
+};
+
 fn parse_quoted(s: str) str = {
     let t = str_trim(s);
     if (t.len < 2usize) { return ""; };
@@ -183,7 +195,16 @@ fn parse_quoted(s: str) str = {
     while (i < t.len && t.ptr[i] != 34u8) {
         i += 1usize;
     };
-    return t[1usize..i];
+    let n = i - 1usize;
+    if (n == 0usize) { return ""; };
+    let p: *u8 = mem::alloc[u8](n + 1usize);
+    let mut j: usize = 0usize;
+    while (j < n) {
+        p[j] = t.ptr[1usize + j];
+        j += 1usize;
+    };
+    p[n] = 0u8;
+    return zov_str_from_raw(p, n);
 };
 
 fn parse_dep_table(line_val: str, dep: &mut Dep) void = {
@@ -273,7 +294,7 @@ fn parse_manifest_file(toml_path: str, out_name: &mut str, out_ver: &mut str,
             };
         } else if (section == 2) {
             let mut dep = Dep{
-                name = k,
+                name = str_dup(k),
                 path = "",
                 git = "",
                 rev = "",
