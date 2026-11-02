@@ -49,17 +49,69 @@ src/%.o: src/%.c include/common.h include/token.h include/ast.h $(TCC_STAMP)
 test: zovc zov-lsp sklad
 	sh tests/run.sh
 
-# Install binaries and standard library system-wide or to staged PREFIX.
-install: zovc zov-lsp sklad
+# OS and architecture detection for release packaging
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+ifeq ($(UNAME_S),Darwin)
+  DETECTED_OS = macos
+else ifeq ($(UNAME_S),Linux)
+  DETECTED_OS = linux
+else
+  DETECTED_OS = $(shell echo $(UNAME_S) | tr '[:upper:]' '[:lower:]')
+endif
+
+ifeq ($(UNAME_M),x86_64)
+  DETECTED_ARCH = x86_64
+else ifeq ($(UNAME_M),amd64)
+  DETECTED_ARCH = x86_64
+else ifeq ($(UNAME_M),aarch64)
+  DETECTED_ARCH = aarch64
+else ifeq ($(UNAME_M),arm64)
+  DETECTED_ARCH = aarch64
+else
+  DETECTED_ARCH = $(UNAME_M)
+endif
+
+TARGET  ?= $(DETECTED_OS)-$(DETECTED_ARCH)
+DISTDIR ?= dist
+
+# Install only zovc compiler, zov-lsp, standard library, and runtime.
+install-zovc: zovc zov-lsp
 	install -d "$(BINDIR)" "$(STDLIBDIR)" "$(RUNTIMEDIR)"
 	install -m 755 zovc "$(BINDIR)/zovc"
-	install -m 755 sklad "$(BINDIR)/sklad"
 	install -m 755 zov-lsp "$(BINDIR)/zov-lsp"
 	cp -R lib/std/. "$(STDLIBDIR)/"
 	cp -R runtime/. "$(RUNTIMEDIR)/"
+	@echo "zovc installed successfully to $(PREFIX)"
+
+# Install only sklad package manager.
+install-sklad: sklad
+	install -d "$(BINDIR)"
+	install -m 755 sklad "$(BINDIR)/sklad"
+	@echo "sklad installed successfully to $(PREFIX)"
+
+# Install both zovc and sklad.
+install: install-zovc install-sklad
 	@echo "Zov installed successfully to $(PREFIX)"
 
-clean:
-	rm -f zovc zov-lsp sklad $(OBJ) .zov-test-bin
+package-zovc: zovc zov-lsp
+	@mkdir -p "$(DISTDIR)/staging-zovc"
+	$(MAKE) install-zovc PREFIX="$(CURDIR)/$(DISTDIR)/staging-zovc"
+	tar -czf "$(DISTDIR)/zovc-$(TARGET).tar.gz" -C "$(DISTDIR)/staging-zovc" .
+	@rm -rf "$(DISTDIR)/staging-zovc"
+	@echo "Created $(DISTDIR)/zovc-$(TARGET).tar.gz"
 
-.PHONY: all lsp test clean install
+package-sklad: sklad
+	@mkdir -p "$(DISTDIR)/staging-sklad"
+	$(MAKE) install-sklad PREFIX="$(CURDIR)/$(DISTDIR)/staging-sklad"
+	tar -czf "$(DISTDIR)/sklad-$(TARGET).tar.gz" -C "$(DISTDIR)/staging-sklad" .
+	@rm -rf "$(DISTDIR)/staging-sklad"
+	@echo "Created $(DISTDIR)/sklad-$(TARGET).tar.gz"
+
+dist: package-zovc package-sklad
+
+clean:
+	rm -rf zovc zov-lsp sklad $(OBJ) .zov-test-bin $(DISTDIR)
+
+.PHONY: all lsp test clean install install-zovc install-sklad dist package-zovc package-sklad
