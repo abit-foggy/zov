@@ -18,6 +18,7 @@ cd "$(dirname "$0")/.." || {
 ROOT=$(pwd)
 ZOV=$ROOT/zovc
 ZOV_LSP=$ROOT/zov-lsp
+SKLAD=$ROOT/sklad
 ZOV_STD_PATH=${ZOV_STD_PATH:-$ROOT/lib/std}
 export ZOV_STD_PATH
 
@@ -1388,12 +1389,393 @@ run_sanitizer_sweep() {
     pass "sanitizer sweep ($sweep_cc, $sweep_ok fixtures, $sweep_skip skipped)"
 }
 
+run_zovc_offline() {
+    # 1. zovc init in an empty directory
+    offdir=$TMP/offline_app
+    rm -rf "$offdir"
+    mkdir -p "$offdir"
+    run_limited "$TMP/init.out" "$TMP/init.err" "$ZOV" init -C "$offdir"
+    if [ $? -eq 0 ] && [ -f "$offdir/zov.toml" ] && [ -f "$offdir/src/main.zov" ]; then
+        if grep -q 'edition = "2026"' "$offdir/zov.toml" && grep -q 'zovc = "0.8.1"' "$offdir/zov.toml"; then
+            pass "zovc init offline manifest"
+        else
+            fail "zovc init generated manifest missing expected metadata"
+        fi
+    else
+        fail "zovc init failed"
+        show_file "$TMP/init.err"
+    fi
+
+    # 2. zovc check, build, run in offdir
+    run_limited "$TMP/off_check.out" "$TMP/off_check.err" "$ZOV" check -C "$offdir"
+    if [ $? -eq 0 ]; then
+        pass "zovc check offline project"
+    else
+        fail "zovc check offline project"
+        show_file "$TMP/off_check.err"
+    fi
+
+    run_limited "$TMP/off_build.out" "$TMP/off_build.err" "$ZOV" build -C "$offdir"
+    if [ $? -eq 0 ] && [ -x "$offdir/target/offline_app" ]; then
+        pass "zovc build offline project"
+    else
+        fail "zovc build offline project"
+        show_file "$TMP/off_build.err"
+    fi
+
+    run_limited "$TMP/off_run.out" "$TMP/off_run.err" "$ZOV" run -C "$offdir"
+    if [ $? -eq 0 ] && grep -iq "hello from offline_app" "$TMP/off_run.out"; then
+        pass "zovc run offline project"
+    else
+        fail "zovc run offline project"
+        show_file "$TMP/off_run.err"
+    fi
+
+    # 3. Piped stdin pass-through with io::readline
+    pipe_src=$TMP/pipe_stdin.zov
+    cat >"$pipe_src" <<'EOF'
+use std::io;
+export fn main() i32 = {
+    let r = io::readline();
+    let line: String = match (r) {
+        case let s: String => s,
+        case Eof => String::new(),
+        case IoError => String::new(),
+    };
+    io::println("received:" + line.view());
+    line.free();
+    return 0;
+};
+EOF
+    run_limited "$TMP/pipe.out" "$TMP/pipe.err" \
+        sh -c 'printf "zov_stream_ok\n" | "$1" run "$2"' \
+        sh "$ZOV" "$pipe_src"
+    if [ $? -eq 0 ] && grep -q "received:zov_stream_ok" "$TMP/pipe.out"; then
+        pass "zovc run with piped stdin"
+    else
+        fail "zovc run with piped stdin"
+        show_file "$TMP/pipe.err"
+    fi
+
+    # 4. Edition validation: 2026 vs invalid edition
+    run_limited "$TMP/ed2026.out" "$TMP/ed2026.err" \
+        "$ZOV" check --edition 2026 "$pipe_src"
+    if [ $? -eq 0 ]; then
+        pass "zovc --edition 2026 accepted"
+    else
+        fail "zovc --edition 2026 rejected"
+        show_file "$TMP/ed2026.err"
+    fi
+
+    run_limited "$TMP/ed1999.out" "$TMP/ed1999.err" \
+        "$ZOV" check --edition 1999 "$pipe_src"
+    if [ $? -ne 0 ] && grep -q "E0903" "$TMP/ed1999.err"; then
+        pass "zovc --edition 1999 rejected with E0903"
+    else
+        fail "zovc --edition 1999 did not report E0903"
+        show_file "$TMP/ed1999.err"
+    fi
+
+    # 5. Local --pkg resolution for file and directory
+    pkg_file=$TMP/mymath.zov
+    cat >"$pkg_file" <<'EOF'
+export fn add_nums(a: i32, b: i32) i32 = { return a + b; };
+EOF
+    pkg_dir=$TMP/pkg_dir_mod
+    mkdir -p "$pkg_dir/src"
+    cat >"$pkg_dir/src/lib.zov" <<'EOF'
+export fn mul_nums(a: i32, b: i32) i32 = { return a * b; };
+EOF
+    main_pkg=$TMP/main_pkg_test.zov
+    cat >"$main_pkg" <<'EOF'
+use mymath;
+use dirmod;
+use std::io;
+export fn main() i32 = {
+    io::println("add=" + mymath::add_nums(10, 20));
+    io::println("mul=" + dirmod::mul_nums(6, 7));
+    return 0;
+};
+EOF
+    run_limited "$TMP/pkgrun.out" "$TMP/pkgrun.err" \
+        "$ZOV" run --pkg mymath="$pkg_file" --pkg dirmod="$pkg_dir" "$main_pkg"
+    if [ $? -eq 0 ] && grep -q "add=30" "$TMP/pkgrun.out" && grep -q "mul=42" "$TMP/pkgrun.out"; then
+        pass "zovc --pkg file and directory resolution"
+    else
+        fail "zovc --pkg resolution"
+        show_file "$TMP/pkgrun.err"
+    fi
+
+    # 6. Negative offline manifest validations
+    # 6a. Remote git dep without local mapping fails offline
+    net_app=$TMP/net_app
+    rm -rf "$net_app"
+    mkdir -p "$net_app/src"
+    cat >"$net_app/zov.toml" <<'EOF'
+[package]
+name = "net_app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+remote_git = { git = "https://example.com/repo.git" }
+EOF
+    cat >"$net_app/src/main.zov" <<'EOF'
+use remote_git;
+fn main() void = {};
+EOF
+    run_limited "$TMP/net.out" "$TMP/net.err" "$ZOV" build -C "$net_app"
+    if [ $? -ne 0 ] && grep -q "requires network access. Run 'sklad fetch'" "$TMP/net.err"; then
+        pass "zovc offline rejection of unmapped network dependency"
+    else
+        fail "zovc did not reject unmapped network dependency"
+        show_file "$TMP/net.err"
+    fi
+
+    # 6b. Future zovc version requirement fails
+    future_app=$TMP/future_app
+    rm -rf "$future_app"
+    mkdir -p "$future_app/src"
+    cat >"$future_app/zov.toml" <<'EOF'
+[package]
+name = "future_app"
+version = "0.1.0"
+zovc = "99.0.0"
+edition = "2026"
+EOF
+    cat >"$future_app/src/main.zov" <<'EOF'
+fn main() void = {};
+EOF
+    run_limited "$TMP/future.out" "$TMP/future.err" "$ZOV" build -C "$future_app"
+    if [ $? -ne 0 ] && grep -q "package requires zovc >= 99.0.0" "$TMP/future.err"; then
+        pass "zovc manifest compiler version check enforcement"
+    else
+        fail "zovc manifest compiler version check"
+        show_file "$TMP/future.err"
+    fi
+}
+
+run_staged_install() {
+    staged_prefix=$TMP/staged_root
+    rm -rf "$staged_prefix"
+    run_limited "$TMP/install.out" "$TMP/install.err" \
+        make install PREFIX="$staged_prefix"
+    if [ $? -ne 0 ]; then
+        fail "staged make install execution"
+        show_file "$TMP/install.err"
+        return
+    fi
+
+    if [ -x "$staged_prefix/bin/zovc" ] \
+       && [ -x "$staged_prefix/bin/sklad" ] \
+       && [ -x "$staged_prefix/bin/zov-lsp" ] \
+       && [ -f "$staged_prefix/lib/std/io.zov" ] \
+       && [ -f "$staged_prefix/include/runtime/zov_rt.h" ]; then
+        pass "staged make install file layout"
+    else
+        fail "staged make install missing expected files"
+        return
+    fi
+
+    iso_dir=$TMP/iso_stage_dir
+    rm -rf "$iso_dir"
+    mkdir -p "$iso_dir"
+    run_limited "$TMP/staged_zovc.out" "$TMP/staged_zovc.err" \
+        sh -c 'cd "$1" && exec "$2" --version' sh "$iso_dir" "$staged_prefix/bin/zovc"
+    if [ $? -eq 0 ] && grep -q "zovc 0.8.1" "$TMP/staged_zovc.out"; then
+        pass "staged zovc binary execution"
+    else
+        fail "staged zovc binary execution"
+        show_file "$TMP/staged_zovc.err"
+    fi
+
+    run_limited "$TMP/staged_sklad.out" "$TMP/staged_sklad.err" \
+        sh -c 'cd "$1" && exec "$2" version' sh "$iso_dir" "$staged_prefix/bin/sklad"
+    if [ $? -eq 0 ] && grep -q "sklad 0.8.1" "$TMP/staged_sklad.out"; then
+        pass "staged sklad binary execution"
+    else
+        fail "staged sklad binary execution"
+        show_file "$TMP/staged_sklad.err"
+    fi
+}
+
+run_sklad_integration() {
+    skhome=$TMP/sklad_home
+    rm -rf "$skhome"
+    mkdir -p "$skhome"
+    SKLAD_HOME=$skhome
+    export SKLAD_HOME
+
+    # 1. Local Git repository fixture
+    git_repo=$TMP/git_fixture
+    rm -rf "$git_repo"
+    mkdir -p "$git_repo/src"
+    cat >"$git_repo/zov.toml" <<'EOF'
+[package]
+name = "gitdep"
+version = "1.0.0"
+edition = "2026"
+zovc = "0.8.1"
+EOF
+    cat >"$git_repo/src/lib.zov" <<'EOF'
+export fn git_answer() i32 = {
+    return 42;
+};
+EOF
+    (
+        cd "$git_repo" && \
+        git init -q && \
+        git config user.name "Zov Tester" && \
+        git config user.email "test@zov.lang" && \
+        git add . && \
+        git commit -q -m "Initial gitdep"
+    )
+    if [ $? -ne 0 ]; then
+        fail "git fixture initialization"
+        return
+    fi
+
+    # 2. Test sklad add + fetch + run with Git dependency
+    sklad_git_app=$TMP/sklad_git_app
+    rm -rf "$sklad_git_app"
+    mkdir -p "$sklad_git_app"
+    run_limited "$TMP/sk_init.out" "$TMP/sk_init.err" \
+        sh -c 'cd "$1" && exec "$2" init' sh "$sklad_git_app" "$SKLAD"
+    if [ $? -ne 0 ] || [ ! -f "$sklad_git_app/zov.toml" ]; then
+        fail "sklad init"
+        show_file "$TMP/sk_init.err"
+        return
+    fi
+
+    cat >"$sklad_git_app/src/main.zov" <<'EOF'
+use gitdep;
+use std::io;
+export fn main() i32 = {
+    io::println("git_ans=" + gitdep::git_answer());
+    return 0;
+};
+EOF
+
+    run_limited "$TMP/sk_add.out" "$TMP/sk_add.err" \
+        sh -c 'cd "$1" && exec "$2" add gitdep --git "file://'"$git_repo"'"' sh "$sklad_git_app" "$SKLAD"
+    if [ $? -ne 0 ]; then
+        fail "sklad add gitdep"
+        show_file "$TMP/sk_add.err"
+        return
+    fi
+
+    run_limited "$TMP/sk_fetch.out" "$TMP/sk_fetch.err" \
+        sh -c 'cd "$1" && exec "$2" fetch' sh "$sklad_git_app" "$SKLAD"
+    if [ $? -eq 0 ] && [ -f "$sklad_git_app/sklad.lock" ] && grep -q 'name = "gitdep"' "$sklad_git_app/sklad.lock"; then
+        pass "sklad fetch git dependency & lock generation"
+    else
+        fail "sklad fetch git dependency"
+        show_file "$TMP/sk_fetch.err"
+    fi
+
+    run_limited "$TMP/sk_run.out" "$TMP/sk_run.err" \
+        sh -c 'cd "$1" && exec "$2" run' sh "$sklad_git_app" "$SKLAD"
+    if [ $? -eq 0 ] && grep -q "git_ans=42" "$TMP/sk_run.out"; then
+        pass "sklad run with git dependency"
+    else
+        fail "sklad run with git dependency"
+        show_file "$TMP/sk_run.err"
+    fi
+
+    # 3. sklad tree
+    run_limited "$TMP/sk_tree.out" "$TMP/sk_tree.err" \
+        sh -c 'cd "$1" && exec "$2" tree' sh "$sklad_git_app" "$SKLAD"
+    if [ $? -eq 0 ] && grep -q "gitdep" "$TMP/sk_tree.out"; then
+        pass "sklad tree output"
+    else
+        fail "sklad tree output"
+        show_file "$TMP/sk_tree.err"
+    fi
+
+    # 4. sklad build --offline uses cached dependency
+    run_limited "$TMP/sk_off.out" "$TMP/sk_off.err" \
+        sh -c 'cd "$1" && exec "$2" build --offline' sh "$sklad_git_app" "$SKLAD"
+    if [ $? -eq 0 ]; then
+        pass "sklad build --offline cached"
+    else
+        fail "sklad build --offline"
+        show_file "$TMP/sk_off.err"
+    fi
+
+    # 5. URL tarball dependency fixture
+    tar_pkg=$TMP/tar_fixture
+    rm -rf "$tar_pkg"
+    mkdir -p "$tar_pkg/src"
+    cat >"$tar_pkg/zov.toml" <<'EOF'
+[package]
+name = "tardep"
+version = "2.0.0"
+edition = "2026"
+zovc = "0.8.1"
+EOF
+    cat >"$tar_pkg/src/lib.zov" <<'EOF'
+export fn tar_val() i32 = {
+    return 777;
+};
+EOF
+    tar_file=$TMP/tardep-2.0.0.tar.gz
+    (cd "$tar_pkg" && tar -czf "$tar_file" .)
+    tar_sha=$(sha256sum "$tar_file" | cut -c 1-64)
+
+    sklad_tar_app=$TMP/sklad_tar_app
+    rm -rf "$sklad_tar_app"
+    mkdir -p "$sklad_tar_app"
+    run_limited "$TMP/sk_tar_init.out" "$TMP/sk_tar_init.err" \
+        sh -c 'cd "$1" && exec "$2" init' sh "$sklad_tar_app" "$SKLAD"
+    cat >"$sklad_tar_app/src/main.zov" <<'EOF'
+use tardep;
+use std::io;
+export fn main() i32 = {
+    io::println("tar_ans=" + tardep::tar_val());
+    return 0;
+};
+EOF
+    run_limited "$TMP/sk_tar_add.out" "$TMP/sk_tar_add.err" \
+        sh -c 'cd "$1" && exec "$2" add tardep --url "file://'"$tar_file"'" --sha256 '"$tar_sha"'' sh "$sklad_tar_app" "$SKLAD"
+    run_limited "$TMP/sk_tar_run.out" "$TMP/sk_tar_run.err" \
+        sh -c 'cd "$1" && exec "$2" run' sh "$sklad_tar_app" "$SKLAD"
+    if [ $? -eq 0 ] && grep -q "tar_ans=777" "$TMP/sk_tar_run.out"; then
+        pass "sklad run with verified URL tarball dependency"
+    else
+        fail "sklad run with verified URL tarball dependency"
+        show_file "$TMP/sk_tar_run.err"
+    fi
+
+    # 6. Checksum tamper test: mismatched SHA256 must be rejected
+    sklad_tamper_app=$TMP/sklad_tamper_app
+    rm -rf "$sklad_tamper_app"
+    mkdir -p "$sklad_tamper_app"
+    run_limited "$TMP/sk_tamp_init.out" "$TMP/sk_tamp_init.err" \
+        sh -c 'cd "$1" && exec "$2" init' sh "$sklad_tamper_app" "$SKLAD"
+    bad_sha="0000000000000000000000000000000000000000000000000000000000000000"
+    run_limited "$TMP/sk_tamp_add.out" "$TMP/sk_tamp_add.err" \
+        sh -c 'cd "$1" && exec "$2" add tardep --url "file://'"$tar_file"'" --sha256 '"$bad_sha"'' sh "$sklad_tamper_app" "$SKLAD"
+    run_limited "$TMP/sk_tamp_fetch.out" "$TMP/sk_tamp_fetch.err" \
+        sh -c 'cd "$1" && exec "$2" fetch' sh "$sklad_tamper_app" "$SKLAD"
+    if [ $? -ne 0 ] && grep -q "checksum mismatch" "$TMP/sk_tamp_fetch.out"; then
+        pass "sklad rejects tampered archive checksum"
+    else
+        fail "sklad did not reject tampered archive checksum"
+        show_file "$TMP/sk_tamp_fetch.out"
+        show_file "$TMP/sk_tamp_fetch.err"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Preconditions
 # ---------------------------------------------------------------------------
 
 require_exec "$ZOV" || {
     echo "FAIL: build zovc first (make zovc)" >&2
+    exit 1
+}
+require_exec "$SKLAD" || {
+    echo "FAIL: build sklad first (make sklad)" >&2
     exit 1
 }
 require_cmd cc || {
@@ -1541,6 +1923,9 @@ run_freestanding_arch
 run_freestanding_package
 run_sanitizer
 run_sanitizer_sweep
+run_zovc_offline
+run_staged_install
+run_sklad_integration
 
 # ---------------------------------------------------------------------------
 # Summary
