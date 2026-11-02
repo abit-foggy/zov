@@ -144,8 +144,12 @@ static void parse_dep_table(char *s, char *end, PkgDep *dep)
             copy_clamped(dep->path, sizeof(dep->path), tmp);
         if (strcmp(ks, "git") == 0)
             copy_clamped(dep->git, sizeof(dep->git), tmp);
-        if (strcmp(ks, "rev") == 0)
+        if (strcmp(ks, "rev") == 0 || strcmp(ks, "tag") == 0)
             copy_clamped(dep->rev, sizeof(dep->rev), tmp);
+        if (strcmp(ks, "url") == 0)
+            copy_clamped(dep->url, sizeof(dep->url), tmp);
+        if (strcmp(ks, "sha256") == 0)
+            copy_clamped(dep->sha256, sizeof(dep->sha256), tmp);
         s = v;
     }
 }
@@ -252,6 +256,10 @@ int pkg_load(Pkg *p, const char *toml_path)
                     copy_clamped(p->name, sizeof(p->name), tmp);
                 if (strcmp(ks, "version") == 0)
                     copy_clamped(p->version, sizeof(p->version), tmp);
+                if (strcmp(ks, "edition") == 0)
+                    copy_clamped(p->edition, sizeof(p->edition), tmp);
+                if (strcmp(ks, "zovc") == 0)
+                    copy_clamped(p->min_zovc, sizeof(p->min_zovc), tmp);
                 if (strcmp(ks, "entry") == 0)
                     copy_clamped(p->entry, sizeof(p->entry), tmp);
             }

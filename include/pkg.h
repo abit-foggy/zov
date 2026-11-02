@@ -34,11 +34,15 @@ typedef struct PkgDep {
     char path[512];
     char git[512];
     char rev[64];
+    char url[512];
+    char sha256[128];
 } PkgDep;
 
 typedef struct Pkg {
     char name[128];
     char version[64];
+    char edition[64];
+    char min_zovc[64];
     char entry[256];
     int freestanding;  /* [package] freestanding = true: bare-metal build */
     DA(PkgDep) deps;

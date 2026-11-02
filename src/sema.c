@@ -600,6 +600,25 @@ static int c_ns_private(Sema *se, Sym *ns)
     return ns && ns->modname && ns->modname != se->curmod;
 }
 
+static const char *mod_display_name(const char *modname)
+{
+    static const char *const stds[] = {
+        "io", "fs", "env", "proc", "time", "math", "mem", "str", "vec", "map", "arena", "strsplit"
+    };
+    if (!modname)
+        return "";
+    if (strncmp(modname, "std::", 5) == 0)
+        return modname;
+    for (size_t i = 0; i < sizeof(stds) / sizeof(stds[0]); i++) {
+        if (strcmp(modname, stds[i]) == 0) {
+            static char buf[64];
+            snprintf(buf, sizeof(buf), "std::%s", modname);
+            return buf;
+        }
+    }
+    return modname;
+}
+
 /* module ns call diagnostics: a missing member or an unimported std
  * module gets an actionable message instead of the C-ns fallback */
 static void ns_call_diag(Sema *se, Expr *callee, Span span)
@@ -1510,9 +1529,10 @@ static Type *check_call_ns(Sema *se, Expr *e, Expr *callee)
                  callee->u.nident.ns);
     if (c_ns_private(se, ns))
         fatal_at(E0306, callee->span,
-                 "C symbol '%s::%s' is private to std::%s and unavailable "
+                 "C symbol '%s::%s' is private to %s and unavailable "
                  "to importers; use an exported Zov wrapper",
-                 callee->u.nident.ns, callee->u.nident.name, ns->modname);
+                 callee->u.nident.ns, callee->u.nident.name,
+                 mod_display_name(ns->modname));
     CMember *fn = cimport_find(ns->hdr, callee->u.nident.name);
     if (!fn)
         fatal_at(E0402, callee->span, "unknown C symbol '%s::%s'",
@@ -1623,9 +1643,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             fatal_at(E0405, e->span, "'%s' is not a namespace", e->u.nident.ns);
         if (c_ns_private(se, ns))
             fatal_at(E0306, e->span,
-                     "C symbol '%s::%s' is private to std::%s and "
+                     "C symbol '%s::%s' is private to %s and "
                      "unavailable to importers; use an exported Zov wrapper",
-                     e->u.nident.ns, e->u.nident.name, ns->modname);
+                     e->u.nident.ns, e->u.nident.name,
+                     mod_display_name(ns->modname));
         CMember *m = cimport_find(ns->hdr, e->u.nident.name);
         if (!m)
             fatal_at(E0402, e->span, "unknown symbol '%s::%s'", e->u.nident.ns,

@@ -99,7 +99,20 @@ static int std_root(char *out, size_t cap)
         char *slash = strrchr(exe, '/');
         if (slash) {
             *slash = '\0';
-            int w = snprintf(out, cap, "%s/../lib/std", exe);
+            int w = snprintf(out, cap, "%s/lib/std", exe);
+            if (w > 0 && (size_t)w < cap && access(out, F_OK) == 0)
+                return 1;
+            w = snprintf(out, cap, "%s/../lib/std", exe);
+            if (w > 0 && (size_t)w < cap && access(out, F_OK) == 0)
+                return 1;
+            w = snprintf(out, cap, "%s/../lib/zov/std", exe);
+            if (w > 0 && (size_t)w < cap && access(out, F_OK) == 0)
+                return 1;
+            if (access("/usr/local/lib/std", F_OK) == 0) {
+                snprintf(out, cap, "/usr/local/lib/std");
+                return 1;
+            }
+            w = snprintf(out, cap, "%s/../lib/std", exe);
             if (w > 0 && (size_t)w < cap)
                 return 1;
             return 0;
@@ -209,17 +222,54 @@ static char *resolve_via_pkg(Loader *ld, const char *path,
     PkgDep *dep = pkg_find_dep(ld->pkg, first);
     if (!dep || !dep->path[0])
         return NULL;
-    char dep_dir[1024];
-    snprintf(dep_dir, sizeof(dep_dir), "%s/%s", ld->pkg->dir, dep->path);
-    char out[1536];
-    if (rest)
-        snprintf(out, sizeof(out), "%s/src/%s.zov", dep_dir, rest);
-    else
-        snprintf(out, sizeof(out), "%s/src/lib.zov", dep_dir);
-    if (access(out, F_OK) != 0)
-        snprintf(out, sizeof(out), "%s/%s.zov", dep_dir, first);
+
+    char base[1024];
+    if (dep->path[0] == '/') {
+        snprintf(base, sizeof(base), "%s", dep->path);
+    } else if (ld->pkg->dir[0] && strcmp(ld->pkg->dir, ".") != 0) {
+        snprintf(base, sizeof(base), "%s/%s", ld->pkg->dir, dep->path);
+        if (access(base, F_OK) != 0 && access(dep->path, F_OK) == 0)
+            snprintf(base, sizeof(base), "%s", dep->path);
+    } else {
+        snprintf(base, sizeof(base), "%s", dep->path);
+    }
+
+    size_t blen = strlen(base);
+    int is_file = (blen > 4 && strcmp(base + blen - 4, ".zov") == 0);
+
+    char cand[1536];
+    if (is_file) {
+        if (!rest) {
+            if (access(base, F_OK) == 0)
+                return strdup(base);
+        } else {
+            char *d = dirname_of(base);
+            snprintf(cand, sizeof(cand), "%s/%s.zov", d, rest);
+            if (access(cand, F_OK) != 0)
+                snprintf(cand, sizeof(cand), "%s/src/%s.zov", d, rest);
+            free(d);
+            if (access(cand, F_OK) == 0)
+                return strdup(cand);
+        }
+    } else {
+        if (rest) {
+            snprintf(cand, sizeof(cand), "%s/src/%s.zov", base, rest);
+            if (access(cand, F_OK) == 0) return strdup(cand);
+            snprintf(cand, sizeof(cand), "%s/%s.zov", base, rest);
+            if (access(cand, F_OK) == 0) return strdup(cand);
+        } else {
+            snprintf(cand, sizeof(cand), "%s/src/lib.zov", base);
+            if (access(cand, F_OK) == 0) return strdup(cand);
+            snprintf(cand, sizeof(cand), "%s/src/%s.zov", base, first);
+            if (access(cand, F_OK) == 0) return strdup(cand);
+            snprintf(cand, sizeof(cand), "%s/%s.zov", base, first);
+            if (access(cand, F_OK) == 0) return strdup(cand);
+            snprintf(cand, sizeof(cand), "%s/lib.zov", base);
+            if (access(cand, F_OK) == 0) return strdup(cand);
+        }
+    }
     (void)srcdir;
-    return strdup(out);
+    return NULL;
 }
 
 /* module fns register as zovmod_<canon>__<name> to avoid cross-module
@@ -278,8 +328,7 @@ static void load_module(Loader *ld, const char *path, const char *srcdir,
                     da_push(targets_out, nm);
             }
         }
-        free(dsrc);
-        free(file);
+        /* Keep dsrc and file alive: AST spans and diagnostics point into them */
         return;
     }
     char *src = read_file(file);

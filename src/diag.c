@@ -67,10 +67,22 @@ static int num_width(int n)
 // extracts the full source line text from a span's pointers
 static const char *span_line_text(Span *sp, size_t *out_len)
 {
-    const char *ls = sp->start - (sp->col - 1);
+    if (!sp || !sp->start) {
+        if (out_len)
+            *out_len = 0;
+        return "";
+    }
+    const char *ls = sp->start;
+    size_t back = (sp->col > 1) ? (sp->col - 1) : 0;
+    while (back > 0 && ls[-1] != '\n') {
+        ls--;
+        back--;
+    }
     const char *le = ls;
-    while (*le && *le != '\n' && (size_t)(le - ls) < DIAG_MAX_LINE - 1)
+    while (*le && *le != '\n' && *le != '\r' && (size_t)(le - ls) < DIAG_MAX_LINE - 1)
         le++;
+    while (le > ls && le[-1] == '\r')
+        le--;
     if (out_len)
         *out_len = (size_t)(le - ls);
     return ls;
@@ -83,8 +95,8 @@ static void emit_snippet(FILE *out, DiagLoc *loc, int gutter_w,
     char line[DIAG_MAX_LINE];
     Span sp;
     sp.file = loc->file;
-    sp.line = (size_t)loc->line;
-    sp.col = (size_t)loc->col;
+    sp.line = (size_t)(loc->line > 0 ? loc->line : 1);
+    sp.col = (size_t)(loc->col > 0 ? loc->col : 1);
     sp.start = NULL;
     sp.end = NULL;
 
@@ -106,9 +118,10 @@ static void emit_snippet(FILE *out, DiagLoc *loc, int gutter_w,
     fputc('\n', out);
 
     // caret line: (col-1) spaces, then len carets, then label
+    int col = loc->col > 0 ? loc->col : 1;
     fprintf(out, "%s%*s%s | ", C_GUTTER(), gutter_w, "", C_RESET());
     int i;
-    for (i = 0; i < loc->col - 1 && i < (int)sizeof(line); i++)
+    for (i = 0; i < col - 1 && i < (int)sizeof(line); i++)
         fputc(' ', out);
     fprintf(out, "%s", color);
     for (i = 0; i < loc->len; i++)
@@ -393,6 +406,8 @@ static const DiagCodeInfo g_codes[] = {
      "String::fromowned requires len <= cap and a non-null buffer."},
     {"E0902", "internal compiler error",
      "This is a compiler bug; please report it."},
+    {"E0903", "unsupported edition",
+     "Supported editions: 2026."},
 
     {"W0001", "unused variable",
      "Prefix the name with '_' if the binding is intentional."},
@@ -488,6 +503,11 @@ static const struct diag_explain g_explains[] = {
      "intentional.",
      "let _unused = 5;",
      "let unused = 5;"},
+    {"E0903", "unsupported edition",
+     "The requested language edition is not supported by this compiler "
+     "version. Use --edition 2026 or set edition = \"2026\" in zov.toml.",
+     "edition = \"2026\"",
+     "edition = \"1999\""},
 };
 
 int diag_print_explanation(const char *code)
