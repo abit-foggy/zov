@@ -1766,6 +1766,89 @@ EOF
     fi
 }
 
+run_packaging_and_installer() {
+    # 1. Run make dist
+    run_limited "$TMP/dist.out" "$TMP/dist.err" make dist
+    if [ $? -ne 0 ]; then
+        fail "make dist execution"
+        show_file "$TMP/dist.err"
+        return
+    fi
+    pass "make dist generates release archives"
+
+    # 2. Test install.sh --zovc-only
+    zovc_prefix=$TMP/inst_zovc_only
+    rm -rf "$zovc_prefix"
+    run_limited "$TMP/inst_zovc.out" "$TMP/inst_zovc.err" \
+        ./install.sh --zovc-only --from-dir dist --prefix "$zovc_prefix"
+    if [ $? -eq 0 ] \
+       && [ -x "$zovc_prefix/bin/zovc" ] \
+       && [ -x "$zovc_prefix/bin/zov-lsp" ] \
+       && [ -f "$zovc_prefix/lib/std/io.zov" ] \
+       && [ ! -e "$zovc_prefix/bin/sklad" ]; then
+        pass "install.sh --zovc-only layout"
+    else
+        fail "install.sh --zovc-only layout"
+        show_file "$TMP/inst_zovc.err"
+    fi
+
+    # Verify standalone execution of zovc from isolated directory
+    iso_dir=$TMP/iso_zovc_only
+    rm -rf "$iso_dir"
+    mkdir -p "$iso_dir"
+    run_limited "$TMP/zovc_only_run.out" "$TMP/zovc_only_run.err" \
+        sh -c 'cd "$1" && exec "$2" --version' sh "$iso_dir" "$zovc_prefix/bin/zovc"
+    if [ $? -eq 0 ] && grep -q "zovc 1.9.0" "$TMP/zovc_only_run.out"; then
+        pass "install.sh --zovc-only binary execution"
+    else
+        fail "install.sh --zovc-only binary execution"
+        show_file "$TMP/zovc_only_run.err"
+    fi
+
+    # 3. Test install.sh --sklad-only
+    sklad_prefix=$TMP/inst_sklad_only
+    rm -rf "$sklad_prefix"
+    run_limited "$TMP/inst_sklad.out" "$TMP/inst_sklad.err" \
+        ./install.sh --sklad-only --from-dir dist --prefix "$sklad_prefix"
+    if [ $? -eq 0 ] \
+       && [ -x "$sklad_prefix/bin/sklad" ] \
+       && [ ! -e "$sklad_prefix/bin/zovc" ] \
+       && [ ! -e "$sklad_prefix/lib/std" ]; then
+        pass "install.sh --sklad-only layout"
+    else
+        fail "install.sh --sklad-only layout"
+        show_file "$TMP/inst_sklad.err"
+    fi
+
+    # 4. Test install.sh default (both zovc and sklad)
+    both_prefix=$TMP/inst_both
+    rm -rf "$both_prefix"
+    run_limited "$TMP/inst_both.out" "$TMP/inst_both.err" \
+        ./install.sh --from-dir dist --prefix "$both_prefix"
+    if [ $? -eq 0 ] \
+       && [ -x "$both_prefix/bin/zovc" ] \
+       && [ -x "$both_prefix/bin/sklad" ] \
+       && [ -f "$both_prefix/lib/std/io.zov" ]; then
+        pass "install.sh both packages layout"
+    else
+        fail "install.sh both packages layout"
+        show_file "$TMP/inst_both.err"
+    fi
+
+    # Test that zovc and sklad work together from both_prefix
+    iso_both=$TMP/iso_both_dir
+    rm -rf "$iso_both"
+    mkdir -p "$iso_both"
+    run_limited "$TMP/both_run.out" "$TMP/both_run.err" \
+        sh -c 'cd "$1" && exec "$2" version' sh "$iso_both" "$both_prefix/bin/sklad"
+    if [ $? -eq 0 ] && grep -q "sklad 1.9.0" "$TMP/both_run.out" && grep -q "zovc 1.9.0" "$TMP/both_run.out"; then
+        pass "install.sh both packages execution together"
+    else
+        fail "install.sh both packages execution together"
+        show_file "$TMP/both_run.err"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Preconditions
 # ---------------------------------------------------------------------------
@@ -1926,6 +2009,7 @@ run_sanitizer_sweep
 run_zovc_offline
 run_staged_install
 run_sklad_integration
+run_packaging_and_installer
 
 # ---------------------------------------------------------------------------
 # Summary
