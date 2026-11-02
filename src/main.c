@@ -396,7 +396,13 @@ int main(int argc, char **argv)
     DA(CliPkg) cli_pkgs = {0};
 
     if (argc >= 2 && strcmp(argv[1], "init") == 0) {
-        const char *dir = (argc >= 3) ? argv[2] : ".";
+        const char *dir = ".";
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "-C") == 0 && i + 1 < argc)
+                dir = argv[++i];
+            else if (argv[i][0] != '-')
+                dir = argv[i];
+        }
         return cmd_init(dir);
     }
     if (argc >= 2 && strcmp(argv[1], "explain") == 0) {
