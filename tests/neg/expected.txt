@@ -94,3 +94,5 @@
 91_private_module_type.zov|4|13|E0408|'Priv' is not a struct type
 92_index_move_struct_literal.zov|5|26|E0518|cannot move an owned element out of an indexed place
 93_foreach_owned_element.zov|3|5|E0518|cannot iterate owned elements by value
+94_missing_semicolon_line.zov|3|14|E0201|expected ';' after let
+95_missing_semicolon_expr.zov|6|13|E0201|expected ';' after expression

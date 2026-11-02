@@ -1,0 +1,8 @@
+// MUST FAIL: expression missing semicolon points at the end of its line
+fn prompt() void = {
+};
+
+export fn main() i32 = {
+    prompt()
+    return 0;
+};

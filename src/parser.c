@@ -29,6 +29,7 @@
 
 typedef struct Parser {
     Lexer lx;
+    Token prev;
 } Parser;
 
 static Token *tok(Parser *p)
@@ -43,6 +44,7 @@ static TokenKind kind(Parser *p)
 
 static void advance(Parser *p)
 {
+    p->prev = p->lx.tok;
     lex_next(&p->lx);
 }
 
@@ -51,6 +53,29 @@ static void expect(Parser *p, TokenKind k, const char *what)
     if (kind(p) != k)
         fatal_at(E0201, tok(p)->span, "expected %s", what);
     advance(p);
+}
+
+/* A missing ';' at the end of a line is reported at the previous
+ * token's end.  Pointing at the first token of the next line is
+ * misleading: that token usually begins the following statement and is
+ * not what the user forgot.  Same-line errors still point at the stray
+ * token, which is more useful there. */
+static void expect_semi(Parser *p, const char *what)
+{
+    if (kind(p) == TK_SEMI) {
+        advance(p);
+        return;
+    }
+    Token prev = p->prev;
+    Span cur = tok(p)->span;
+    if (prev.end && prev.span.line < cur.line) {
+        Span at = prev.span;
+        at.start = prev.end;
+        at.end = prev.end;
+        at.col = prev.span.col + (size_t)(prev.end - prev.start);
+        fatal_at(E0201, at, "expected %s", what);
+    }
+    fatal_at(E0201, cur, "expected %s", what);
 }
 
 static const char *tok_desc(Parser *p)
@@ -952,7 +977,7 @@ static Stmt *parse_stmt(Parser *p)
             expect(p, TK_ASSIGN, "'=' in let binding");
             s->u.let.init = parse_expr(p);
         }
-        expect(p, TK_SEMI, "';' after let");
+        expect_semi(p, "';' after let");
         return s;
     }
     case TK_DEFER: {
@@ -980,16 +1005,16 @@ static Stmt *parse_stmt(Parser *p)
         Stmt *s = stmt_new(ST_RETURN, sp);
         if (!at(p, TK_SEMI))
             s->u.ret = parse_expr(p);
-        expect(p, TK_SEMI, "';' after return");
+        expect_semi(p, "';' after return");
         return s;
     }
     case TK_BREAK:
         advance(p);
-        expect(p, TK_SEMI, "';' after break");
+        expect_semi(p, "';' after break");
         return stmt_new(ST_BREAK, sp);
     case TK_CONTINUE:
         advance(p);
-        expect(p, TK_SEMI, "';' after continue");
+        expect_semi(p, "';' after continue");
         return stmt_new(ST_CONTINUE, sp);
     case TK_LBRACE: {
         Stmt *s = stmt_new(ST_BLOCK, sp);
@@ -1032,7 +1057,7 @@ static Stmt *parse_stmt(Parser *p)
     default: {
         Stmt *s = stmt_new(ST_EXPR, sp);
         s->u.expr = parse_expr(p);
-        expect(p, TK_SEMI, "';' after expression");
+        expect_semi(p, "';' after expression");
         return s;
     }
     }
@@ -1101,7 +1126,7 @@ static Decl *parse_use(Parser *p, Span sp, int exported)
     } else if (d->u.use.is_c_header) {
         fatal_at(E0212, tok(p)->span, "C header imports require 'as <alias>'");
     }
-    expect(p, TK_SEMI, "';' after use declaration");
+    expect_semi(p, "';' after use declaration");
     return d;
 }
 
@@ -1204,7 +1229,7 @@ static Decl *parse_type_decl(Parser *p, Span sp, int exported)
     d->u.type.fields.len = 0; /* no fields; alias target rides on ret? */
     Type *alias = parse_type(p);
     d->u.type.alias_ty = alias;
-    expect(p, TK_SEMI, "';' after type alias");
+    expect_semi(p, "';' after type alias");
     return d;
 }
 
