@@ -1,6 +1,8 @@
 [package]
 name = "app"
 version = "0.1.0"
+edition = "2026"
+zovc = "0.8.1"
 entry = "src/main.zov"
 
 [dependencies]
