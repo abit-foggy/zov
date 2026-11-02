@@ -51,7 +51,7 @@ Every Zov package is configured by a `zov.toml` manifest located in the project 
 name = "my_service"
 version = "0.1.0"
 edition = "2026"
-zovc = "0.8.1"
+zovc = "1.9.0"
 entry = "src/main.zov"
 
 [dependencies]
