@@ -7,7 +7,9 @@ USE_LIBTCC ?= 1
 PREFIX   ?= /usr/local
 BINDIR   ?= $(PREFIX)/bin
 LIBDIR   ?= $(PREFIX)/lib
+INCDIR   ?= $(PREFIX)/include
 STDLIBDIR = $(LIBDIR)/std
+RUNTIMEDIR = $(INCDIR)/runtime
 
 TCC_DIR   = vendor/tinycc
 TCC_STAMP = $(TCC_DIR)/.zov-built
@@ -18,11 +20,15 @@ LDLIBS   += $(TCC_LIB) -ldl -lm -lpthread
 CFLAGS   += -DUSE_LIBTCC -I$(TCC_DIR)
 endif
 
-all: zovc zov-lsp
+all: zovc zov-lsp sklad
 
 # dogfood: zovc compiles its own language server
 zov-lsp: zovc tools/zov-lsp/main.zov
 	./zovc tools/zov-lsp/main.zov -o zov-lsp
+
+# dogfood: zovc compiles its own package and toolchain manager
+sklad: zovc tools/sklad/main.zov
+	./zovc tools/sklad/main.zov -o sklad
 
 lsp: zov-lsp
 
@@ -40,23 +46,20 @@ zovc: $(OBJ) $(TCC_STAMP)
 src/%.o: src/%.c include/common.h include/token.h include/ast.h $(TCC_STAMP)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-test: zovc zov-lsp
+test: zovc zov-lsp sklad
 	sh tests/run.sh
 
-# Install binaries and standard library system-wide.
-install: zovc zov-lsp
-	@if [ "$$(id -u)" -ne 0 ]; then \
-		echo "Error: installation requires root privileges." >&2; \
-		echo "Please run: sudo make install" >&2; \
-		exit 1; \
-	fi
-	install -d "$(BINDIR)" "$(STDLIBDIR)"
+# Install binaries and standard library system-wide or to staged PREFIX.
+install: zovc zov-lsp sklad
+	install -d "$(BINDIR)" "$(STDLIBDIR)" "$(RUNTIMEDIR)"
 	install -m 755 zovc "$(BINDIR)/zovc"
+	install -m 755 sklad "$(BINDIR)/sklad"
 	install -m 755 zov-lsp "$(BINDIR)/zov-lsp"
 	cp -R lib/std/. "$(STDLIBDIR)/"
+	cp -R runtime/. "$(RUNTIMEDIR)/"
 	@echo "Zov installed successfully to $(PREFIX)"
 
 clean:
-	rm -f zovc zov-lsp $(OBJ)
+	rm -f zovc zov-lsp sklad $(OBJ) .zov-test-bin
 
 .PHONY: all lsp test clean install

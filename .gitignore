@@ -11,10 +11,10 @@ tests/pkg_workspace/app/zov.lock
 tests/pkg_workspace/app/target/
 .zov-test-bin
 /zov-lsp
+/sklad
 .zov-lsp-buffer.zov
 /editors/zed/target/
 /editors/zed/extension.wasm
-/editors/zed/target/
 /editors/zed/tree-sitter-zov/src/
 
 # editor extension build outputs
