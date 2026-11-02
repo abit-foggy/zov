@@ -1,51 +1,83 @@
-# Zov Programming Language
+# Zov (`zovc` & `sklad`)
 
-Zov is a modern, statically typed systems programming language featuring strict memory safety, ownership and borrow checking, seamless C interoperability, and an offline-first architecture.
+Zov is a safety-hardened systems programming language that compiles to strict ISO C99. It provides owned resource tracking, borrow checking, exhaustive union matching, and zero-underscore UNIX standard library ergonomics without runtime bloat.
 
-## Overview
+- **`zovc`** — 100% offline compiler, type/borrow checker, and local project driver (`init`, `check`, `build`, `run`).
+- **`sklad`** — Networked package, dependency cache, and toolchain manager written in Zov, built on top of `zovc`.
 
-- **`zovc`**: The 100% offline reference compiler and driver. Compiles single files or offline multi-module packages. Emits clean, strict ISO C99.
-- **`sklad`**: The dogfooded package, cache, and toolchain manager written in Zov (`tools/sklad/main.zov`). Resolves remote Git repositories and URL tarballs, verifies cryptographic hashes, generates `sklad.lock`, and orchestrates builds with `zovc`.
-- **`zov-lsp`**: Language Server Protocol implementation written in Zov (`tools/zov-lsp/main.zov`) powering IDE extensions (VS Code, Zed, CLion).
+## Specifications
 
-## Quick Start
+| Property | Specification |
+|---|---|
+| **Current Version** | `1.9.0` (`edition = "2026"`) |
+| **Backend Target** | Strict ISO C99 (`-std=c99 -pedantic-errors`) + TinyCC (`libtcc`) |
+| **Modes** | Hosted (POSIX) and Freestanding (`--freestanding -nostdlib`) |
+| **Memory Model** | Owned resources (`String`, `Vec`, `Map`, `Arena`), deterministic overwrite/drop cleanup, borrow checking (`&T`, `&mut T`) |
+| **Naming Style** | Smooshed lowercase (`println`, `readline`, `startswith`, `splitbyte`, `getref`, `findref`) |
+| **Supported Platforms** | Linux (`x86_64`, `aarch64`), macOS (`x86_64`, `aarch64`) |
+| **License** | BSD-2-Clause |
 
-### Building from Source
+## Installation
 
-Prerequisites: a C99 compiler (`cc` or `gcc` or `clang`) and standard UNIX build tools.
+Install both `zovc` and `sklad` (Linux & macOS `x86_64` / `aarch64`):
 
-```bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/abit-foggy/zov/master/install.sh | sh
+```
+
+Install `zovc` only (offline compiler & stdlib) or `sklad` only:
+
+```sh
+# Install only offline zovc (compiler + stdlib + runtime)
+curl -fsSL https://raw.githubusercontent.com/abit-foggy/zov/master/install.sh | sh -s -- --zovc-only
+
+# Install only sklad (package & toolchain manager)
+curl -fsSL https://raw.githubusercontent.com/abit-foggy/zov/master/install.sh | sh -s -- --sklad-only
+```
+
+### Build from Source
+
+```sh
+git clone https://github.com/abit-foggy/zov.git
+cd zov
 make
-```
-
-This compiles:
-1. `zovc` (the offline compiler)
-2. `zov-lsp` (the language server, dogfooded by `zovc`)
-3. `sklad` (the package manager, dogfooded by `zovc`)
-
-### Running Tests
-
-```bash
-make test
-```
-
-### Installation
-
-Install `zovc`, `sklad`, `zov-lsp`, standard libraries, and runtime headers:
-
-```bash
 sudo make install
 ```
 
-Or perform a staged install without root:
+## Quick Start
 
-```bash
-make install PREFIX=/path/to/prefix
+### Offline Workflow (`zovc`)
+
+```sh
+zovc init hello
+cd hello
+zovc run
+```
+
+```zov
+use std::io;
+
+export fn main() i32 = {
+    io::println("hello from zov");
+    return 0;
+};
+```
+
+### Package & Dependency Workflow (`sklad`)
+
+```sh
+sklad init myapp
+cd myapp
+sklad add mylib --git https://github.com/abit-foggy/mylib.git
+sklad run
 ```
 
 ## Documentation
 
-- [Package & Toolchain Manager (`sklad`)](docs/sklad.md): Details the architectural boundary between `zovc` and `sklad`, manifest schema (`zov.toml`), lockfiles (`sklad.lock`), and cache layout.
-- [Standard Library](docs/stdlib.md): Guide to hosted and freestanding standard modules (`std::io`, `std::fs`, `std::vec`, etc.).
-- [Ownership & Borrowing](docs/ownership.md): Affine type system, borrow rules, and lifetime semantics.
-- [Runtime Contract](runtime/README.md): C runtime integration and memory management.
+Planned Documentation: Official language reference, ownership manual, and standard library documentation site coming soon ([Link TBD]).
+
+Local documentation is available in [docs/](docs/):
+- [docs/ownership.md](docs/ownership.md) — Ownership, destruction, and borrow rules
+- [docs/stdlib.md](docs/stdlib.md) — Hosted and freestanding standard library reference
+- [docs/sklad.md](docs/sklad.md) — Package and toolchain management with sklad
+- [runtime/README.md](runtime/README.md) — Freestanding runtime contract
