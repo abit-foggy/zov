@@ -5,6 +5,13 @@ on:
     branches: [ master, main ]
   pull_request:
     branches: [ master, main ]
+  schedule:
+    # Run at midnight (00:00 UTC) every night
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   test-linux:
@@ -35,6 +42,13 @@ jobs:
           /tmp/zov-staged/bin/zovc --version
           /tmp/zov-staged/bin/sklad version
 
+      - name: Upload Linux dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+
   test-macos:
     name: Test (macOS)
     runs-on: macos-latest
@@ -54,3 +68,62 @@ jobs:
           ./install.sh --from-dir dist --prefix /tmp/zov-staged
           /tmp/zov-staged/bin/zovc --version
           /tmp/zov-staged/bin/sklad version
+
+      - name: Upload macOS dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-runner
+          path: dist/*
+          if-no-files-found: error
+
+  publish-ci-release:
+    name: Publish CI Release
+    needs: [test-linux, test-macos]
+    if: github.ref == 'refs/heads/master' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built archives
+        uses: actions/download-artifact@v4
+        with:
+          path: all-dist
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd all-dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Compute release tag and name
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TAG="nightly-$(date -u +'%Y%m%d')"
+            NAME="Zov Nightly ($(date -u +'%Y-%m-%d'))"
+          else
+            TAG="nightly"
+            NAME="Zov Nightly (Build ${{ github.sha }})"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: true
+          files: |
+            all-dist/*.tar.gz
+            all-dist/SHA256SUMS
+            install.sh
+          body: |
+            Automated CI build from commit `${{ github.sha }}`.
+            
+            ### Included Packages
+            - `zovc`: 100% offline compiler, type/borrow checker, and local project driver.
+            - `sklad`: Networked package, dependency cache, and toolchain manager.
+            - `install.sh`: Standalone, zero-dependency POSIX installation script.
