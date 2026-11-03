@@ -700,5 +700,15 @@ CMember *cimport_find(CHeader *h, const char *name)
         da_push(&h->members, m);
         return &h->members.items[h->members.len - 1];
     }
+    if (strcmp(name, "stdout") == 0 || strcmp(name, "stdin") == 0
+        || strcmp(name, "stderr") == 0) {
+        CMember m;
+        memset(&m, 0, sizeof(m));
+        m.name = str_intern_c(name);
+        m.kind = CM_CONST;
+        m.ret = type_ptr(c_opaque("FILE"), 0);
+        da_push(&h->members, m);
+        return &h->members.items[h->members.len - 1];
+    }
     return NULL;
 }
