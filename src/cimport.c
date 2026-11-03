@@ -183,6 +183,8 @@ static Type *map_known_alias(const char *name)
             return type_prim(tab[k].k);
     if (strcmp(name, "FILE") == 0)
         return c_opaque("FILE");
+    if (strcmp(name, "DIR") == 0)
+        return c_opaque("DIR");
     return NULL;
 }
 
