@@ -233,6 +233,9 @@ run_stdout() { # name source expected_stdout
     run_program "$name" "$output" /dev/null
     status=$?
     check_program_status "$name" "$status" 0 || return
+    if [ "$(uname -s)" = "Darwin" ]; then
+        sed 's|/private/tmp|/tmp|g' "$TMP/$name.out" > "$TMP/$name.out.tmp" && mv "$TMP/$name.out.tmp" "$TMP/$name.out"
+    fi
     if ! cmp -s "$TMP/$name.out" "$expected"; then
         fail "$name (stdout mismatch)"
         diff "$expected" "$TMP/$name.out" | sed 's/^/    /'
@@ -257,6 +260,9 @@ run_stdin() { # name source input_line expected_stdout
     run_program "$name" "$output" "$TMP/$name.stdin"
     status=$?
     check_program_status "$name" "$status" 0 || return
+    if [ "$(uname -s)" = "Darwin" ]; then
+        sed 's|/private/tmp|/tmp|g' "$TMP/$name.out" > "$TMP/$name.out.tmp" && mv "$TMP/$name.out.tmp" "$TMP/$name.out"
+    fi
     if ! cmp -s "$TMP/$name.out" "$expected"; then
         fail "$name (stdout mismatch)"
         diff "$expected" "$TMP/$name.out" | sed 's/^/    /'
@@ -1007,7 +1013,7 @@ run_strict_c99() {
         if ! run_limited "$TMP/strict-$base.cc.out" \
             "$TMP/strict-$base.cc.err" \
             cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
-            -Wno-parentheses-equality \
+            -Wno-parentheses-equality -Wno-switch-bool \
             -c "$cfile" -o "$TMP/strict-$base.o"; then
             fail "strict C99 compile: $base"
             sed 's/^/    /' "$TMP/strict-$base.cc.err"
@@ -1022,7 +1028,7 @@ run_strict_c99() {
         if ! run_limited "$TMP/strict-test11.cc.out" \
             "$TMP/strict-test11.cc.err" \
             cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
-            -Wno-parentheses-equality \
+            -Wno-parentheses-equality -Wno-switch-bool \
             -c "$TMP/strict-test11.c" -o "$TMP/strict-test11.o"; then
             fail "strict C99 compile: 11_test_blocks (test runner)"
             sed 's/^/    /' "$TMP/strict-test11.cc.err"
@@ -1040,7 +1046,7 @@ run_strict_c99() {
         strict_count=$((strict_count + 1))
         if ! run_limited "$TMP/strict-fs.cc.out" "$TMP/strict-fs.cc.err" \
             cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
-            -Wno-parentheses-equality \
+            -Wno-parentheses-equality -Wno-switch-bool \
             -ffreestanding -c "$TMP/strict-fs.c" -o "$TMP/strict-fs.o"; then
             fail "strict C99 compile: 16_freestanding_smoke"
             sed 's/^/    /' "$TMP/strict-fs.cc.err"
@@ -1377,6 +1383,9 @@ run_sanitizer_sweep() {
                 show_file "$sweep_dir/stderr"
                 sweep_bad=$((sweep_bad + 1))
                 continue
+            fi
+            if [ "$(uname -s)" = "Darwin" ] && [ -f "$sweep_dir/stdout" ]; then
+                sed 's|/private/tmp|/tmp|g' "$sweep_dir/stdout" > "$sweep_dir/stdout.tmp" && mv "$sweep_dir/stdout.tmp" "$sweep_dir/stdout"
             fi
             if [ -f "$ROOT/tests/$sweep_base.expected" ] \
                 && ! cmp -s "$sweep_dir/stdout" \

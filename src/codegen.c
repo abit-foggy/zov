@@ -794,7 +794,10 @@ static void emit_value_cases(CG *cg, Expr *e, int id, const char *res,
     Type *st = e->u.match.scrutinee->type;
     buf_printf(b, "%s _m%d = (", ctype, id);
     emit_expr(cg, e->u.match.scrutinee, 0);
-    buf_printf(b, "); switch (_m%d) {\n", id);
+    if (st && st->kind == TY_BOOL)
+        buf_printf(b, "); switch ((int)_m%d) {\n", id);
+    else
+        buf_printf(b, "); switch (_m%d) {\n", id);
     int emitted_default = 0;
     for (size_t i = 0; i < e->u.match.arms.len; i++) {
         MatchArm *a = &e->u.match.arms.items[i];

@@ -72,12 +72,7 @@ static const char *span_line_text(Span *sp, size_t *out_len)
             *out_len = 0;
         return "";
     }
-    const char *ls = sp->start;
-    size_t back = (sp->col > 1) ? (sp->col - 1) : 0;
-    while (back > 0 && ls[-1] != '\n') {
-        ls--;
-        back--;
-    }
+    const char *ls = sp->start - ((sp->col > 1) ? (sp->col - 1) : 0);
     const char *le = ls;
     while (*le && *le != '\n' && *le != '\r' && (size_t)(le - ls) < DIAG_MAX_LINE - 1)
         le++;

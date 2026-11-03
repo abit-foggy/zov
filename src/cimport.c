@@ -521,9 +521,13 @@ static void parse_typedef(CHeader *h, CTokList * t, size_t i, size_t end)
 
 static void parse_define(CHeader *h, char *line)
 {
-    char *name = line + 8; /* skip "#define" */
+    if (strncmp(line, "#define", 7) != 0)
+        return;
+    char *name = line + 7;
     while (*name == ' ' || *name == '\t')
         name++;
+    if (!*name)
+        return;
     char *p = name;
     while (*p && *p != ' ' && *p != '\t' && *p != '(')
         p++;
