@@ -25,7 +25,9 @@ config*.h
 *_.h
 config*.mak
 config.texi
-conftest*
+conftest
+conftest.exe
+!conftest.c
 c2str
 tags
 TAGS
