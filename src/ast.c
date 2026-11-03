@@ -85,7 +85,9 @@ char *arena_strndup(Arena *a, const char *s, size_t n)
 
 void *zalloc(size_t size)
 {
-    return arena_alloc(&g_arena, size, 8);
+    void *p = arena_alloc(&g_arena, size, 8);
+    memset(p, 0, size);
+    return p;
 }
 
 /* Intern table: open addressing, FNV-1a, power-of-two capacity. */

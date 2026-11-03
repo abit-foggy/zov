@@ -455,15 +455,6 @@ static void append_fmt_str(Buf *b, const char *s, size_t len)
     }
 }
 
-static const char *int_spec(TypeKind k)
-{
-    switch (k) {
-    case TY_I8: case TY_I16: case TY_I32: return "PRId32";
-    case TY_I64: case TY_ISIZE: return "PRId64";
-    case TY_U8: case TY_U16: case TY_U32: return "PRIu32";
-    default: return "PRIu64";
-    }
-}
 
 static int ty_is_owned_string(Type *t)
 {
@@ -570,8 +561,10 @@ static void emit_seg_param(CG *cg, Expr *e, int idx, Buf *sig, Buf *body)
             buf_printf(body, "\"%%p\", (void *)a%d);\n", idx);
         else if (ty_is_float(t->kind))
             buf_printf(body, "\"%%g\", (double)a%d);\n", idx);
+        else if (t->kind >= TY_I8 && t->kind <= TY_ISIZE)
+            buf_printf(body, "\"%%\" PRId64, (int64_t)a%d);\n", idx);
         else
-            buf_printf(body, "\"%%\" %s, a%d);\n", int_spec(t->kind), idx);
+            buf_printf(body, "\"%%\" PRIu64, (uint64_t)a%d);\n", idx);
         buf_printf(body,
                    "    zov_str _sz%d = { (const uint8_t *)_snb%d, "
                    "(size_t)(_snl%d < 0 ? 0 : _snl%d) };\n",
