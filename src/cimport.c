@@ -662,6 +662,12 @@ CHeader *cimport_header(const char *path, int angle)
                 else
                     i++;
             }
+            CTok head_kw = tok_at(&toks, head_start);
+            if (tok_is(&head_kw, "typedef"))
+                parse_typedef(h, &toks, head_start, i);
+            CTok semi = tok_at(&toks, i);
+            if (i < toks.len && tok_is_punct(&semi, ';'))
+                i++;
             continue;
         }
         /* ';' terminates: ordinary declaration */
@@ -682,5 +688,15 @@ CMember *cimport_find(CHeader *h, const char *name)
     for (size_t k = 0; k < h->members.len; k++)
         if (zstr_eq(h->members.items[k].name, name))
             return &h->members.items[k];
+    Type *known = map_known_alias(name);
+    if (known) {
+        CMember m;
+        memset(&m, 0, sizeof(m));
+        m.name = str_intern_c(name);
+        m.kind = CM_TYPE;
+        m.ret = known;
+        da_push(&h->members, m);
+        return &h->members.items[h->members.len - 1];
+    }
     return NULL;
 }
