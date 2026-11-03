@@ -1,0 +1,4 @@
+[submodule "vendor/tinycc"]
+	path = vendor/tinycc
+	url = https://github.com/TinyCC/tinycc.git
+	ignore = untracked

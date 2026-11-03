@@ -4,6 +4,7 @@ a.out
 vendor/tinycc/*.a
 vendor/tinycc/*.o
 vendor/tinycc/.zov-built
+.tcc-built
 vendor/tinycc/config.mak
 vendor/tinycc/config.h
 vendor/tinycc/tcc

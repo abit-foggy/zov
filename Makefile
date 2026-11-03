@@ -19,7 +19,7 @@ STDLIBDIR = $(LIBDIR)/std
 RUNTIMEDIR = $(INCDIR)/runtime
 
 TCC_DIR   = vendor/tinycc
-TCC_STAMP = $(TCC_DIR)/.zov-built
+TCC_STAMP = .tcc-built
 TCC_LIB   = $(TCC_DIR)/libtcc.a
 
 LDLIBS   += -lm
@@ -45,6 +45,10 @@ lsp: zov-lsp
 
 # Upstream tcc builds with relaxed flags; zovc's strict flags do not apply.
 $(TCC_STAMP):
+	@if [ ! -f $(TCC_DIR)/configure ]; then \
+	  echo "Initializing TinyCC submodule..."; \
+	  git submodule update --init --recursive $(TCC_DIR); \
+	fi
 	cd $(TCC_DIR) && ./configure --prefix=/usr >/dev/null \
 	  && sed -i.bak 's/^CFLAGS=.*/CFLAGS=-w -O2/' config.mak \
 	  && rm -f config.mak.bak \
@@ -123,6 +127,6 @@ package-sklad: sklad
 dist: package-zovc package-sklad
 
 clean:
-	rm -rf zovc zov-lsp sklad $(OBJ) .zov-test-bin $(DISTDIR)
+	rm -rf zovc zov-lsp sklad $(OBJ) .zov-test-bin $(DISTDIR) .tcc-built
 
 .PHONY: all lsp test clean install install-zovc install-sklad dist package-zovc package-sklad
