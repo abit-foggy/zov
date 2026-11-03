@@ -11,7 +11,7 @@ fn runsh(code: str) i32 = {
     let mut args = vec::new[str]();
     args.push("-c");
     args.push(code);
-    let r = proc::run("/bin/sh", args.asslice());
+    let r = proc::run("sh", args.asslice());
     let status: i32 = match (r) {
         case let n: i32 => n,
         case proc::ProcError => -1,
@@ -48,7 +48,7 @@ export fn main() i32 = {
     io::println("fs ok");
 
     let mut targs = vec::new[str]();
-    let tr = proc::run("/bin/true", targs.asslice());
+    let tr = proc::run("true", targs.asslice());
     targs.free();
     let tcode: i32 = match (tr) {
         case let n: i32 => n,

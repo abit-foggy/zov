@@ -950,6 +950,7 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
         se->inst_depth--;
         return type_struct(existing->u.type.name);
     }
+    const char *tmpl_name = sym->decl->u.type.name;
     Decl *d = decl_new(DL_TYPE, sym->decl->span);
     d->u.type.name = str_intern_c(key);
     for (size_t i = 0; i < sym->decl->u.type.fields.len; i++) {
@@ -965,7 +966,7 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
     da_push(&se->prog->decls, d);
     register_decl(se, d);
     Type *it = type_struct(d->u.type.name);
-    it->tmpl = sym->decl->u.type.name;
+    it->tmpl = tmpl_name;
     for (size_t i = 0; i < args->len; i++)
         da_push(&it->inst_args, args->items[i]);
     se->inst_depth--;
@@ -1203,7 +1204,7 @@ static Sym *instantiate_fn_from(Sema *se, Sym *sym, StrList *tps,
     Scope *saved_scope = se->scope;
     while (se->scope->parent)
         se->scope = se->scope->parent;
-    push_module_scope(se, sym->decl->modname);
+    push_module_scope(se, d->modname);
     check_fn(se, d);
     se->curmod = saved_mod;
     pop_scope(se);
