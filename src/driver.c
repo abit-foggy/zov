@@ -33,6 +33,9 @@
 
 #include <sys/wait.h>
 #include <sys/utsname.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 #ifdef USE_LIBTCC
 #include <libtcc.h>
@@ -43,8 +46,14 @@ static const char *tcc_runtime_dir(void)
     static char resolved[1024];
     if (access("vendor/tinycc/include", F_OK) == 0)
         return "vendor/tinycc";
-    ssize_t n = readlink("/proc/self/exe", resolved,
-                         sizeof(resolved) - 1);
+    ssize_t n = -1;
+#ifdef __APPLE__
+    uint32_t bufsize = (uint32_t)sizeof(resolved);
+    if (_NSGetExecutablePath(resolved, &bufsize) == 0)
+        n = (ssize_t)strlen(resolved);
+#else
+    n = readlink("/proc/self/exe", resolved, sizeof(resolved) - 1);
+#endif
     if (n > 0) {
         resolved[n] = '\0';
         char *slash = strrchr(resolved, '/');

@@ -149,6 +149,15 @@ fn sklad_home() str = {
 };
 
 fn zovc_bin() str = {
+    let ez = env::get("ZOVC");
+    let z_env: str = match (ez) {
+        case let s: str => s,
+        case env::EnvNotFound => "",
+    };
+    if (z_env.len > 0usize && fs::exists(z_env)) {
+        return z_env;
+    };
+
     let mut exe_buf: [1024]u8;
     let cz = dupz("/proc/self/exe");
     let n = u::readlink(cz as *void, (&exe_buf[0usize]) as *void, 1023usize);

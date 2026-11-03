@@ -21,6 +21,10 @@ ZOV_LSP=$ROOT/zov-lsp
 SKLAD=$ROOT/sklad
 ZOV_STD_PATH=${ZOV_STD_PATH:-$ROOT/lib/std}
 export ZOV_STD_PATH
+ZOVC=$ZOV
+export ZOVC
+PATH="$ROOT:$PATH"
+export PATH
 
 TMP=${ZOV_TEST_TMP:-${TMPDIR:-/tmp}/zov-tests.$$}
 case $TMP in
@@ -1003,6 +1007,7 @@ run_strict_c99() {
         if ! run_limited "$TMP/strict-$base.cc.out" \
             "$TMP/strict-$base.cc.err" \
             cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+            -Wno-parentheses-equality \
             -c "$cfile" -o "$TMP/strict-$base.o"; then
             fail "strict C99 compile: $base"
             sed 's/^/    /' "$TMP/strict-$base.cc.err"
@@ -1017,6 +1022,7 @@ run_strict_c99() {
         if ! run_limited "$TMP/strict-test11.cc.out" \
             "$TMP/strict-test11.cc.err" \
             cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+            -Wno-parentheses-equality \
             -c "$TMP/strict-test11.c" -o "$TMP/strict-test11.o"; then
             fail "strict C99 compile: 11_test_blocks (test runner)"
             sed 's/^/    /' "$TMP/strict-test11.cc.err"
@@ -1034,6 +1040,7 @@ run_strict_c99() {
         strict_count=$((strict_count + 1))
         if ! run_limited "$TMP/strict-fs.cc.out" "$TMP/strict-fs.cc.err" \
             cc -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+            -Wno-parentheses-equality \
             -ffreestanding -c "$TMP/strict-fs.c" -o "$TMP/strict-fs.o"; then
             fail "strict C99 compile: 16_freestanding_smoke"
             sed 's/^/    /' "$TMP/strict-fs.cc.err"

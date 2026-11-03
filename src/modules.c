@@ -31,6 +31,9 @@
 #include "pkg.h"
 
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 typedef DA(char *) PathList;
 
@@ -93,7 +96,14 @@ static int std_root(char *out, size_t cap)
     if (access(out, F_OK) == 0)
         return 1;
     char exe[1024];
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    ssize_t n = -1;
+#ifdef __APPLE__
+    uint32_t bufsize = (uint32_t)sizeof(exe);
+    if (_NSGetExecutablePath(exe, &bufsize) == 0)
+        n = (ssize_t)strlen(exe);
+#else
+    n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+#endif
     if (n > 0) {
         exe[n] = '\0';
         char *slash = strrchr(exe, '/');
