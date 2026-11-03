@@ -36,7 +36,6 @@
 
 #ifdef USE_LIBTCC
 #include <libtcc.h>
-#endif
 
 /* tcc runtime dir: cwd (dev tree), then exe-relative installs */
 static const char *tcc_runtime_dir(void)
@@ -64,6 +63,7 @@ static const char *tcc_runtime_dir(void)
     }
     return "vendor/tinycc";
 }
+#endif
 
 static int compile_via_cc_ex(const char *c_src, const char *out_path,
                              char **links, size_t nlinks, char **include_dirs,

@@ -565,8 +565,8 @@ run_lsp() {
     require_cmd python3 || return
     require_file "$ROOT/tests/lsp_protocol.py" || return
     run_limited "$TMP/lsp.out" "$TMP/lsp.err" \
-        sh -c 'cd "$1" && exec python3 "$2" "$3" "$4" "$5"' \
-        sh "$TMP" "$ROOT/tests/lsp_protocol.py" "$TMP" \
+        sh -c 'PATH="$4:$PATH" && cd "$1" && exec python3 "$2" "$3" "$5" "$6"' \
+        sh "$TMP" "$ROOT/tests/lsp_protocol.py" "$TMP" "$ROOT" \
         "$ZOV_LSP" "$ROOT/tests/01_arith.zov"
     status=$?
     if [ "$status" -eq 0 ]; then

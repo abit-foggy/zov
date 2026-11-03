@@ -158,6 +158,16 @@ static int base_word(CTok *t, int *u, int *l, int *s, int *c, int *i, int *f,
     return 0;
 }
 
+/* Opaque C type: emitted verbatim; the real header defines it. */
+static Type *c_opaque(const char *name)
+{
+    Type *t = zalloc(sizeof(Type));
+    t->kind = TY_STRUCT;
+    t->name = str_intern_c(name);
+    t->c_name = t->name;
+    return t;
+}
+
 /* Aliases whose types we trust for pointer arithmetic-free v0.2 use. */
 static Type *map_known_alias(const char *name)
 {
@@ -171,17 +181,9 @@ static Type *map_known_alias(const char *name)
     for (size_t k = 0; k < sizeof(tab) / sizeof(tab[0]); k++)
         if (strcmp(name, tab[k].n) == 0)
             return type_prim(tab[k].k);
+    if (strcmp(name, "FILE") == 0)
+        return c_opaque("FILE");
     return NULL;
-}
-
-/* Opaque C type: emitted verbatim; the real header defines it. */
-static Type *c_opaque(const char *name)
-{
-    Type *t = zalloc(sizeof(Type));
-    t->kind = TY_STRUCT;
-    t->name = str_intern_c(name);
-    t->c_name = t->name;
-    return t;
 }
 
 static Type *c_struct_tag(const char *kw, const char *tag)
@@ -258,6 +260,21 @@ static Type *parse_c_type(CHeader *h, CTokList *t, size_t *ip)
             base->kind = TY_STRUCT;
             base->c_name = str_intern_c(kw);
             base->name = base->c_name;
+        }
+        i = skip_gcc_noise(t, i);
+        CTok body = tok_at(t, i);
+        if (tok_is_punct(&body, '{')) {
+            int depth = 0;
+            do {
+                CTok x = tok_at(t, i);
+                if (x.n == 0)
+                    break;
+                if (x.punct && x.s[0] == '{')
+                    depth++;
+                else if (x.punct && x.s[0] == '}')
+                    depth--;
+                i++;
+            } while (depth > 0);
         }
     } else {
         int u = 0, l = 0, s = 0, c = 0, in = 0, f = 0, d = 0, b = 0, v = 0;

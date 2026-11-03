@@ -2,7 +2,14 @@ CC      ?= cc
 CFLAGS   = -std=c99 -Wall -Wextra -Werror -pedantic -O2 -Iinclude
 SRC      = src/lexer.c src/ast.c src/parser.c src/cimport.c src/modules.c src/pkg.c src/sema.c src/borrow.c src/codegen.c src/driver.c src/main.c src/diag.c
 OBJ      = $(SRC:.c=.o)
-USE_LIBTCC ?= 1
+UNAME_S ?= $(shell uname -s)
+UNAME_M ?= $(shell uname -m)
+
+ifeq ($(UNAME_S),Darwin)
+  USE_LIBTCC ?= 0
+else
+  USE_LIBTCC ?= 1
+endif
 
 PREFIX   ?= /usr/local
 BINDIR   ?= $(PREFIX)/bin
@@ -15,9 +22,13 @@ TCC_DIR   = vendor/tinycc
 TCC_STAMP = $(TCC_DIR)/.zov-built
 TCC_LIB   = $(TCC_DIR)/libtcc.a
 
-ifdef USE_LIBTCC
-LDLIBS   += $(TCC_LIB) -ldl -lm -lpthread
+LDLIBS   += -lm
+ifeq ($(USE_LIBTCC),1)
+TCC_DEP   = $(TCC_STAMP)
+LDLIBS   += $(TCC_LIB) -ldl -lpthread
 CFLAGS   += -DUSE_LIBTCC -I$(TCC_DIR)
+else
+TCC_DEP   =
 endif
 
 all: zovc zov-lsp sklad
@@ -40,10 +51,10 @@ $(TCC_STAMP):
 	  && $(MAKE) libtcc.a libtcc1.a >/dev/null
 	touch $@
 
-zovc: $(OBJ) $(TCC_STAMP)
+zovc: $(OBJ) $(TCC_DEP)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-src/%.o: src/%.c include/common.h include/token.h include/ast.h $(TCC_STAMP)
+src/%.o: src/%.c include/common.h include/token.h include/ast.h $(TCC_DEP)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 test: zovc zov-lsp sklad

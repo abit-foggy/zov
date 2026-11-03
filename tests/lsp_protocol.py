@@ -59,7 +59,10 @@ session += frame({"jsonrpc": "2.0", "id": 1, "method": "textDocument/completion"
 session += frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown"})
 session += frame({"jsonrpc": "2.0", "method": "exit"})
 
-proc = subprocess.run([lsp_bin], input=session, capture_output=True, timeout=60)
+env = os.environ.copy()
+bin_dir = os.path.dirname(os.path.abspath(lsp_bin))
+env["PATH"] = bin_dir + ((":" + env["PATH"]) if "PATH" in env else "")
+proc = subprocess.run([lsp_bin], input=session, capture_output=True, timeout=60, env=env)
 if proc.returncode != 0:
     print("lsp exited %d" % proc.returncode)
     sys.exit(1)
