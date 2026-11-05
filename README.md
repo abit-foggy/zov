@@ -9,7 +9,7 @@ Zov is a safety-hardened systems programming language that compiles to strict IS
 
 | Property | Specification |
 |---|---|
-| **Current Version** | `1.9.0` (`edition = "2026"`) |
+| **Current Version** | `0.9.0` (`edition = "2026"`) |
 | **Backend Target** | Strict ISO C99 (`-std=c99 -pedantic-errors`) + TinyCC (`libtcc`) |
 | **Modes** | Hosted (POSIX) and Freestanding (`--freestanding -nostdlib`) |
 | **Memory Model** | Owned resources (`String`, `Vec`, `Map`, `Arena`), deterministic overwrite/drop cleanup, borrow checking (`&T`, `&mut T`) |

@@ -1412,7 +1412,7 @@ run_zovc_offline() {
     mkdir -p "$offdir"
     run_limited "$TMP/init.out" "$TMP/init.err" "$ZOV" init -C "$offdir"
     if [ $? -eq 0 ] && [ -f "$offdir/zov.toml" ] && [ -f "$offdir/src/main.zov" ]; then
-        if grep -q 'edition = "2026"' "$offdir/zov.toml" && grep -q 'zovc = "1.9.0"' "$offdir/zov.toml"; then
+        if grep -q 'edition = "2026"' "$offdir/zov.toml" && grep -q 'zovc = "0.9.0"' "$offdir/zov.toml"; then
             pass "zovc init offline manifest"
         else
             fail "zovc init generated manifest missing expected metadata"
@@ -1598,7 +1598,7 @@ run_staged_install() {
     mkdir -p "$iso_dir"
     run_limited "$TMP/staged_zovc.out" "$TMP/staged_zovc.err" \
         sh -c 'cd "$1" && exec "$2" --version' sh "$iso_dir" "$staged_prefix/bin/zovc"
-    if [ $? -eq 0 ] && grep -q "zovc 1.9.0" "$TMP/staged_zovc.out"; then
+    if [ $? -eq 0 ] && grep -q "zovc 0.9.0" "$TMP/staged_zovc.out"; then
         pass "staged zovc binary execution"
     else
         fail "staged zovc binary execution"
@@ -1607,7 +1607,7 @@ run_staged_install() {
 
     run_limited "$TMP/staged_sklad.out" "$TMP/staged_sklad.err" \
         sh -c 'cd "$1" && exec "$2" version' sh "$iso_dir" "$staged_prefix/bin/sklad"
-    if [ $? -eq 0 ] && grep -q "sklad 1.9.0" "$TMP/staged_sklad.out"; then
+    if [ $? -eq 0 ] && grep -q "sklad 0.9.0" "$TMP/staged_sklad.out"; then
         pass "staged sklad binary execution"
     else
         fail "staged sklad binary execution"
@@ -1631,7 +1631,7 @@ run_sklad_integration() {
 name = "gitdep"
 version = "1.0.0"
 edition = "2026"
-zovc = "1.9.0"
+zovc = "0.9.0"
 EOF
     cat >"$git_repo/src/lib.zov" <<'EOF'
 export fn git_answer() i32 = {
@@ -1727,7 +1727,7 @@ EOF
 name = "tardep"
 version = "2.0.0"
 edition = "2026"
-zovc = "1.9.0"
+zovc = "0.9.0"
 EOF
     cat >"$tar_pkg/src/lib.zov" <<'EOF'
 export fn tar_val() i32 = {
@@ -1814,7 +1814,7 @@ run_packaging_and_installer() {
     mkdir -p "$iso_dir"
     run_limited "$TMP/zovc_only_run.out" "$TMP/zovc_only_run.err" \
         sh -c 'cd "$1" && exec "$2" --version' sh "$iso_dir" "$zovc_prefix/bin/zovc"
-    if [ $? -eq 0 ] && grep -q "zovc 1.9.0" "$TMP/zovc_only_run.out"; then
+    if [ $? -eq 0 ] && grep -q "zovc 0.9.0" "$TMP/zovc_only_run.out"; then
         pass "install.sh --zovc-only binary execution"
     else
         fail "install.sh --zovc-only binary execution"
@@ -1857,7 +1857,7 @@ run_packaging_and_installer() {
     mkdir -p "$iso_both"
     run_limited "$TMP/both_run.out" "$TMP/both_run.err" \
         sh -c 'cd "$1" && exec "$2" version' sh "$iso_both" "$both_prefix/bin/sklad"
-    if [ $? -eq 0 ] && grep -q "sklad 1.9.0" "$TMP/both_run.out" && grep -q "zovc 1.9.0" "$TMP/both_run.out"; then
+    if [ $? -eq 0 ] && grep -q "sklad 0.9.0" "$TMP/both_run.out" && grep -q "zovc 0.9.0" "$TMP/both_run.out"; then
         pass "install.sh both packages execution together"
     else
         fail "install.sh both packages execution together"
