@@ -2717,6 +2717,9 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     if (!cg->freestanding)
         /* hosted std::time/fs use POSIX symbols that strict C99 hides */
         buf_puts(&*cg->cur,
+                 "#if defined(__APPLE__)\n"
+                 "#define _DARWIN_C_SOURCE 1\n"
+                 "#endif\n"
                  "#define _POSIX_C_SOURCE 200809L\n"
                  "#define _DEFAULT_SOURCE 1\n");
     buf_puts(&*cg->cur,
