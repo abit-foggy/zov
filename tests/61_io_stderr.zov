@@ -1,0 +1,7 @@
+use std::io;
+
+export fn main() i32 = {
+    io::eprint("tag=" + 23);
+    io::eprintln(" ready={true}");
+    return 0;
+};

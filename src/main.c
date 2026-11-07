@@ -200,7 +200,7 @@ static int cmd_init(const char *dir)
              "name = \"%s\"\n"
              "version = \"0.1.0\"\n"
              "edition = \"2026\"\n"
-             "zovc = \"0.9.0\"\n\n"
+             "zovc = \"0.10.0\"\n\n"
              "[dependencies]\n",
              name);
     snprintf(sub, sizeof(sub), "%s/zov.toml", dir);
@@ -246,9 +246,9 @@ static int cmd_project(const char *dir, int release, int test_mode,
     check_edition(ed);
 
     if (pkg.min_zovc[0]) {
-        if (!semver_ge("0.9.0", pkg.min_zovc)) {
+        if (!semver_ge("0.10.0", pkg.min_zovc)) {
             fprintf(stderr, "zovc: manifest error: package requires zovc >= %s, "
-                            "but active compiler is 0.9.0; please update zovc or "
+                            "but active compiler is 0.10.0; please update zovc or "
                             "run 'sklad toolchain'\n", pkg.min_zovc);
             pkg_free(&pkg);
             return 1;
@@ -622,7 +622,7 @@ int main(int argc, char **argv)
 
     if (argc >= 2 && (strcmp(argv[1], "--version") == 0
                        || strcmp(argv[1], "-V") == 0)) {
-        printf("zovc 0.9.0\n");
+        printf("zovc 0.10.0\n");
         return 0;
     }
 

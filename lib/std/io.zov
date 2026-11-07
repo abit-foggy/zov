@@ -24,6 +24,8 @@
 
 use <stdio.h> as c;
 
+// Retain the private alias so attempts to access it through std::io continue
+// to receive the compiler's private-import diagnostic.
 use <unistd.h> as u;
 
 use std::mem as mem;
@@ -38,20 +40,21 @@ export type IoError = !i32;
 export fn readline() (String | Eof | IoError) = {
     let mut cap: usize = 256usize;
     let mut buf: *u8 = mem::alloc[u8](cap);
-    let one: [1]u8;
     let mut len: usize = 0usize;
     let mut got: bool = false;
     while (true) {
-        let n = u::read(0, (&one[0usize]) as *void, 1usize);
-        if (n < 0i64) {
-            mem::freeptr[u8](buf);
-            return 1;
-        };
-        if (n == 0i64) {
+        // getchar reads through stdio's buffer; calling read(2) for each
+        // byte made long lines need one system call per character.
+        let ch = c::getchar();
+        if (ch < 0i32) {
+            if (c::ferror(c::stdin) != 0) {
+                mem::freeptr[u8](buf);
+                return 1;
+            };
             break;
         };
         got = true;
-        if (one[0usize] == 10u8) {
+        if (ch == 10i32) {
             break;
         };
         if (len == cap) {
@@ -62,7 +65,7 @@ export fn readline() (String | Eof | IoError) = {
             cap = cap * 2usize;
             buf = mem::reallocbuf[u8](buf, cap);
         };
-        buf[len] = one[0usize];
+        buf[len] = ch as u8;
         len += 1usize;
     };
     if (!got) {
@@ -92,4 +95,18 @@ export fn flush() void = {
 export fn println[T](msg: T) void = {
     print(msg);
     c::putchar(10);
+};
+
+// Print to stderr with the same Zov formatting and string interpolation as
+// print/println. These calls are lowered directly by zovc.
+export fn eprint[T](msg: T) void = {
+    let s = "" + msg;
+    let v: str = s.view();
+    c::fwrite(v.data as *void, 1usize, v.len, c::stderr);
+    s.free();
+};
+
+export fn eprintln[T](msg: T) void = {
+    eprint(msg);
+    c::fputc(10, c::stderr);
 };

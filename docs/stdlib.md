@@ -11,7 +11,7 @@ in each environment and what they depend on.
 | `std::vec` | yes | no (`E0306`) | `std::mem` |
 | `std::map` | yes | no (`E0306`) | `std::mem` |
 | `std::arena` | yes | no (`E0306`) | `std::mem` |
-| `std::io` | yes | no (`E0306`) | ISO C `stdio.h`, POSIX `read` |
+| `std::io` | yes | no (`E0306`) | ISO C `stdio.h` |
 | `std::fs` | yes | no (`E0306`) | `stdio.h`, POSIX `unistd.h`, `sys/stat.h`, `dirent.h` |
 | `std::env` | yes | no (`E0306`) | hosted process startup, `stdlib.h`, `unistd.h` |
 | `std::time` | yes | no (`E0306`) | POSIX `usleep` |
@@ -54,6 +54,10 @@ in each environment and what they depend on.
   `readstr` (owned `String`), `writestr`, `exists`, `isfile`, `isdir`,
   `mkdir`, `rename`, `remove`, and `rmdir`; every path is copied to a
   temporary NUL-terminated buffer and released before return.
+- `std::io::print` and `println` write formatted values to stdout;
+  `eprint` and `eprintln` use the same formatting on stderr. `readline`
+  reads through the C stdio buffer, returns an owned `String` without the
+  line ending, and distinguishes an empty line, end of input, and read error.
 - `std::proc::run(prog, args)` forks, `execvp`s the program with a
   temporary NUL-terminated argv, waits for the child, frees every
   temporary buffer, and returns the exit code (`128 + signal` when the

@@ -1456,12 +1456,15 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
         const char *src = fn->decl->u.fn.srcname
                               ? fn->decl->u.fn.srcname
                               : fn->decl->u.fn.name;
-        if (zstr_eq(src, "print") || zstr_eq(src, "println")) {
+        if (zstr_eq(src, "print") || zstr_eq(src, "println")
+            || zstr_eq(src, "eprint") || zstr_eq(src, "eprintln")) {
             if (se->prog->freestanding)
                 fatal_at(E0306, e->span,
                          "std::io is unavailable in freestanding builds; "
                          "use a platform output hook");
-            e->builtin_print = zstr_eq(src, "print") ? 1 : 2;
+            e->builtin_print = zstr_eq(src, "print") ? 1
+                             : zstr_eq(src, "println") ? 2
+                             : zstr_eq(src, "eprint") ? 3 : 4;
         }
     }
     return fn->ret;

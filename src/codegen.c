@@ -622,7 +622,7 @@ static void emit_str_value(CG *cg, Expr *e)
 }
 
 /* std::io::{print,println} stream directly: no temporary String is built. */
-static void emit_print_call(CG *cg, Expr *e, int newline)
+static void emit_print_call(CG *cg, Expr *e, int newline, int to_stderr)
 {
     Expr *arg = e->u.call.args.items[0];
     Buf *b = &*cg->cur;
@@ -649,10 +649,12 @@ static void emit_print_call(CG *cg, Expr *e, int newline)
     for (size_t i = 0; i < segs.len; i++)
         buf_printf(&cg->str_helpers,
                    "    if (_sz%lu.len) fwrite(_sz%lu.data, 1, "
-                   "_sz%lu.len, stdout);\n",
-                   (unsigned long)i, (unsigned long)i, (unsigned long)i);
+                   "_sz%lu.len, %s);\n",
+                   (unsigned long)i, (unsigned long)i, (unsigned long)i,
+                   to_stderr ? "stderr" : "stdout");
     if (newline)
-        buf_puts(&cg->str_helpers, "    fputc(10, stdout);\n");
+        buf_printf(&cg->str_helpers, "    fputc(10, %s);\n",
+                   to_stderr ? "stderr" : "stdout");
     buf_puts(&cg->str_helpers, "}\n\n");
     free(segs.items);
     free(sig.data);
@@ -1083,7 +1085,8 @@ static void emit_call(CG *cg, Expr *e)
         return;
     }
     if (e->builtin_print) {
-        emit_print_call(cg, e, e->builtin_print == 2);
+        emit_print_call(cg, e, e->builtin_print == 2 || e->builtin_print == 4,
+                        e->builtin_print >= 3);
         return;
     }
     if (e->hash_ty) {
@@ -2134,7 +2137,10 @@ static int emit_stmt_body(CG *cg, Stmt *s)
             return 0;
         }
         if (s->u.expr->kind == EX_CALL && s->u.expr->builtin_print) {
-            emit_print_call(cg, s->u.expr, s->u.expr->builtin_print == 2);
+            emit_print_call(cg, s->u.expr,
+                            s->u.expr->builtin_print == 2
+                                || s->u.expr->builtin_print == 4,
+                            s->u.expr->builtin_print >= 3);
             buf_puts(&*cg->cur, ";\n");
             return 0;
         }

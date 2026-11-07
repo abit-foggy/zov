@@ -272,6 +272,31 @@ run_stdin() { # name source input_line expected_stdout
     pass "$name"
 }
 
+run_stdio() { # name source expected_stdout expected_stderr
+    name=$1
+    source=$2
+    expected_out=$3
+    expected_err=$4
+    require_file "$expected_out" || return
+    require_file "$expected_err" || return
+    output=$TMP/$name
+    compile_zov "$name" "$source" "$output" || return
+    run_program "$name" "$output" /dev/null
+    status=$?
+    check_program_status "$name" "$status" 0 || return
+    if ! cmp -s "$TMP/$name.out" "$expected_out"; then
+        fail "$name (stdout mismatch)"
+        diff "$expected_out" "$TMP/$name.out" | sed 's/^/    /'
+        return
+    fi
+    if ! cmp -s "$TMP/$name.err" "$expected_err"; then
+        fail "$name (stderr mismatch)"
+        diff "$expected_err" "$TMP/$name.err" | sed 's/^/    /'
+        return
+    fi
+    pass "$name"
+}
+
 check_panic_report() { # name code message log [file:line:col]
     name=$1
     code=$2
@@ -1412,7 +1437,7 @@ run_zovc_offline() {
     mkdir -p "$offdir"
     run_limited "$TMP/init.out" "$TMP/init.err" "$ZOV" init -C "$offdir"
     if [ $? -eq 0 ] && [ -f "$offdir/zov.toml" ] && [ -f "$offdir/src/main.zov" ]; then
-        if grep -q 'edition = "2026"' "$offdir/zov.toml" && grep -q 'zovc = "0.9.0"' "$offdir/zov.toml"; then
+        if grep -q 'edition = "2026"' "$offdir/zov.toml" && grep -q 'zovc = "0.10.0"' "$offdir/zov.toml"; then
             pass "zovc init offline manifest"
         else
             fail "zovc init generated manifest missing expected metadata"
@@ -1598,7 +1623,7 @@ run_staged_install() {
     mkdir -p "$iso_dir"
     run_limited "$TMP/staged_zovc.out" "$TMP/staged_zovc.err" \
         sh -c 'cd "$1" && exec "$2" --version' sh "$iso_dir" "$staged_prefix/bin/zovc"
-    if [ $? -eq 0 ] && grep -q "zovc 0.9.0" "$TMP/staged_zovc.out"; then
+    if [ $? -eq 0 ] && grep -q "zovc 0.10.0" "$TMP/staged_zovc.out"; then
         pass "staged zovc binary execution"
     else
         fail "staged zovc binary execution"
@@ -1607,7 +1632,7 @@ run_staged_install() {
 
     run_limited "$TMP/staged_sklad.out" "$TMP/staged_sklad.err" \
         sh -c 'cd "$1" && exec "$2" version' sh "$iso_dir" "$staged_prefix/bin/sklad"
-    if [ $? -eq 0 ] && grep -q "sklad 0.9.0" "$TMP/staged_sklad.out"; then
+    if [ $? -eq 0 ] && grep -q "sklad 1.9.0" "$TMP/staged_sklad.out"; then
         pass "staged sklad binary execution"
     else
         fail "staged sklad binary execution"
@@ -1631,7 +1656,7 @@ run_sklad_integration() {
 name = "gitdep"
 version = "1.0.0"
 edition = "2026"
-zovc = "0.9.0"
+zovc = "0.10.0"
 EOF
     cat >"$git_repo/src/lib.zov" <<'EOF'
 export fn git_answer() i32 = {
@@ -1727,7 +1752,7 @@ EOF
 name = "tardep"
 version = "2.0.0"
 edition = "2026"
-zovc = "0.9.0"
+zovc = "0.10.0"
 EOF
     cat >"$tar_pkg/src/lib.zov" <<'EOF'
 export fn tar_val() i32 = {
@@ -1814,7 +1839,7 @@ run_packaging_and_installer() {
     mkdir -p "$iso_dir"
     run_limited "$TMP/zovc_only_run.out" "$TMP/zovc_only_run.err" \
         sh -c 'cd "$1" && exec "$2" --version' sh "$iso_dir" "$zovc_prefix/bin/zovc"
-    if [ $? -eq 0 ] && grep -q "zovc 0.9.0" "$TMP/zovc_only_run.out"; then
+    if [ $? -eq 0 ] && grep -q "zovc 0.10.0" "$TMP/zovc_only_run.out"; then
         pass "install.sh --zovc-only binary execution"
     else
         fail "install.sh --zovc-only binary execution"
@@ -1857,7 +1882,7 @@ run_packaging_and_installer() {
     mkdir -p "$iso_both"
     run_limited "$TMP/both_run.out" "$TMP/both_run.err" \
         sh -c 'cd "$1" && exec "$2" version' sh "$iso_both" "$both_prefix/bin/sklad"
-    if [ $? -eq 0 ] && grep -q "sklad 0.9.0" "$TMP/both_run.out" && grep -q "zovc 0.9.0" "$TMP/both_run.out"; then
+    if [ $? -eq 0 ] && grep -q "sklad 1.9.0" "$TMP/both_run.out" && grep -q "zovc 0.10.0" "$TMP/both_run.out"; then
         pass "install.sh both packages execution together"
     else
         fail "install.sh both packages execution together"
@@ -1976,6 +2001,7 @@ run_panic_release 39_bounds_panic tests/39_bounds_panic.zov E1001 "index 5 is ou
 run_panic_release 44_slice_range_panic tests/44_slice_range_panic.zov E1002 "slice range 1..9 is outside 0..4" 6:20
 LONG_LINE=$(printf '%0300d' 0 | tr '0' 'x')
 run_stdin 21_long_stdin tests/21_long_stdin.zov "$LONG_LINE" tests/21_long_stdin.expected
+run_stdio 61_io_stderr tests/61_io_stderr.zov tests/61_io_stderr.stdout tests/61_io_stderr.stderr
 
 # Test-block runner.  Run from TMP so its temporary binary stays outside the
 # repository.
