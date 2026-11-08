@@ -976,11 +976,13 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
     it->tmpl = tmpl_name;
     for (size_t i = 0; i < args->len; i++)
         da_push(&it->inst_args, args->items[i]);
-    Sym *free_sym = find_method(se, tmpl_name, "free");
-    if (free_sym && free_sym->is_template) {
-        char mkey[512];
-        snprintf(mkey, sizeof(mkey), "%s__free", d->u.type.name);
-        instantiate_method(se, free_sym, mkey, tmpl_name, args);
+    if (!se->prog->freestanding) {
+        Sym *free_sym = find_method(se, tmpl_name, "free");
+        if (free_sym && free_sym->is_template) {
+            char mkey[512];
+            snprintf(mkey, sizeof(mkey), "%s__free", d->u.type.name);
+            instantiate_method(se, free_sym, mkey, tmpl_name, args);
+        }
     }
     se->inst_depth--;
     return it;
