@@ -244,10 +244,24 @@ static void lex_number(Lexer *lx)
     const char *at = lx->pos;
     int is_float = 0;
     int base = 10;
+    const char *digits_start = at;
     if (peek(lx) == '0' && (peek2(lx) == 'x' || peek2(lx) == 'X')) {
         base = 16;
         lx->pos += 2;
+        digits_start = lx->pos;
         while (is_hex(peek(lx)) || peek(lx) == '_')
+            lx->pos++;
+    } else if (peek(lx) == '0' && (peek2(lx) == 'o' || peek2(lx) == 'O')) {
+        base = 8;
+        lx->pos += 2;
+        digits_start = lx->pos;
+        while ((peek(lx) >= '0' && peek(lx) <= '7') || peek(lx) == '_')
+            lx->pos++;
+    } else if (peek(lx) == '0' && (peek2(lx) == 'b' || peek2(lx) == 'B')) {
+        base = 2;
+        lx->pos += 2;
+        digits_start = lx->pos;
+        while (peek(lx) == '0' || peek(lx) == '1' || peek(lx) == '_')
             lx->pos++;
     } else {
         while (is_digit(peek(lx)) || peek(lx) == '_')
@@ -283,7 +297,8 @@ static void lex_number(Lexer *lx)
     // digit separators are stripped before the numeric conversion
     char buf[64];
     size_t n = 0;
-    for (const char *p = at; p < num_end && n < sizeof(buf) - 1; p++)
+    const char *start_p = is_float ? at : digits_start;
+    for (const char *p = start_p; p < num_end && n < sizeof(buf) - 1; p++)
         if (*p != '_')
             buf[n++] = *p;
     buf[n] = '\0';
