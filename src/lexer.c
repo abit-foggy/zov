@@ -158,9 +158,13 @@ static uint32_t lex_escape(Lexer *lx)
         lx->pos++;
         uint32_t v = 0;
         for (int i = 0; i < 2; i++) {
-            if (!is_hex(peek(lx)))
+            char h = peek(lx);
+            if (!is_hex(h))
                 fatal_at(E0102, here(lx, at, at), "invalid \\x escape");
-            v = v * 16 + (uint32_t)strtoul(lx->pos, NULL, 16);
+            uint32_t d = (h >= '0' && h <= '9') ? (uint32_t)(h - '0') :
+                         (h >= 'a' && h <= 'f') ? (uint32_t)(h - 'a' + 10) :
+                         (uint32_t)(h - 'A' + 10);
+            v = v * 16 + d;
             lx->pos++;
         }
         return v;
