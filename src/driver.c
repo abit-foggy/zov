@@ -80,11 +80,12 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
 {
     char cmd[2048];
     const char *cc_mode = release
-                              ? "cc -x c -std=c99 -O3 -DNDEBUG"
+                              ? "cc -x c -std=c99 -O3 -DNDEBUG -Wno-incompatible-pointer-types"
                               : "cc -x c -std=c99 -O0 -g"
                                 " -Wno-unused-variable"
                                 " -Wno-unused-function"
-                                " -Wno-unused-but-set-variable";
+                                " -Wno-unused-but-set-variable"
+                                " -Wno-incompatible-pointer-types";
     size_t off = (size_t)snprintf(cmd, sizeof(cmd), "%s", cc_mode);
     for (size_t i = 0; i < ninclude && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
@@ -139,6 +140,10 @@ static int compile_via_tcc_ex(const char *c_src, const char *out_path,
             tcc_add_sysinclude_path(tcc, incdir);
     }
     tcc_add_sysinclude_path(tcc, "/usr/include");
+    tcc_add_library_path(tcc, "/usr/lib64");
+    tcc_add_library_path(tcc, "/lib64");
+    tcc_add_library_path(tcc, "/usr/lib");
+    tcc_add_library_path(tcc, "/lib");
     for (size_t i = 0; i < ninclude; i++)
         tcc_add_sysinclude_path(tcc, include_dirs[i]);
     tcc_add_library(tcc, "c");

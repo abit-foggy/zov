@@ -2110,7 +2110,7 @@ static int emit_stmt_body(CG *cg, Stmt *s)
         return 0;
     }
     case ST_DEFER: {
-        DeferEntry de;
+        DeferEntry de = {0};
         de.stmt = s->u.defer;
         da_push(&cg->defers, de);
         return 0;
