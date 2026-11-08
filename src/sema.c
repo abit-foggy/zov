@@ -775,10 +775,11 @@ static void check_fn(Sema *se, Decl *d);
 
 static Sym *find_method(Sema *se, const char *sname, const char *mname)
 {
-    for (size_t i = 0; i < se->methods.len; i++)
-        if (se->methods.items[i].sname == sname
-            && se->methods.items[i].mname == mname)
+    for (size_t i = 0; i < se->methods.len; i++) {
+        if ((zstr_eq(se->methods.items[i].sname, sname) || se->methods.items[i].sname == sname)
+            && (zstr_eq(se->methods.items[i].mname, mname) || se->methods.items[i].mname == mname))
             return &se->methods.items[i].sym;
+    }
     return NULL;
 }
 
