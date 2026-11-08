@@ -3304,9 +3304,9 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "static void zov_string_reserve(zov_type_String *s, "
                      "size_t extra) {\n"
                      "    size_t need, cap;\n"
-                     "    if (extra > SIZE_MAX - s->zv_len) "
+                     "    if (extra > SIZE_MAX - s->zv_len - 1u) "
                      "zov_string_oom();\n"
-                     "    need = s->zv_len + extra;\n"
+                     "    need = s->zv_len + extra + 1u;\n"
                      "    if (need <= s->zv_cap) return;\n"
                      "    cap = s->zv_cap ? s->zv_cap : 32u;\n"
                      "    while (cap < need) {\n"
@@ -3330,12 +3330,12 @@ char *codegen_generate_mode(Program *prog, int test_mode)
                      "}\n"
                      "static void zov_string_append(zov_type_String *s, "
                      "zov_str v) {\n"
-                     "    if (!v.len) return;\n"
                      "    zov_string_reserve(s, v.len);\n"
                      "    { size_t i; for (i = 0; i < v.len; i++)\n"
                      "        ((uint8_t *)s->zv_data)[s->zv_len + i] = "
                      "v.data[i]; }\n"
                      "    s->zv_len += v.len;\n"
+                     "    ((uint8_t *)s->zv_data)[s->zv_len] = '\\0';\n"
                      "}\n");
         }
         if (cg->needs_string_new)
