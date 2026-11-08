@@ -76,6 +76,10 @@ typedef struct Meth {
     Sym sym; /* stored by value: the scope array reallocs */
 } Meth;
 
+static Sym *find_method(Sema *se, const char *sname, const char *mname);
+static Sym *instantiate_method(Sema *se, Sym *m, const char *key,
+                               const char *tmpl_sname, TypeList *inst_args);
+
 static void push_scope(Sema *se)
 {
     Scope *s = zalloc(sizeof(Scope));
@@ -971,6 +975,12 @@ static Type *instantiate_struct(Sema *se, const char *tname, TypeList *args)
     it->tmpl = tmpl_name;
     for (size_t i = 0; i < args->len; i++)
         da_push(&it->inst_args, args->items[i]);
+    Sym *free_sym = find_method(se, tmpl_name, "free");
+    if (free_sym && free_sym->is_template) {
+        char mkey[512];
+        snprintf(mkey, sizeof(mkey), "%s__free", d->u.type.name);
+        instantiate_method(se, free_sym, mkey, tmpl_name, args);
+    }
     se->inst_depth--;
     return it;
 }
