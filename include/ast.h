@@ -176,6 +176,7 @@ typedef struct Expr {
     int builtin_env_kind;  /* 1 argscount, 2 argat, 3 env_has, 4 env_get */
     int str_raw_builtin;   /* zov_str_from_raw(ptr, len) -> str */
     int builtin_drop;      /* EX_CALL to std::mem::drop: explicit destruction */
+    int is_move;           /* 1 = ownership transfer from local variable */
 } Expr;
 
 Expr *expr_new(ExprKind kind, Span span);

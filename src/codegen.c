@@ -91,6 +91,8 @@ static void buf_printf(Buf *b, const char *fmt, ...)
  * owning block is implied by the stack-base recorded at block entry. */
 typedef struct DeferEntry {
     Stmt *stmt;
+    const char *drop_var;
+    Type *drop_ty;
 } DeferEntry;
 
 typedef struct CG {
@@ -111,6 +113,8 @@ typedef struct CG {
     Buf prebuf; /* statement-local prelude for hoisted expressions */
     Buf *pre;   /* active prelude target */
     DA(DeferEntry) defers;
+    DA(const char *) moved_vars;
+    Block *cur_block;
     DA(size_t) loop_marks; /* defer-stack base per active loop */
     DA(int) loop_ids;      /* label id per active loop */
     int terminated; /* current block ended in an unconditional jump */
@@ -1206,6 +1210,27 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
         buf_puts(b, "NULL");
         break;
     case EX_IDENT:
+        if (e->is_move && e->u.ident) {
+            int in_defers = 0;
+            for (size_t di = 0; di < cg->defers.len; di++) {
+                if (cg->defers.items[di].drop_var
+                    && zstr_eq(cg->defers.items[di].drop_var, e->u.ident)) {
+                    in_defers = 1;
+                    break;
+                }
+            }
+            if (in_defers) {
+                int exists = 0;
+                for (size_t mi = 0; mi < cg->moved_vars.len; mi++) {
+                    if (cg->moved_vars.items[mi] && zstr_eq(cg->moved_vars.items[mi], e->u.ident)) {
+                        exists = 1;
+                        break;
+                    }
+                }
+                if (!exists)
+                    da_push(&cg->moved_vars, e->u.ident);
+            }
+        }
         buf_puts(b, mangle_local(e->u.ident));
         break;
     case EX_NS_IDENT:
@@ -1247,11 +1272,19 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_puts(b, "), ");
             emit_expr(cg, e->u.assign.rhs, 0);
             buf_puts(b, ")");
-            break;
+        } else {
+            emit_expr(cg, e->u.assign.lhs, 0);
+            buf_puts(b, " = ");
+            emit_expr(cg, e->u.assign.rhs, 0);
         }
-        emit_expr(cg, e->u.assign.lhs, 0);
-        buf_puts(b, " = ");
-        emit_expr(cg, e->u.assign.rhs, 0);
+        if (e->u.assign.lhs->kind == EX_IDENT && e->u.assign.lhs->u.ident) {
+            const char *lid = e->u.assign.lhs->u.ident;
+            for (size_t mi = 0; mi < cg->moved_vars.len; mi++) {
+                if (cg->moved_vars.items[mi] && zstr_eq(cg->moved_vars.items[mi], lid)) {
+                    cg->moved_vars.items[mi] = NULL;
+                }
+            }
+        }
         break;
     }
     case EX_BINARY: {
@@ -1736,6 +1769,20 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
             buf_printf(b, ").%s", e->u.field.name);
             break;
         }
+        if (e->is_move) {
+            Expr *base = e->u.field.base;
+            while (base && base->kind == EX_FIELD)
+                base = base->u.field.base;
+            if (base && base->kind == EX_IDENT && base->u.ident) {
+                for (size_t di = 0; di < cg->defers.len; di++) {
+                    if (cg->defers.items[di].drop_var
+                        && zstr_eq(cg->defers.items[di].drop_var, base->u.ident)) {
+                        cg->defers.items[di].drop_var = NULL;
+                        break;
+                    }
+                }
+            }
+        }
         buf_puts(b, "(");
         emit_expr(cg, e->u.field.base, 0);
         buf_printf(b, ")%s%s", e->via_ref ? "->" : ".",
@@ -1878,15 +1925,103 @@ static void emit_expr(CG *cg, Expr *e, int cstr)
 static int emit_block(CG *cg, Block *blk);
 static int emit_stmt(CG *cg, Stmt *s);
 
+static int expr_defers_var(Expr *e, const char *name)
+{
+    if (!e) return 0;
+    if (e->builtin_drop && e->u.call.args.len > 0) {
+        Expr *a0 = e->u.call.args.items[0];
+        if (a0->kind == EX_IDENT && zstr_eq(a0->u.ident, name))
+            return 1;
+    }
+    if (e->builtin_str_method == 1 && e->str_recv) {
+        Expr *r = e->str_recv;
+        if (r->kind == EX_IDENT && zstr_eq(r->u.ident, name))
+            return 1;
+    }
+    if (e->kind == EX_CALL) {
+        if (e->u.call.args.len > 0) {
+            Expr *a0 = e->u.call.args.items[0];
+            if (a0->kind == EX_IDENT && zstr_eq(a0->u.ident, name)) {
+                Expr *callee = e->u.call.callee;
+                if (callee && callee->kind == EX_IDENT && callee->u.ident) {
+                    if (strstr(callee->u.ident, "__free") != NULL
+                        || zstr_eq(callee->u.ident, "free"))
+                        return 1;
+                }
+            }
+        }
+        for (size_t i = 0; i < e->u.call.args.len; i++)
+            if (expr_defers_var(e->u.call.args.items[i], name))
+                return 1;
+    }
+    return 0;
+}
+
+static int stmt_defers_var(Stmt *s, const char *name)
+{
+    if (!s) return 0;
+    switch (s->kind) {
+    case ST_DEFER:
+        if (s->u.defer) {
+            if (s->u.defer->kind == ST_EXPR)
+                return expr_defers_var(s->u.defer->u.expr, name);
+            return stmt_defers_var(s->u.defer, name);
+        }
+        return 0;
+    case ST_BLOCK:
+        for (size_t i = 0; i < s->u.block->stmts.len; i++)
+            if (stmt_defers_var(s->u.block->stmts.items[i], name))
+                return 1;
+        return 0;
+    case ST_IF:
+        if (s->u.iff.then_blk) {
+            for (size_t i = 0; i < s->u.iff.then_blk->stmts.len; i++)
+                if (stmt_defers_var(s->u.iff.then_blk->stmts.items[i], name))
+                    return 1;
+        }
+        if (s->u.iff.else_stmt)
+            return stmt_defers_var(s->u.iff.else_stmt, name);
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+static int block_defers_var(Block *blk, const char *name)
+{
+    if (!blk || !name) return 0;
+    for (size_t i = 0; i < blk->stmts.len; i++)
+        if (stmt_defers_var(blk->stmts.items[i], name))
+            return 1;
+    return 0;
+}
+
+static int init_is_unowned(Expr *init)
+{
+    if (!init) return 0;
+    while (init->kind == EX_UNWRAP || init->kind == EX_COERCE) {
+        if (init->kind == EX_UNWRAP)
+            init = init->u.unwrap;
+        else
+            init = init->u.coerce.e;
+    }
+    return init->kind == EX_INDEX || init->kind == EX_DEREF;
+}
+
 static void emit_defers_down_to(CG *cg, size_t base)
 {
     for (size_t i = cg->defers.len; i > base; i--) {
-        Stmt *ds = cg->defers.items[i - 1].stmt;
-        buf_puts(&*cg->cur, "{ ");
-        cg->terminated = 0;
-        emit_stmt(cg, ds);
-        cg->terminated = 0;
-        buf_puts(&*cg->cur, " }\n");
+        DeferEntry *de = &cg->defers.items[i - 1];
+        if (de->stmt) {
+            buf_puts(&*cg->cur, "{ ");
+            cg->terminated = 0;
+            emit_stmt(cg, de->stmt);
+            cg->terminated = 0;
+            buf_puts(&*cg->cur, " }\n");
+        } else if (de->drop_var && de->drop_ty && type_needs_drop(cg, de->drop_ty, 0)) {
+            buf_printf(&*cg->cur, "%s(&%s);\n",
+                       drop_fn_name(cg, de->drop_ty), mangle_local(de->drop_var));
+        }
     }
 }
 
@@ -1905,11 +2040,20 @@ static int emit_stmt(CG *cg, Stmt *s)
     Buf *saved_pre = cg->pre;
     cg->cur = &stmt;
     cg->pre = &pre;
+    size_t moved_base = cg->moved_vars.len;
     int r = emit_stmt_body(cg, s);
     cg->cur = saved_cur;
     cg->pre = saved_pre;
     buf_append(saved_cur, &pre);
     buf_append(saved_cur, &stmt);
+    for (size_t i = moved_base; i < cg->moved_vars.len; i++) {
+        const char *var = cg->moved_vars.items[i];
+        if (!var)
+            continue;
+        buf_printf(saved_cur, "memset(&%s, 0, sizeof(%s));\n",
+                   mangle_local(var), mangle_local(var));
+    }
+    cg->moved_vars.len = moved_base;
     free(pre.data);
     free(stmt.data);
     return r;
@@ -1923,6 +2067,13 @@ static int emit_stmt_body(CG *cg, Stmt *s)
         if (!s->u.let.init) {
             /* init-less let: C99 {0} zero-fills every member/element */
             buf_puts(&*cg->cur, " = {0};\n");
+            if (s->u.let.ty && type_needs_drop(cg, s->u.let.ty, 0)
+                && !block_defers_var(cg->cur_block, s->u.let.name)) {
+                DeferEntry de = {0};
+                de.drop_var = s->u.let.name;
+                de.drop_ty = s->u.let.ty;
+                da_push(&cg->defers, de);
+            }
             return 0;
         }
         if (s->u.let.init->kind == EX_ARR_LIT && s->u.let.ty
@@ -1935,12 +2086,27 @@ static int emit_stmt_body(CG *cg, Stmt *s)
                 emit_expr(cg, s->u.let.init->u.elems.items[i], 0);
             }
             buf_puts(&*cg->cur, " };\n");
+            if (s->u.let.ty && type_needs_drop(cg, s->u.let.ty, 0)
+                && !block_defers_var(cg->cur_block, s->u.let.name)) {
+                DeferEntry de = {0};
+                de.drop_var = s->u.let.name;
+                de.drop_ty = s->u.let.ty;
+                da_push(&cg->defers, de);
+            }
             return 0;
         }
         buf_puts(&*cg->cur, " = ");
         emit_expr(cg, s->u.let.init, 0);
         /* unused locals are legal in Zov; silence -Wall in the C output */
         buf_printf(&*cg->cur, ";\n(void)%s;\n", mangle_local(s->u.let.name));
+        if (s->u.let.ty && type_needs_drop(cg, s->u.let.ty, 0)
+            && !block_defers_var(cg->cur_block, s->u.let.name)
+            && !init_is_unowned(s->u.let.init)) {
+            DeferEntry de = {0};
+            de.drop_var = s->u.let.name;
+            de.drop_ty = s->u.let.ty;
+            da_push(&cg->defers, de);
+        }
         return 0;
     }
     case ST_DEFER: {
@@ -2089,8 +2255,17 @@ static int emit_stmt_body(CG *cg, Stmt *s)
             rt = cg->fn_ret;
         if (!rv || !rt || rt->kind == TY_VOID) {
             if (rv) {
+                size_t ret_moved_base = cg->moved_vars.len;
                 emit_expr(cg, rv, 0);
                 buf_puts(b, ";\n");
+                for (size_t i = ret_moved_base; i < cg->moved_vars.len; i++) {
+                    const char *var = cg->moved_vars.items[i];
+                    if (!var)
+                        continue;
+                    buf_printf(b, "memset(&%s, 0, sizeof(%s));\n",
+                               mangle_local(var), mangle_local(var));
+                }
+                cg->moved_vars.len = ret_moved_base;
             }
             emit_defers_down_to(cg, 0);
             buf_puts(b, "return;\n");
@@ -2102,8 +2277,17 @@ static int emit_stmt_body(CG *cg, Stmt *s)
         int id = cg->tmp_id++;
         buf_printf(b, "{\n%s zov_ret_%d;\nzov_ret_%d = ",
                    c_type(cg, rt), id, id);
+        size_t ret_moved_base = cg->moved_vars.len;
         emit_expr(cg, rv, 0);
         buf_printf(b, ";\n");
+        for (size_t i = ret_moved_base; i < cg->moved_vars.len; i++) {
+            const char *var = cg->moved_vars.items[i];
+            if (!var)
+                continue;
+            buf_printf(b, "memset(&%s, 0, sizeof(%s));\n",
+                       mangle_local(var), mangle_local(var));
+        }
+        cg->moved_vars.len = ret_moved_base;
         emit_defers_down_to(cg, 0);
         buf_printf(b, "return zov_ret_%d;\n}\n", id);
         cg->terminated = 1;
@@ -2163,6 +2347,8 @@ static int emit_stmt_body(CG *cg, Stmt *s)
 
 static int emit_block(CG *cg, Block *blk)
 {
+    Block *saved_block = cg->cur_block;
+    cg->cur_block = blk;
     size_t base = cg->defers.len;
     int prev = cg->terminated;
     cg->terminated = 0;
@@ -2179,6 +2365,7 @@ static int emit_block(CG *cg, Block *blk)
     cg->defers.len = base;
     int t = term;
     cg->terminated = prev;
+    cg->cur_block = saved_block;
     return t;
 }
 
@@ -2229,8 +2416,24 @@ static void emit_fn(CG *cg, Decl *d, int proto_only)
         buf_puts(&*cg->cur, ")\n{\n");
     }
     cg->defers.len = 0;
+    cg->moved_vars.len = 0;
     cg->fn_ret = d->u.fn.ret;
     cg->switch_depth = 0;
+    int is_free_method = d->u.fn.name
+                         && (strstr(d->u.fn.name, "__free") != NULL
+                             || zstr_eq(d->u.fn.name, "free"));
+    for (size_t i = 0; i < d->u.fn.params.len; i++) {
+        Param *p = &d->u.fn.params.items[i];
+        if (is_free_method && zstr_eq(p->name, "self"))
+            continue;
+        if (p->ty && type_needs_drop(cg, p->ty, 0)
+            && !block_defers_var(d->u.fn.body, p->name)) {
+            DeferEntry de = {0};
+            de.drop_var = p->name;
+            de.drop_ty = p->ty;
+            da_push(&cg->defers, de);
+        }
+    }
     int term = emit_block(cg, d->u.fn.body);
     cg->fn_ret = NULL;
     if (d->u.fn.ret->kind != TY_VOID && !term)
@@ -2454,6 +2657,7 @@ static void emit_drop_defs(CG *cg, Buf *out)
             Decl *m = find_free_method(cg, t);
             buf_printf(out, "    %s(*v);\n",
                        mangle_fn(m->regname ? m->regname : m->u.fn.name));
+            buf_puts(out, "    memset(v, 0, sizeof(*v));\n");
         } else if (t->kind == TY_STRUCT) {
             int di = type_decl_index(cg->prog, t->name);
             Decl *d = di >= 0 ? cg->prog->decls.items[di] : NULL;
@@ -2464,6 +2668,7 @@ static void emit_drop_defs(CG *cg, Buf *out)
                 buf_printf(out, "    %s(&v->%s);\n",
                            drop_fn_name(cg, f->ty), mangle_local(f->name));
             }
+            buf_puts(out, "    memset(v, 0, sizeof(*v));\n");
         } else if (t->kind == TY_UNION) {
             buf_puts(out, "    switch (v->tag) {\n");
             for (size_t j = 0; j < t->members.len; j++) {
@@ -2476,12 +2681,14 @@ static void emit_drop_defs(CG *cg, Buf *out)
                            (unsigned long)j);
             }
             buf_puts(out, "    default: break;\n    }\n");
+            buf_puts(out, "    memset(v, 0, sizeof(*v));\n");
         } else if (t->kind == TY_ARRAY) {
             buf_printf(out,
                        "    size_t i;\n"
                        "    for (i = 0; i < %lu; i++)\n"
                        "        %s(&(*v)[i]);\n",
                        (unsigned long)t->count, drop_fn_name(cg, t->base));
+            buf_puts(out, "    memset(v, 0, sizeof(*v));\n");
         }
         buf_puts(out, "}\n");
     }
@@ -2731,7 +2938,8 @@ char *codegen_generate_mode(Program *prog, int test_mode)
     buf_puts(&*cg->cur,
              "#include <stdint.h>\n"
              "#include <stddef.h>\n"
-             "#include <stdbool.h>\n");
+             "#include <stdbool.h>\n"
+             "#include <string.h>\n");
     if (!cg->freestanding) {
         /* argv capture exists only for hosted std::env */
         buf_puts(&*cg->cur,

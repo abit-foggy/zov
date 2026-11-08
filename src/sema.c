@@ -1445,6 +1445,9 @@ static Type *check_call_user(Sema *se, Expr *e, Sym *fn)
             continue;
         if (null_fits(arg, pt))
             continue;
+        if (pt->kind == TY_REF && arg->type && arg->type->kind == TY_MUTREF
+            && type_eq(arg->type->base, pt->base))
+            continue;
         if (!type_eq(arg->type, pt))
             fatal_at(E0601, arg->span, "argument %lu of '%s': expected %s, got %s",
                      (unsigned long)(i + 1), fn_display_name(fn),
@@ -2057,7 +2060,10 @@ static Type *check_expr(Sema *se, Expr *e, Type *hint)
             if (rp->ty->kind == TY_REF || rp->ty->kind == TY_MUTREF) {
                 /* auto-borrow: &obj or &mut obj from a plain value */
                 if (bt->kind == TY_REF || bt->kind == TY_MUTREF) {
-                    if (!type_eq(bt, rp->ty))
+                    if (bt->kind == TY_MUTREF && rp->ty->kind == TY_REF
+                        && type_eq(bt->base, rp->ty->base)) {
+                        /* allowed: &mut T passed to &T method receiver */
+                    } else if (!type_eq(bt, rp->ty))
                         fatal_at(E0414, recv->span,
                                  "receiver expects %s, got %s",
                                  type_spelling(rp->ty), type_spelling(bt));
@@ -2958,6 +2964,8 @@ static void check_let(Sema *se, Stmt *s)
         declared = it;
     } else {
         if (!is_unknown(it) && !type_eq(declared, it)
+            && !(declared->kind == TY_REF && it->kind == TY_MUTREF
+                 && type_eq(declared->base, it->base))
             && !ptr_widens(it, declared)
             && !null_fits(s->u.let.init, declared))
             fatal_at(E0601, s->span, "cannot bind %s to %s", type_spelling(it),

@@ -898,6 +898,7 @@ static void check_free_receiver(Borrow *b, Expr *recv)
             bfatal(E0510, recv->span,
                    "cannot free '%s': a field was already moved", root);
         bv->freed = 1;
+        recv->is_move = 1;
         clear_freed_fields(bv);
         clear_moved_fields(bv);
     } else if (field) {
@@ -906,6 +907,7 @@ static void check_free_receiver(Borrow *b, Expr *recv)
                    field);
         mark_field_freed(bv, field);
         unmark_field_moved(bv, field);
+        recv->is_move = 1;
     }
 }
 
@@ -956,8 +958,8 @@ static void bx_call(Borrow *b, Expr *e)
             BVar *av = var_find(b, arg->u.ident);
             Type *formal = callee_decl->u.fn.params.items[i].ty;
             if (av && av->ty->kind == TY_MUTREF && formal
-                && formal->kind == TY_MUTREF
-                && type_eq(av->ty, formal)) {
+                && (formal->kind == TY_MUTREF || formal->kind == TY_REF)
+                && type_eq(av->ty->base, formal->base)) {
                 if (av->moved)
                     bfatal(E0503, arg->span, "use of moved value '%s'", av->name);
                 Loan *lk = root_locked(b, av->name);
@@ -1407,6 +1409,7 @@ static void bx_expr(Borrow *b, Expr *e)
                        "cannot move '%s': it is still borrowed by '%s'",
                        bv->name, rl->holder);
             bv->moved = 1;
+            e->is_move = 1;
             return;
         }
         check_root_read(b, e, e->u.ident);
@@ -1460,6 +1463,7 @@ static void bx_expr(Borrow *b, Expr *e)
             if (field && field_freed(bv, field))
                 bfatal(E0504, e->span, "use of freed value '%s.%s'", root, field);
             mark_field_moved(bv, e->u.field.name);
+            e->is_move = 1;
             return;
         }
         if (root) {
@@ -2083,6 +2087,8 @@ static int b_stmt(Borrow *b, Stmt *s)
                     if (l) {
                         l->holder = s->u.let.name;
                         l->last_use = recorded_last_use(b, s->u.let.name);
+                        if (lt && lt->kind == TY_REF)
+                            l->exclusive = 0;
                     }
                     src->moved = 1;
                 }
