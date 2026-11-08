@@ -54,7 +54,7 @@ typedef struct Sym {
 
 typedef struct Scope {
     struct Scope *parent;
-    DA(Sym) syms;
+    DA(Sym*) syms;
 } Scope;
 
 typedef struct Sema {
@@ -86,7 +86,7 @@ static void push_scope(Sema *se)
 static void pop_scope(Sema *se)
 {
     for (size_t i = 0; i < se->scope->syms.len; i++) {
-        Sym *s = &se->scope->syms.items[i];
+        Sym *s = se->scope->syms.items[i];
         if (s->kind != SYM_VAR || s->read_count > 0 || !s->name)
             continue;
         if (s->name[0] == '_')
@@ -116,17 +116,19 @@ static Sym *scope_find(Scope *sc, const char *name)
 {
     for (Scope *s = sc; s; s = s->parent)
         for (size_t i = s->syms.len; i > 0; i--)
-            if (s->syms.items[i - 1].name == name)
-                return &s->syms.items[i - 1];
+            if (s->syms.items[i - 1]->name == name)
+                return s->syms.items[i - 1];
     return NULL;
 }
 
 static void scope_add(Sema *se, Sym sym)
 {
     for (size_t i = se->scope->syms.len; i > 0; i--)
-        if (se->scope->syms.items[i - 1].name == sym.name)
+        if (se->scope->syms.items[i - 1]->name == sym.name)
             fatal_at(E0409, sym.span, "duplicate definition of '%s'", sym.name);
-    da_push(&se->scope->syms, sym);
+    Sym *s = zalloc(sizeof(Sym));
+    *s = sym;
+    da_push(&se->scope->syms, s);
 }
 
 static Type *check_expr(Sema *se, Expr *e, Type *hint);
@@ -562,7 +564,7 @@ static const char *scope_suggest(Sema *se, const char *name)
     size_t n = 0;
     for (Scope *s = se->scope; s && n < 256; s = s->parent)
         for (size_t i = s->syms.len; i > 0 && n < 256; i--)
-            cands[n++] = s->syms.items[i - 1].name;
+            cands[n++] = s->syms.items[i - 1]->name;
     return diag_suggest_symbol(name, cands, n);
 }
 
