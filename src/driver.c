@@ -97,12 +97,15 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
     for (size_t i = 0; i < ninclude && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                                 " -I'%s'", include_dirs[i]);
+    off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
+                            " -o '%s' -", out_path);
+    if (ldflags && *ldflags)
+        off += (size_t)snprintf(cmd + off, sizeof(cmd) - off, " %s", ldflags);
     for (size_t i = 0; i < nlinks && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                                 " -l%s", links[i]);
     // std::math and the C library both resolve through libm
-    off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
-                            " -lm %s -o '%s' -", ldflags ? ldflags : "", out_path);
+    off += (size_t)snprintf(cmd + off, sizeof(cmd) - off, " -lm");
     if (off >= sizeof(cmd)) {
         failure("link command too long");
         return 1;
