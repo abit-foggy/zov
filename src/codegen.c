@@ -1002,7 +1002,7 @@ static void emit_call_args(CG *cg, Expr *e, int extern_cstr)
                 int prev_lit = extern_cstr && prev->type
                                && prev->type->kind == TY_STR
                                && prev->kind == EX_STR;
-                const char *ty = prev_lit ? "char *" : c_type(cg, prev->type);
+                const char *ty = prev_lit ? "const char *" : c_type(cg, prev->type);
                 int id = cg->tmp_id++;
                 if (texts[j].len == 0)
                     continue;

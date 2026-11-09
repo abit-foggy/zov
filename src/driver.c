@@ -80,12 +80,13 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
 {
     char cmd[2048];
     const char *cc_mode = release
-                              ? "cc -x c -std=c99 -O3 -DNDEBUG -Wno-incompatible-pointer-types"
+                              ? "cc -x c -std=c99 -O3 -DNDEBUG -Wno-incompatible-pointer-types -Wno-discarded-qualifiers"
                               : "cc -x c -std=c99 -O0 -g"
                                 " -Wno-unused-variable"
                                 " -Wno-unused-function"
                                 " -Wno-unused-but-set-variable"
-                                " -Wno-incompatible-pointer-types";
+                                " -Wno-incompatible-pointer-types"
+                                " -Wno-discarded-qualifiers";
     size_t off = (size_t)snprintf(cmd, sizeof(cmd), "%s", cc_mode);
     for (size_t i = 0; i < ninclude && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
