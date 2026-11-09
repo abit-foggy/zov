@@ -79,15 +79,21 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
                              size_t ninclude, int release)
 {
     char cmd[2048];
+    const char *cc_bin = getenv("CC");
+    if (!cc_bin || !*cc_bin)
+        cc_bin = "cc";
+    const char *cflags = getenv("CFLAGS");
+    const char *ldflags = getenv("LDFLAGS");
     const char *cc_mode = release
-                              ? "cc -x c -std=c99 -O3 -DNDEBUG -Wno-incompatible-pointer-types -Wno-discarded-qualifiers"
-                              : "cc -x c -std=c99 -O0 -g"
+                              ? "-std=c99 -O3 -DNDEBUG -Wno-incompatible-pointer-types -Wno-discarded-qualifiers"
+                              : "-std=c99 -O0 -g"
                                 " -Wno-unused-variable"
                                 " -Wno-unused-function"
                                 " -Wno-unused-but-set-variable"
                                 " -Wno-incompatible-pointer-types"
                                 " -Wno-discarded-qualifiers";
-    size_t off = (size_t)snprintf(cmd, sizeof(cmd), "%s", cc_mode);
+    size_t off = (size_t)snprintf(cmd, sizeof(cmd), "%s -x c %s %s", cc_bin, cc_mode,
+                                  cflags ? cflags : "");
     for (size_t i = 0; i < ninclude && off < sizeof(cmd) - 256; i++)
         off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
                                 " -I'%s'", include_dirs[i]);
@@ -96,7 +102,7 @@ static int compile_via_cc_ex(const char *c_src, const char *out_path,
                                 " -l%s", links[i]);
     // std::math and the C library both resolve through libm
     off += (size_t)snprintf(cmd + off, sizeof(cmd) - off,
-                            " -lm -o '%s' -", out_path);
+                            " -lm %s -o '%s' -", ldflags ? ldflags : "", out_path);
     if (off >= sizeof(cmd)) {
         failure("link command too long");
         return 1;
